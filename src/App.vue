@@ -5,7 +5,7 @@ import PageHome from './components/home/index.vue'
 import PageHeader from './components/PageHeader.vue'
 
 const deviceDialogVisible = ref(false)
-const pageType = ref('home') // 'addDevice' or 'home'
+const pageType = ref('addDevice') // 'addDevice' or 'home'
 
 const disconnect = () => {
   pageType.value = 'addDevice'

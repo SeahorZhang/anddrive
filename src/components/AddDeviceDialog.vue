@@ -6,6 +6,7 @@ const qrDataUrl = ref('')
 const modelValue = defineModel({ default: false })
 
 watch(modelValue, (newVal) => {
+  console.log(1, modelValue)
   if (newVal) {
     generateQr()
   }
@@ -25,6 +26,7 @@ const generateQr = () => {
 <template>
   <AnimatePresence>
     <Motion
+      key="backdrop"
       v-if="modelValue"
       :initial="{ opacity: 0 }"
       :animate="{ opacity: 1 }"
@@ -33,26 +35,13 @@ const generateQr = () => {
     >
     </Motion>
     <Motion
-      class="fixed top-1/2 left-1/2 z-51 flex h-140 w-120 -translate-x-1/2 -translate-y-1/2 flex-col items-center rounded-4xl bg-white"
+      key="dialog"
+      class="fixed top-1/2 left-1/2 z-51 flex h-130 w-120 -translate-x-1/2 -translate-y-1/2 flex-col items-center rounded-4xl bg-white"
       v-if="modelValue"
       :initial="{ opacity: 0, scale: 0.8 }"
       :animate="{ opacity: 1, scale: 1 }"
       :exit="{ opacity: 0, scale: 0.4 }"
     >
-      <!-- <div class="flex items-center justify-between">
-        <div>扫码添加设备</div>
-        x
-      </div>
-      <div class="flex flex-col">
-        <div class="text-xl font-bold text-gray-900">添加设备</div>
-        <div class="mt-2 text-sm text-gray-500">请使用手机扫描二维码添加设备</div>
-        <div class="flex size-56 items-center justify-center overflow-hidden rounded-xl">
-          <img :src="qrDataUrl" class="size-full select-none" />
-        </div>
-      </div>
-
- -->
-
       <!-- Header -->
       <div class="flex w-full items-center px-6 py-5">
         <h2 class="flex-1 text-lg font-semibold text-gray-900">扫码添加设备</h2>
@@ -77,7 +66,7 @@ const generateQr = () => {
 
       <!-- QR Code -->
       <div class="flex flex-1 items-center justify-center">
-        <img :src="qrDataUrl" class="size-56 select-none" />
+        <img :src="qrDataUrl" class="size-52 select-none" />
       </div>
 
       <!-- Footer -->
