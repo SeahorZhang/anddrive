@@ -22,7 +22,6 @@ export default defineConfig({
       dts: true,
       resolvers: [
         RekaResolver(),
-
         // RekaResolver({
         //   prefix: '' // use the prefix option to add Prefix to the imported components
         // })

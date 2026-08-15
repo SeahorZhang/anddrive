@@ -1,5 +1,5 @@
-import { createVaporApp } from 'vue'
-import App from './App.vue'
-import './styles/index.css'
+import { createApp } from "vue";
+import App from "./App.vue";
+import "./styles/index.css";
 
-createVaporApp(App).mount('#app')
+createApp(App).mount("#app");
