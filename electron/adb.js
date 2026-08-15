@@ -75,3 +75,65 @@ export function getDevices() {
     });
   }));
 }
+
+function adbShell(serial, ...args) {
+  return new Promise((resolve, reject) => {
+    execFile(getAdbPath(), ["-s", serial, "shell", ...args], (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr || err.message));
+      else resolve(stdout.trim());
+    });
+  });
+}
+
+export async function getDeviceInfo(serial) {
+  await ensureServer();
+
+  // 参考 anddrive: 并行执行所有 adb shell 命令
+  const [model, brand, marketname, batteryOutput, storageOutput] = await Promise.all([
+    adbShell(serial, "getprop", "ro.product.model").catch(() => ""),
+    adbShell(serial, "getprop", "ro.product.brand").catch(() => ""),
+    adbShell(serial, "getprop", "ro.product.marketname").catch(() => ""),
+    adbShell(serial, "dumpsys", "battery").catch(() => ""),
+    adbShell(serial, "df", "-h").catch(() => ""),
+  ]);
+
+  // 设备名称：优先市场名，加上品牌前缀（避免重复）
+  const deviceName = marketname
+    ? (brand && !marketname.startsWith(brand) ? `${brand} ${marketname}` : marketname)
+    : `${brand} ${model}`.trim();
+
+  // 解析电量
+  const battery = batteryOutput.match(/level:\s*(\d+)/)?.[1]
+    ? parseInt(batteryOutput.match(/level:\s*(\d+)/)[1])
+    : -1;
+
+  // 解析充电状态: status 2 = Charging
+  const isCharging = batteryOutput.match(/status:\s*(\d+)/)?.[1] === '2';
+
+  // 解析存储信息 - 参考 anddrive: 取 df -h 输出
+  const storageLines = storageOutput.trim().split('\n');
+  let storage = '';
+  let storagePercent = 0;
+  for (const line of storageLines) {
+    const trimmedLine = line.trim();
+    if (trimmedLine.endsWith(' /data')) {
+      const parts = trimmedLine.split(/\s+/).filter(Boolean);
+      // 格式: Filesystem Size Used Avail Use% Mounted
+      if (parts.length >= 5) {
+        storage = `${parts[2]}/${parts[1]}`; // 如 "162G/477G"
+        storagePercent = parseInt(parts[4]) || 0; // 如 "34%"
+      }
+      break;
+    }
+  }
+
+  return {
+    serial,
+    model,
+    deviceName,
+    battery,
+    isCharging,
+    storage,
+    storagePercent,
+  };
+}

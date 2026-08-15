@@ -8,16 +8,20 @@ import { useAdb } from './composables/useAdb'
 const { getDevices } = useAdb()
 const deviceDialogVisible = ref(false)
 const pageType = ref('addDevice') // 'addDevice' or 'home'
+const currentSerial = ref('')
 
 const disconnect = () => {
   pageType.value = 'addDevice'
+  currentSerial.value = ''
 }
 
 // 启动时检查已连接的设备
 onMounted(async () => {
   try {
     const devices = await getDevices()
+    console.log(111, devices)
     if (devices.length > 0) {
+      currentSerial.value = devices[0].serial
       pageType.value = 'home'
     }
   } catch (e) {
@@ -31,7 +35,7 @@ onMounted(async () => {
 
   <div class="flex flex-col px-7 pb-12">
     <AddDevice v-if="pageType === 'addDevice'" v-model="deviceDialogVisible" />
-    <PageHome v-else></PageHome>
+    <PageHome v-else :serial="currentSerial" />
   </div>
   <AddDeviceDialog v-model="deviceDialogVisible" @paired="pageType = 'home'" />
 </template>

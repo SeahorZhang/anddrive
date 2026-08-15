@@ -10,5 +10,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getDiscoveredDevices: () => invoke('adb:getDiscoveredDevices'),
     stopDiscovery: () => invoke('adb:stopDiscovery'),
     getDevices: () => invoke('adb:getDevices'),
+    getDeviceInfo: (serial) => invoke('adb:getDeviceInfo', serial),
   },
 })
