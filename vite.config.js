@@ -7,7 +7,6 @@ import RekaResolver from "reka-ui/resolver";
 
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
-import vueDevTools from "vite-plugin-vue-devtools";
 import { electronSimple } from "vite-plugin-electron/multi-env";
 import { notBundle } from "vite-plugin-electron/plugin";
 
@@ -22,7 +21,6 @@ export default defineConfig(({ command }) => {
   return {
     plugins: [
       vue(),
-      vueDevTools(),
       tailwindcss(),
       AutoImport({
         imports: ["vue"],
@@ -30,9 +28,7 @@ export default defineConfig(({ command }) => {
       }),
       Components({
         dts: true,
-        resolvers: [
-          RekaResolver(),
-        ],
+        resolvers: [RekaResolver()],
       }),
       electronSimple({
         main: {

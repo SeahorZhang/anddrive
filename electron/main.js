@@ -34,6 +34,10 @@ async function createWindow() {
   win = new BrowserWindow({
     title: "Main window",
     icon: path.join(process.env.VITE_PUBLIC, "favicon.ico"),
+    minWidth: 672,
+    minHeight: 600,
+    titleBarStyle: "hiddenInset",
+    backgroundColor: "#00000000",
     webPreferences: {
       preload,
     },
@@ -41,7 +45,6 @@ async function createWindow() {
 
   if (VITE_DEV_SERVER_URL) {
     win.loadURL(VITE_DEV_SERVER_URL);
-    win.webContents.openDevTools();
   } else {
     win.loadFile(indexHtml);
   }

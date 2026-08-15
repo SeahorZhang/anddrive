@@ -1,5 +1,4 @@
 <script setup>
-import Header from './Header.vue'
 import AppList from './AppList.vue'
 const device = {
   deviceName: 'Xiaomi 17 Pro Max',
@@ -7,9 +6,8 @@ const device = {
 </script>
 
 <template>
-  <div class="flex h-full flex-1 flex-col gap-5">
-    <Header />
-    <div class="flex items-center gap-2">
+  <div class="flex h-full flex-1 flex-col">
+    <div class="mb-3 flex items-center gap-2">
       <span class="text-2xl font-semibold text-black/80">
         {{ device.deviceName || device.model }}
       </span>
@@ -19,7 +17,7 @@ const device = {
         </span>
       </div>
     </div>
-    <div>
+    <div class="mb-5">
       <div class="mb-1 text-xs">
         <span>已用 169.08 GB，总共 512.23 GB</span>
         <span>32%</span>
