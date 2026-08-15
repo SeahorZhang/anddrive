@@ -1,3 +1,6 @@
+allowBuilds:
+  vue-demi: true
+
 overrides:
   'vue': 'rc'
   '@vue/compiler-core': 'rc'

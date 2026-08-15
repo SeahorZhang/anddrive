@@ -3,6 +3,7 @@
   "semi": false,
   "singleQuote": true,
   "sortTailwindcss": {
+    "stylesheet": "./src/styles/index.css",
     "preserveWhitespace": true
   }
 }
