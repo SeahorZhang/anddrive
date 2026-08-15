@@ -38,6 +38,11 @@ __screenshots__/
 # Vite
 *.timestamp-*-*.mjs
 
+# Auto-generated
+auto-imports.d.ts
+components.d.ts
+.eslintrc-auto-import.json
+
 # Electron
 dist-electron
 release

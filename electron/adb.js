@@ -1,5 +1,4 @@
-import adbkit from "@devicefarmer/adbkit";
-const { createClient } = adbkit;
+import Bonjour from "bonjour-service";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -8,107 +7,53 @@ import { app } from "electron";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function getAdbPath() {
-  const platform = process.platform;
-  let binName;
-
-  if (platform === "darwin") {
-    binName = "mac/adb";
-  } else if (platform === "win32") {
-    binName = "win/adb.exe";
-  } else {
-    binName = "linux/adb";
-  }
-
-  // In development, resources are in the project root
-  // In production, resources are in app resources path
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, "adb", binName);
-  }
-  return path.join(__dirname, "..", "resources", "adb", binName);
+  const bin = { darwin: "mac/adb", win32: "win/adb.exe", linux: "linux/adb" }[process.platform];
+  const base = app.isPackaged ? process.resourcesPath : path.join(__dirname, "..", "resources");
+  return path.join(base, "adb", bin);
 }
 
-let client = null;
 let serverStarted = false;
 
-async function startAdbServer() {
+async function ensureServer() {
   if (serverStarted) return;
-
-  const adbPath = getAdbPath();
-
-  return new Promise((resolve, reject) => {
-    execFile(adbPath, ["start-server"], (error) => {
-      if (error) {
-        console.error("Failed to start ADB server:", error);
-        reject(error);
-      } else {
-        serverStarted = true;
-        resolve();
-      }
+  await new Promise((resolve, reject) => {
+    execFile(getAdbPath(), ["start-server"], (err) => {
+      if (err) reject(err);
+      else { serverStarted = true; resolve(); }
     });
   });
 }
 
-export async function getAdbClient() {
-  if (!client) {
-    await startAdbServer();
-    client = createClient({ bin: getAdbPath() });
-  }
-  return client;
+export function pair(host, port, code) {
+  return ensureServer().then(() => new Promise((resolve, reject) => {
+    execFile(getAdbPath(), ["pair", `${host}:${port}`, code], (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr || err.message));
+      else resolve(stdout.trim());
+    });
+  }));
 }
 
-export async function getDevices() {
-  const adb = await getAdbClient();
-  return adb.listDevices();
-}
+// mDNS discovery
+let bonjour = null;
+let browser = null;
+let discovered = new Map();
 
-export async function shell(serial, command) {
-  const adb = await getAdbClient();
-  const stream = await adb.getDevice(serial).shell(command);
-  const output = await adb.util.readAll(stream);
-  return output.toString();
-}
-
-export async function install(serial, apkPath) {
-  const adb = await getAdbClient();
-  return adb.getDevice(serial).install(apkPath);
-}
-
-export async function push(serial, localPath, remotePath) {
-  const adb = await getAdbClient();
-  const transfer = await adb.getDevice(serial).push(localPath, remotePath);
-  return new Promise((resolve, reject) => {
-    transfer.on("end", resolve);
-    transfer.on("error", reject);
+export function startDiscovery() {
+  stopDiscovery();
+  discovered = new Map();
+  bonjour = new Bonjour();
+  browser = bonjour.find({ type: "adb-tls-pairing" }, (svc) => {
+    const ip = svc.addresses?.find(a => !a.includes(":") && a !== "127.0.0.1");
+    if (ip) discovered.set(`${ip}:${svc.port}`, { name: svc.name, address: `${ip}:${svc.port}` });
   });
 }
 
-export async function pull(serial, remotePath, localPath) {
-  const adb = await getAdbClient();
-  const transfer = await adb.getDevice(serial).pull(remotePath);
-  return new Promise((resolve, reject) => {
-    transfer.on("end", resolve);
-    transfer.on("error", reject);
-  });
+export function getDiscoveredDevices() {
+  return Array.from(discovered.values());
 }
 
-export async function screencap(serial) {
-  const adb = await getAdbClient();
-  const stream = await adb.getDevice(serial).screencap();
-  const buffer = await adb.util.readAll(stream);
-  return buffer.toString("base64");
-}
-
-export async function getDeviceProps(serial) {
-  const adb = await getAdbClient();
-  return adb.getDevice(serial).getProperties();
-}
-
-export async function forward(serial, local, remote) {
-  const adb = await getAdbClient();
-  return adb.getDevice(serial).forward(local, remote);
-}
-
-export async function getDHCPIpAddress(serial) {
-  const adb = await getAdbClient();
-  return adb.getDevice(serial).getDHCPIpAddress();
+export function stopDiscovery() {
+  browser?.stop(); browser = null;
+  bonjour?.destroy(); bonjour = null;
+  discovered = new Map();
 }

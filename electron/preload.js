@@ -1,16 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
+const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args)
+
 contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   adb: {
-    getDevices: () => ipcRenderer.invoke('adb:getDevices'),
-    shell: (serial, command) => ipcRenderer.invoke('adb:shell', serial, command),
-    install: (serial, apkPath) => ipcRenderer.invoke('adb:install', serial, apkPath),
-    push: (serial, localPath, remotePath) => ipcRenderer.invoke('adb:push', serial, localPath, remotePath),
-    pull: (serial, remotePath, localPath) => ipcRenderer.invoke('adb:pull', serial, remotePath, localPath),
-    screencap: (serial) => ipcRenderer.invoke('adb:screencap', serial),
-    getDeviceProps: (serial) => ipcRenderer.invoke('adb:getDeviceProps', serial),
-    forward: (serial, local, remote) => ipcRenderer.invoke('adb:forward', serial, local, remote),
-    getDHCPIpAddress: (serial) => ipcRenderer.invoke('adb:getDHCPIpAddress', serial),
+    pair: (h, p, c) => invoke('adb:pair', h, p, c),
+    startDiscovery: () => invoke('adb:startDiscovery'),
+    getDiscoveredDevices: () => invoke('adb:getDiscoveredDevices'),
+    stopDiscovery: () => invoke('adb:stopDiscovery'),
   },
 })

@@ -15,9 +15,9 @@
     "format": "oxfmt src/"
   },
   "dependencies": {
-    "@devicefarmer/adbkit": "^3.3.9",
     "@iconify/vue": "^5.0.1",
     "@tailwindcss/vite": "^4.3.3",
+    "bonjour-service": "^1.4.4",
     "motion-v": "^2.3.0",
     "reka-ui": "^2.10.3",
     "tailwindcss": "^4.3.3",
