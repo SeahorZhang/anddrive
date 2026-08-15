@@ -1,7 +1,8 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
+import * as adb from "./adb.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -49,6 +50,43 @@ async function createWindow() {
     win.loadFile(indexHtml);
   }
 }
+
+// ADB IPC handlers
+ipcMain.handle("adb:getDevices", async () => {
+  return adb.getDevices();
+});
+
+ipcMain.handle("adb:shell", async (_event, serial, command) => {
+  return adb.shell(serial, command);
+});
+
+ipcMain.handle("adb:install", async (_event, serial, apkPath) => {
+  return adb.install(serial, apkPath);
+});
+
+ipcMain.handle("adb:push", async (_event, serial, localPath, remotePath) => {
+  return adb.push(serial, localPath, remotePath);
+});
+
+ipcMain.handle("adb:pull", async (_event, serial, remotePath, localPath) => {
+  return adb.pull(serial, remotePath, localPath);
+});
+
+ipcMain.handle("adb:screencap", async (_event, serial) => {
+  return adb.screencap(serial);
+});
+
+ipcMain.handle("adb:getDeviceProps", async (_event, serial) => {
+  return adb.getDeviceProps(serial);
+});
+
+ipcMain.handle("adb:forward", async (_event, serial, local, remote) => {
+  return adb.forward(serial, local, remote);
+});
+
+ipcMain.handle("adb:getDHCPIpAddress", async (_event, serial) => {
+  return adb.getDHCPIpAddress(serial);
+});
 
 app.whenReady().then(createWindow);
 

@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build && electron-builder",
+    "download-adb": "bash scripts/download-adb.sh",
     "preview": "vite preview",
     "lint": "run-s \"lint:*\"",
     "lint:oxlint": "oxlint . --fix",
@@ -14,6 +15,7 @@
     "format": "oxfmt src/"
   },
   "dependencies": {
+    "@devicefarmer/adbkit": "^3.3.9",
     "@iconify/vue": "^5.0.1",
     "@tailwindcss/vite": "^4.3.3",
     "motion-v": "^2.3.0",

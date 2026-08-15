@@ -10,6 +10,12 @@
     "dist",
     "dist-electron"
   ],
+  "extraResources": [
+    {
+      "from": "resources/adb",
+      "to": "adb"
+    }
+  ],
   "mac": {
     "target": [
       "dmg"
