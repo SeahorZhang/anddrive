@@ -1,5 +1,6 @@
 <script setup>
 import ConfirmDialog from './ConfirmDialog.vue'
+import BaseButton from './BaseButton.vue'
 const { pageType } = defineProps(['pageType'])
 const showConfirm = ref(false)
 const emit = defineEmits(['disconnect'])

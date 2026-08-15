@@ -15,6 +15,7 @@
     "format": "oxfmt src/"
   },
   "dependencies": {
+    "@iconify-json/lucide": "^1.2.123",
     "@iconify/vue": "^5.0.1",
     "@tailwindcss/vite": "^4.3.3",
     "bonjour-service": "^1.4.4",
