@@ -51,6 +51,7 @@ for (const [channel, handler] of Object.entries({
     adb.stopDiscovery();
     return true;
   },
+  "adb:getDevices": () => adb.getDevices(),
 })) {
   ipcMain.handle(channel, handler);
 }

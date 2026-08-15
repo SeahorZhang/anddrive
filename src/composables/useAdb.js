@@ -6,5 +6,6 @@ export function useAdb() {
     startDiscovery: () => api.startDiscovery(),
     getDiscoveredDevices: () => api.getDiscoveredDevices(),
     stopDiscovery: () => api.stopDiscovery(),
+    getDevices: () => api.getDevices(),
   }
 }

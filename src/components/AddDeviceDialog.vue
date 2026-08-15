@@ -3,9 +3,19 @@ import { Motion, AnimatePresence } from 'motion-v'
 import { usePairing } from '@/composables/usePairing'
 
 const modelValue = defineModel({ default: false })
+const emit = defineEmits(['paired'])
 const { qrDataUrl, status, statusMessage, start, stop } = usePairing()
 
 watch(modelValue, (v) => v ? start() : stop())
+
+watch(status, (v) => {
+  if (v === 'success') {
+    setTimeout(() => {
+      modelValue.value = false
+      emit('paired')
+    }, 800)
+  }
+})
 </script>
 
 <template>

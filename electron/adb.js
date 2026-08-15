@@ -57,3 +57,21 @@ export function stopDiscovery() {
   bonjour?.destroy(); bonjour = null;
   discovered = new Map();
 }
+
+export function getDevices() {
+  return ensureServer().then(() => new Promise((resolve, reject) => {
+    execFile(getAdbPath(), ["devices"], (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr || err.message));
+      else {
+        const lines = stdout.trim().split('\n').slice(1); // 跳过第一行 "List of devices attached"
+        const devices = lines
+          .filter(line => line.includes('device'))
+          .map(line => {
+            const [serial, state] = line.split('\t');
+            return { serial, state };
+          });
+        resolve(devices);
+      }
+    });
+  }));
+}
