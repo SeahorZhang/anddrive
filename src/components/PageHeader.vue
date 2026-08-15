@@ -1,5 +1,12 @@
 <script setup>
-import { Icon } from '@iconify/vue'
+import ConfirmDialog from './ConfirmDialog.vue'
+const { pageType } = defineProps(['pageType'])
+const showConfirm = ref(false)
+const emit = defineEmits(['disconnect'])
+
+function handleConfirm() {
+  emit('disconnect')
+}
 </script>
 
 <template>
@@ -12,14 +19,11 @@ import { Icon } from '@iconify/vue'
       <div
         style="-webkit-app-region: no-drag"
         class="absolute top-1/2 right-4 z-10 flex -translate-y-1/2 items-center gap-1"
+        v-if="pageType === 'home'"
       >
         <TooltipRoot>
           <TooltipTrigger as-child>
-            <button
-              class="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md hover:bg-black/5"
-            >
-              <Icon icon="lucide:unplug" class="h-4 w-4" />
-            </button>
+            <BaseButton icon="lucide:unplug" icon-only @click="showConfirm = true" />
           </TooltipTrigger>
           <TooltipPortal>
             <TooltipContent
@@ -32,6 +36,8 @@ import { Icon } from '@iconify/vue'
           </TooltipPortal>
         </TooltipRoot>
       </div>
+
+      <ConfirmDialog v-model="showConfirm" @confirm="handleConfirm" />
     </div>
   </TooltipProvider>
 </template>
