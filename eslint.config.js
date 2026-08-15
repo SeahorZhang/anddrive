@@ -11,12 +11,22 @@ export default defineConfig([
     files: ['**/*.{vue,js,mjs,jsx}'],
   },
 
-  globalIgnores(['**/dist/**', '**/dist-ssr/**', '**/coverage/**']),
+  globalIgnores(['**/dist/**', '**/dist-ssr/**', '**/coverage/**', '**/dist-electron/**']),
 
   {
+    files: ['**/*.{vue,js,mjs,jsx}'],
     languageOptions: {
       globals: {
         ...globals.browser,
+      },
+    },
+  },
+
+  {
+    files: ['vite.config.js', 'electron/**/*.{js,mjs}'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
       },
     },
   },

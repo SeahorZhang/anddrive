@@ -1,4 +1,5 @@
 allowBuilds:
+  electron-winstaller: true
   vue-demi: true
 
 overrides:
