@@ -18,6 +18,9 @@ if [ ! -f "$ADB_DIR/mac/adb" ]; then
   rm -rf "$ADB_DIR/mac/platform-tools" "$ADB_DIR/platform-tools-mac.zip"
   chmod +x "$ADB_DIR/mac/adb"
 fi
+if command -v lipo >/dev/null 2>&1; then
+  lipo -verify_arch arm64 x86_64 "$ADB_DIR/mac/adb"
+fi
 
 # Windows
 if [ ! -f "$ADB_DIR/win/adb.exe" ]; then
@@ -30,6 +33,12 @@ if [ ! -f "$ADB_DIR/win/adb.exe" ]; then
   mv "$ADB_DIR/win/platform-tools/AdbWinUsbApi.dll" "$ADB_DIR/win/AdbWinUsbApi.dll" 2>/dev/null || true
   rm -rf "$ADB_DIR/win/platform-tools" "$ADB_DIR/platform-tools-win.zip"
 fi
+for file in adb.exe AdbWinApi.dll AdbWinUsbApi.dll; do
+  if [ ! -s "$ADB_DIR/win/$file" ]; then
+    echo "Missing Windows ADB file: $file" >&2
+    exit 1
+  fi
+done
 
 # Linux
 if [ ! -f "$ADB_DIR/linux/adb" ]; then
@@ -41,5 +50,6 @@ if [ ! -f "$ADB_DIR/linux/adb" ]; then
   rm -rf "$ADB_DIR/linux/platform-tools" "$ADB_DIR/platform-tools-linux.zip"
   chmod +x "$ADB_DIR/linux/adb"
 fi
+chmod +x "$ADB_DIR/mac/adb" "$ADB_DIR/linux/adb"
 
 echo "ADB binaries downloaded successfully!"

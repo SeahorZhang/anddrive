@@ -3,6 +3,11 @@
   "appId": "com.anddrive.next",
   "asar": true,
   "productName": "AndDrive",
+  "afterPack": "scripts/after-pack.js",
+  "electronLanguages": [
+    "zh-CN",
+    "en-US"
+  ],
   "directories": {
     "output": "release/${version}"
   },
@@ -12,15 +17,21 @@
   ],
   "extraResources": [
     {
-      "from": "resources/adb",
-      "to": "adb"
+      "from": "resources/helper-app.apk",
+      "to": "helper-app.apk"
     }
   ],
   "mac": {
     "target": [
       "dmg"
     ],
-    "artifactName": "${productName}-Mac-${version}-Installer.${ext}"
+    "artifactName": "${productName}-Mac-${arch}-${version}-Installer.${ext}",
+    "extraResources": [
+      {
+        "from": "resources/adb/mac/adb",
+        "to": "adb/mac/adb"
+      }
+    ]
   },
   "win": {
     "target": [
@@ -31,7 +42,18 @@
         ]
       }
     ],
-    "artifactName": "${productName}-Windows-${version}-Setup.${ext}"
+    "artifactName": "${productName}-Windows-${arch}-${version}-Setup.${ext}",
+    "extraResources": [
+      {
+        "from": "resources/adb/win",
+        "to": "adb/win",
+        "filter": [
+          "adb.exe",
+          "AdbWinApi.dll",
+          "AdbWinUsbApi.dll"
+        ]
+      }
+    ]
   },
   "nsis": {
     "oneClick": false,
@@ -43,6 +65,12 @@
     "target": [
       "AppImage"
     ],
-    "artifactName": "${productName}-Linux-${version}.${ext}"
+    "artifactName": "${productName}-Linux-${arch}-${version}.${ext}",
+    "extraResources": [
+      {
+        "from": "resources/adb/linux/adb",
+        "to": "adb/linux/adb"
+      }
+    ]
   }
 }

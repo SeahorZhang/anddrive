@@ -32,10 +32,9 @@ cd "$HELPER_APP_DIR"
 
 # 构建APK
 echo "正在构建APK..."
-# 优先使用gradle@8（兼容性最好）
-if [ -f "/opt/homebrew/opt/gradle@8/bin/gradle" ]; then
+if [ -x "/opt/homebrew/opt/gradle@8/bin/gradle" ]; then
     /opt/homebrew/opt/gradle@8/bin/gradle assembleDebug
-elif [ -f "./gradlew" ]; then
+elif [ -x "./gradlew" ]; then
     ./gradlew assembleDebug
 else
     gradle assembleDebug
@@ -43,7 +42,7 @@ fi
 
 # 检查APK是否生成
 APK_PATH="$HELPER_APP_DIR/app/build/outputs/apk/debug/app-debug.apk"
-if [ ! -f "$APK_PATH" ]; then
+if [ ! -s "$APK_PATH" ]; then
     echo "错误: APK构建失败"
     exit 1
 fi
