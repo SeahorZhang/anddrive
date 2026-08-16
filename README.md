@@ -25,6 +25,12 @@ See [Vite Configuration Reference](https://vite.dev/config/).
 pnpm install
 ```
 
+### 构建Helper App（获取App列表需要）
+
+```sh
+pnpm build-helper
+```
+
 ### Compile and Hot-Reload for Development
 
 ```sh

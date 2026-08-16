@@ -1,0 +1,40 @@
+#!/bin/bash
+
+# Gradle wrapper script
+
+# Determine the Java command to use to start the JVM.
+if [ -n "$JAVA_HOME" ] ; then
+    JAVACMD="$JAVA_HOME/bin/java"
+else
+    JAVACMD="java"
+fi
+
+# Check if java is available
+if ! command -v "$JAVACMD" &> /dev/null ; then
+    echo "Error: Java not found. Please set JAVA_HOME or add java to PATH."
+    exit 1
+fi
+
+# Set GRADLE_HOME if not set
+if [ -z "$GRADLE_HOME" ] ; then
+    # Try to find gradle in common locations
+    if [ -d "/opt/gradle" ] ; then
+        GRADLE_HOME="/opt/gradle"
+    elif [ -d "$HOME/.gradle/wrapper/dists" ] ; then
+        # Find the latest gradle distribution
+        GRADLE_HOME=$(find "$HOME/.gradle/wrapper/dists" -name "gradle-*" -type d | sort -V | tail -1)
+    fi
+fi
+
+# If GRADLE_HOME is still not set, try to download gradle wrapper
+if [ -z "$GRADLE_HOME" ] || [ ! -d "$GRADLE_HOME" ] ; then
+    echo "Gradle not found. Please install Gradle or set GRADLE_HOME."
+    echo "You can install Gradle using:"
+    echo "  brew install gradle"
+    echo "  or"
+    echo "  sdk install gradle"
+    exit 1
+fi
+
+# Execute gradle
+exec "$GRADLE_HOME/bin/gradle" "$@"

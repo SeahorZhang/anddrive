@@ -60,6 +60,7 @@ for (const [channel, handler] of Object.entries({
   },
   "adb:getDevices": () => adb.getDevices(),
   "adb:getDeviceInfo": (_, serial) => adb.getDeviceInfo(serial),
+  "adb:getInstalledApps": (_, serial) => adb.getInstalledApps(serial),
 })) {
   ipcMain.handle(channel, handler);
 }

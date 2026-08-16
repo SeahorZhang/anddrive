@@ -33,7 +33,7 @@ loadDevice()
 <template>
   <PageHeader @disconnect="disconnect" :pageType="pageType" />
 
-  <div class="flex flex-1 flex-col px-7 pb-12">
+  <div class="flex flex-1 flex-col overflow-hidden px-7 pb-12">
     <AddDevice v-if="pageType === 'addDevice'" v-model="deviceDialogVisible" />
     <PageHome v-else :serial="serial" />
   </div>

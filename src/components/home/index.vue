@@ -74,5 +74,5 @@ watch(() => props.serial, loadDeviceInfo)
     </div>
   </div>
 
-  <AppList />
+  <AppList :serial="serial" />
 </template>
