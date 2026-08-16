@@ -11,6 +11,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     stopDiscovery: () => invoke('adb:stopDiscovery'),
     getDevices: () => invoke('adb:getDevices'),
     getDeviceInfo: (serial) => invoke('adb:getDeviceInfo', serial),
-    getInstalledApps: (serial) => invoke('adb:getInstalledApps', serial),
+    getCachedInstalledApps: (serial) => invoke('adb:getCachedInstalledApps', serial),
+    loadInstalledApps: (serial, loadId) => invoke('adb:loadInstalledApps', serial, loadId),
+    cancelInstalledAppsLoad: (loadId) => invoke('adb:cancelInstalledAppsLoad', loadId),
+    onInstalledApp: (callback) => {
+      const handler = (_, data) => callback(data)
+      ipcRenderer.on('adb:installed-app', handler)
+      return () => ipcRenderer.removeListener('adb:installed-app', handler)
+    },
   },
 })

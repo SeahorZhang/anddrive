@@ -23,7 +23,6 @@ declare module 'vue' {
     DialogRoot: typeof import('reka-ui')['DialogRoot']
     DrButton: typeof import('./src/components/DrButton.vue')['default']
     Home: typeof import('./src/components/home/index.vue')['default']
-    Icon: typeof import('./src/components/Icon.vue')['default']
     PageHeader: typeof import('./src/components/PageHeader.vue')['default']
     ScrollAreaRoot: typeof import('reka-ui')['ScrollAreaRoot']
     ScrollAreaScrollbar: typeof import('reka-ui')['ScrollAreaScrollbar']

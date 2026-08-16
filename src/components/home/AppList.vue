@@ -5,48 +5,112 @@ const props = defineProps({
   serial: String,
 })
 
-const { getInstalledApps } = useAdb()
+const {
+  getCachedInstalledApps,
+  loadInstalledApps,
+  cancelInstalledAppsLoad,
+  onInstalledApp,
+} = useAdb()
 
-const allApps = ref([])
+const appsByPackage = ref(new Map())
 const searchText = ref('')
 const loading = ref(false)
+let nextLoadId = 0
+let currentLoadId = 0
+let unsubscribe = null
 
-// 加载app列表（一次获取全部数据，包含名称和图标）
-const loadApps = async () => {
-  if (!props.serial) return
-  loading.value = true
-  try {
-    allApps.value = await getInstalledApps(props.serial)
-  } catch (e) {
-    console.error('获取app列表失败:', e)
-  } finally {
-    loading.value = false
-  }
-}
+const allApps = computed(() => [...appsByPackage.value.values()])
 
-// 搜索过滤
 const displayApps = computed(() => {
   if (!searchText.value) return allApps.value
   const keyword = searchText.value.toLowerCase()
   return allApps.value.filter(
     (app) =>
-      app.label.toLowerCase().includes(keyword) ||
-      app.packageName.toLowerCase().includes(keyword),
+      app.label.toLowerCase().includes(keyword) || app.packageName.toLowerCase().includes(keyword),
   )
 })
 
-// 初始化
-if (props.serial) {
-  loadApps()
+function replaceApps(apps) {
+  const next = new Map()
+  for (const app of apps || []) {
+    if (app?.packageName) next.set(app.packageName, app)
+  }
+  appsByPackage.value = next
 }
 
+function mergeIcons(apps) {
+  if (!apps?.length) return
+  const next = new Map(appsByPackage.value)
+  for (const app of apps) {
+    const existing = next.get(app?.packageName)
+    if (existing) next.set(app.packageName, { ...existing, iconUrl: app.iconUrl })
+  }
+  appsByPackage.value = next
+}
+
+function stopLoad() {
+  unsubscribe?.()
+  unsubscribe = null
+  if (currentLoadId) {
+    cancelInstalledAppsLoad(currentLoadId)
+    currentLoadId = 0
+  }
+}
+
+async function loadApps() {
+  if (!props.serial) {
+    stopLoad()
+    appsByPackage.value = new Map()
+    loading.value = false
+    return
+  }
+
+  stopLoad()
+  appsByPackage.value = new Map()
+  loading.value = true
+
+  const serial = props.serial
+  const loadId = ++nextLoadId
+  currentLoadId = loadId
+  unsubscribe = onInstalledApp(({ loadId: eventLoadId, phase, apps }) => {
+    if (eventLoadId !== loadId) return
+    if (phase === 'authoritative') {
+      replaceApps(apps)
+      loading.value = false
+    } else if (phase === 'icons') {
+      mergeIcons(apps)
+    } else if (phase === 'complete') {
+      loading.value = false
+    }
+  })
+
+  try {
+    try {
+      const cached = await getCachedInstalledApps(serial)
+      if (loadId !== currentLoadId || serial !== props.serial) return
+      if (cached?.apps) replaceApps(cached.apps)
+    } catch (e) {
+      console.warn('读取app缓存失败:', e)
+    }
+    await loadInstalledApps(serial, loadId)
+  } catch (e) {
+    console.error('获取app列表失败:', e)
+  } finally {
+    if (loadId === currentLoadId) {
+      loading.value = false
+      stopLoad()
+    }
+  }
+}
+
+if (props.serial) loadApps()
 watch(() => props.serial, loadApps)
+onUnmounted(stopLoad)
 </script>
 
 <template>
   <ScrollAreaRoot class="h-0 flex-1">
     <ScrollAreaViewport class="h-full w-full">
-      <!-- Search -->
       <div class="relative mb-3">
         <input
           v-model="searchText"
@@ -56,21 +120,19 @@ watch(() => props.serial, loadApps)
         />
       </div>
 
-      <!-- Loading state -->
-      <div v-if="loading" class="flex items-center justify-center py-8">
+      <div v-if="loading && allApps.length === 0" class="flex items-center justify-center py-8">
         <div class="text-sm text-black/40">加载中...</div>
       </div>
 
-      <!-- App grid -->
-      <div v-else class="grid grid-cols-5 gap-2">
+      <div v-if="allApps.length > 0" class="grid grid-cols-5 gap-2">
         <div
           v-for="app in displayApps"
           :key="app.packageName"
           class="flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-black/8 bg-gray-50 p-2 transition-all hover:border-black/12 hover:bg-gray-100"
         >
           <img
-            v-if="app.icon"
-            :src="'data:image/png;base64,' + app.icon"
+            v-if="app.iconUrl"
+            :src="app.iconUrl"
             class="pointer-events-none h-8 w-8 rounded-lg"
           />
           <div
@@ -97,7 +159,6 @@ watch(() => props.serial, loadApps)
         </div>
       </div>
 
-      <!-- Empty state -->
       <div
         v-if="!loading && displayApps.length === 0"
         class="flex items-center justify-center py-8"

@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import os from "node:os";
 import * as adb from "./adb.js";
+import { getCachedInstalledApps } from "./appCache.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 process.env.APP_ROOT = path.join(__dirname, "..");
@@ -60,7 +61,13 @@ for (const [channel, handler] of Object.entries({
   },
   "adb:getDevices": () => adb.getDevices(),
   "adb:getDeviceInfo": (_, serial) => adb.getDeviceInfo(serial),
-  "adb:getInstalledApps": (_, serial) => adb.getInstalledApps(serial),
+  "adb:getCachedInstalledApps": (_, serial) => getCachedInstalledApps(serial),
+  "adb:loadInstalledApps": (event, serial, loadId) =>
+    adb.loadInstalledApps(serial, loadId, event.sender),
+  "adb:cancelInstalledAppsLoad": (_, loadId) => {
+    adb.cancelInstalledAppsLoad(loadId);
+    return true;
+  },
 })) {
   ipcMain.handle(channel, handler);
 }

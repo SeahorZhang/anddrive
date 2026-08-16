@@ -3,9 +3,9 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
-import os from "node:os";
 import http from "node:http";
 import { app } from "electron";
+import { ICON_REFRESH_MS, readAppCache, writeAppCache } from "./appCache.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,8 +22,25 @@ function getHelperApkPath() {
 
 const HELPER_PACKAGE = "com.anddrive.helper";
 const HELPER_PORT = 18923;
+const ICON_BATCH_SIZE = 24;
+const ICON_BATCH_CONCURRENCY = 4;
 
 let serverStarted = false;
+const activeAppLoads = new Set();
+let activeForwardLoadId = null;
+let forwardQueue = Promise.resolve();
+const helperUpgradeAttempted = new Set();
+
+const helperUrl = (path) => `http://127.0.0.1:${HELPER_PORT}${path}`;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function acquireForwardLock() {
+  const previous = forwardQueue;
+  let release;
+  forwardQueue = new Promise((resolve) => { release = resolve; });
+  await previous;
+  return release;
+}
 
 async function ensureServer() {
   if (serverStarted) return;
@@ -100,96 +117,49 @@ function adbShell(serial, ...args) {
   return adbExec("-s", serial, "shell", ...args);
 }
 
-// 检查helper app是否已安装
-async function isHelperInstalled(serial) {
-  console.log('[isHelperInstalled] Checking...');
-  try {
-    const output = await adbShell(serial, "pm", "list", "packages", HELPER_PACKAGE);
-    console.log('[isHelperInstalled] Output:', output);
-    return output.includes(HELPER_PACKAGE);
-  } catch (err) {
-    console.error('[isHelperInstalled] Error:', err.message);
-    return false;
-  }
-}
-
-// 安装helper app
-async function installHelper(serial) {
-  console.log('[installHelper] Installing...');
-  const apkPath = getHelperApkPath();
-  console.log('[installHelper] APK path:', apkPath);
-  if (!fs.existsSync(apkPath)) {
-    throw new Error("Helper APK not found: " + apkPath);
-  }
-  console.log('[installHelper] Running adb install...');
-  const result = await adbExec("-s", serial, "install", "-r", apkPath);
-  console.log('[installHelper] Install result:', result);
-}
-
-// 启动helper app
-async function startHelper(serial) {
-  await adbShell(
-    serial,
-    "am", "start", "-n",
-    `${HELPER_PACKAGE}/.MainActivity`
-  );
-  // 等待服务启动（增加到2秒）
-  await new Promise(resolve => setTimeout(resolve, 2000));
-}
-
-// 停止helper app
-async function stopHelper(serial) {
-  try {
-    await adbShell(serial, "am", "force-stop", HELPER_PACKAGE);
-  } catch {}
-}
-
-// 设置端口转发
-async function forwardPort(serial) {
-  await adbExec("-s", serial, "forward", `tcp:${HELPER_PORT}`, `tcp:${HELPER_PORT}`);
-}
-
-// 移除端口转发
-async function removeForward(serial) {
-  try {
-    await adbExec("-s", serial, "forward", "--remove", `tcp:${HELPER_PORT}`);
-  } catch {}
-}
-
-// 通过HTTP请求（带重试）
-function httpGet(url, retries = 3, parseJson = true) {
+function httpRequest(url, { retries = 0, timeout = 10000, parse = "json" } = {}) {
   return new Promise((resolve, reject) => {
     const attempt = (remaining) => {
       const req = http.get(url, (res) => {
+        if (parse === "buffer") {
+          if (res.statusCode !== 200) {
+            res.resume();
+            resolve(null);
+            return;
+          }
+          const chunks = [];
+          res.on("data", (chunk) => chunks.push(chunk));
+          res.on("end", () => resolve(Buffer.concat(chunks)));
+          return;
+        }
+
         let data = "";
-        res.on("data", chunk => data += chunk);
+        res.on("data", (chunk) => (data += chunk));
         res.on("end", () => {
-          if (parseJson) {
-            try {
-              resolve(JSON.parse(data));
-            } catch (e) {
-              if (remaining > 0) {
-                setTimeout(() => attempt(remaining - 1), 1000);
-              } else {
-                reject(new Error("Failed to parse response: " + e.message));
-              }
+          try {
+            resolve(JSON.parse(data));
+          } catch (e) {
+            if (remaining > 0) {
+              setTimeout(() => attempt(remaining - 1), 300);
+            } else {
+              reject(new Error("Failed to parse response: " + e.message));
             }
-          } else {
-            resolve(data);
           }
         });
       });
+
       req.on("error", (err) => {
         if (remaining > 0) {
-          setTimeout(() => attempt(remaining - 1), 1000);
+          setTimeout(() => attempt(remaining - 1), 300);
         } else {
           reject(err);
         }
       });
-      req.setTimeout(30000, () => {
+
+      req.setTimeout(timeout, () => {
         req.destroy();
         if (remaining > 0) {
-          setTimeout(() => attempt(remaining - 1), 1000);
+          setTimeout(() => attempt(remaining - 1), 300);
         } else {
           reject(new Error("Request timeout"));
         }
@@ -199,80 +169,257 @@ function httpGet(url, retries = 3, parseJson = true) {
   });
 }
 
-// 通过helper app获取app列表（一次性获取名称和图标）
-export async function getInstalledApps(serial) {
-  await ensureServer();
+const httpGet = (url, retries = 1) => httpRequest(url, { retries });
+const httpGetBuffer = (url) => httpRequest(url, { parse: "buffer", timeout: 5000 });
 
-  console.log('[getInstalledApps] Starting for serial:', serial);
-
-  // 检查并安装helper app
-  const installed = await isHelperInstalled(serial);
-  console.log('[getInstalledApps] Helper installed:', installed);
-  if (!installed) {
-    console.log('[getInstalledApps] Installing helper...');
-    await installHelper(serial);
-    console.log('[getInstalledApps] Helper installed successfully');
-  }
-
-  // 启动helper app
-  console.log('[getInstalledApps] Starting helper...');
-  await startHelper(serial);
-  console.log('[getInstalledApps] Helper started');
-
-  // 设置端口转发
-  console.log('[getInstalledApps] Forwarding port...');
-  await forwardPort(serial);
-  console.log('[getInstalledApps] Port forwarded');
-
+async function isHelperInstalled(serial) {
   try {
-    // 从helper获取app列表
-    console.log('[getInstalledApps] Fetching apps from helper...');
-    const result = await httpGet(`http://127.0.0.1:${HELPER_PORT}/apps`, 3, true);
-    const apps = result.apps || [];
-    console.log('[getInstalledApps] Got', apps.length, 'apps');
+    const output = await adbShell(serial, "pm", "list", "packages", HELPER_PACKAGE);
+    return output.includes(HELPER_PACKAGE);
+  } catch {
+    return false;
+  }
+}
 
-    // 逐个获取图标
-    console.log('[getInstalledApps] Fetching icons...');
-    for (const app of apps) {
+async function installHelper(serial) {
+  const apkPath = getHelperApkPath();
+  if (!fs.existsSync(apkPath)) {
+    throw new Error("Helper APK not found: " + apkPath);
+  }
+  await adbExec("-s", serial, "install", "-r", apkPath);
+}
+
+async function forwardPort(serial, loadId) {
+  await adbExec("-s", serial, "forward", `tcp:${HELPER_PORT}`, `tcp:${HELPER_PORT}`);
+  activeForwardLoadId = loadId;
+}
+
+async function removeForward(serial, loadId) {
+  if (activeForwardLoadId !== loadId) return;
+  activeForwardLoadId = null;
+  try {
+    await adbExec("-s", serial, "forward", "--remove", `tcp:${HELPER_PORT}`);
+  } catch {
+    // The forwarding may already have been removed by ADB.
+  }
+}
+
+async function startHelperService(serial) {
+  try {
+    await adbShell(
+      serial,
+      "am",
+      "start-foreground-service",
+      "-n",
+      `${HELPER_PACKAGE}/.HelperService`,
+    );
+  } catch {
+    await adbShell(serial, "am", "start", "-n", `${HELPER_PACKAGE}/.MainActivity`);
+  }
+}
+
+async function pingHelper() {
+  try {
+    await httpGet(helperUrl("/ping"), 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForHelper(maxMs = 8000) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    if (await pingHelper()) return true;
+    await sleep(100);
+  }
+  return false;
+}
+
+async function ensureHelperReady(serial, loadId) {
+  await forwardPort(serial, loadId);
+  if (await pingHelper()) return;
+
+  await startHelperService(serial);
+  if (!(await waitForHelper())) {
+    throw new Error("Helper service failed to start");
+  }
+}
+
+function normalizeApp(app) {
+  return {
+    packageName: app.packageName,
+    label: app.label || app.packageName,
+    iconUrl: app.iconUrl || null,
+  };
+}
+
+function uniqueApps(apps) {
+  const seen = new Set();
+  return apps.map(normalizeApp).filter((app) => {
+    if (!app.packageName || seen.has(app.packageName)) return false;
+    seen.add(app.packageName);
+    return true;
+  });
+}
+
+function reconcileCachedApps(apps, cache, now) {
+  const cachedByPackage = new Map(cache?.apps.map((app) => [app.packageName, app]) || []);
+  const snapshotApps = [];
+  const iconsToFetch = [];
+  for (const app of apps) {
+    const cached = cachedByPackage.get(app.packageName);
+    const iconUrl = cached?.iconUrl || null;
+    const iconUpdatedAt = cached?.iconUpdatedAt || null;
+    const reconciled = { ...app, iconUrl, iconUpdatedAt };
+    snapshotApps.push(reconciled);
+    if (!iconUrl || !iconUpdatedAt || now - iconUpdatedAt >= ICON_REFRESH_MS || cached.label !== app.label) {
+      iconsToFetch.push(app);
+    }
+  }
+  return { snapshotApps, iconsToFetch };
+}
+
+function rendererApps(apps) {
+  return apps.map(({ packageName, label, iconUrl }) => ({ packageName, label, iconUrl }));
+}
+
+function parseIconBatch(buffer) {
+  const apps = [];
+  let offset = 0;
+  while (offset + 2 <= buffer.length) {
+    const packageLength = buffer.readUInt16BE(offset);
+    offset += 2;
+    if (packageLength === 0 || offset + packageLength + 4 > buffer.length) break;
+    const packageName = buffer.toString("utf8", offset, offset + packageLength);
+    offset += packageLength;
+    const iconLength = buffer.readUInt32BE(offset);
+    offset += 4;
+    if (iconLength > buffer.length - offset) break;
+    if (iconLength > 0) {
+      const icon = buffer.subarray(offset, offset + iconLength);
+      apps.push({ packageName, iconUrl: `data:image/png;base64,${icon.toString("base64")}` });
+    }
+    offset += iconLength;
+  }
+  return apps;
+}
+
+async function fetchIconsLegacy(apps, emit, loadId) {
+  let index = 0;
+  async function worker() {
+    while (index < apps.length) {
+      if (!activeAppLoads.has(loadId)) return;
+      const app = apps[index++];
       try {
-        const iconData = await httpGet(`http://127.0.0.1:${HELPER_PORT}/icon?pkg=${app.packageName}`, 1, false);
-        if (iconData && !iconData.includes('Not Found')) {
-          app.icon = iconData;
-        }
+        const buffer = await httpGetBuffer(helperUrl(`/icon-bin?pkg=${encodeURIComponent(app.packageName)}`));
+        if (buffer?.length > 0) emit({ packageName: app.packageName, iconUrl: `data:image/png;base64,${buffer.toString("base64")}` });
       } catch {
-        // 图标获取失败，忽略
+        // A missing icon should not fail the rest of the list.
       }
     }
-    console.log('[getInstalledApps] Icons fetched');
+  }
+  await Promise.all(Array.from({ length: ICON_BATCH_CONCURRENCY }, () => worker()));
+}
 
-    return apps.map(app => ({
-      packageName: app.packageName,
-      label: app.label || app.packageName,
-      icon: app.icon || null,
-      detailsLoaded: true,
-    }));
-  } catch (err) {
-    console.error('[getInstalledApps] Error:', err.message);
-    throw err;
+async function fetchIcons(apps, emit, loadId, batchIcons) {
+  if (!batchIcons) return fetchIconsLegacy(apps, emit, loadId);
+  let index = 0;
+  let fallback = false;
+  async function worker() {
+    while (!fallback && index < apps.length) {
+      if (!activeAppLoads.has(loadId)) return;
+      const batch = apps.slice(index, index += ICON_BATCH_SIZE);
+      try {
+        const packages = batch.map((app) => app.packageName).join(",");
+        const buffer = await httpGetBuffer(helperUrl(`/icons-bin?pkgs=${encodeURIComponent(packages)}`));
+        if (buffer?.length > 0) emit(parseIconBatch(buffer));
+        else fallback = true;
+      } catch {
+        fallback = true;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: ICON_BATCH_CONCURRENCY }, () => worker()));
+  if (fallback && activeAppLoads.has(loadId)) await fetchIconsLegacy(apps, emit, loadId);
+}
+
+export async function loadInstalledApps(serial, loadId, sender) {
+  activeAppLoads.add(loadId);
+  const releaseForwardLock = await acquireForwardLock();
+  const emit = (phase, apps) => {
+    if (!activeAppLoads.has(loadId)) return;
+    sender.send("adb:installed-app", apps === undefined ? { loadId, phase } : { loadId, phase, apps });
+  };
+
+  try {
+    if (!activeAppLoads.has(loadId)) return;
+    await ensureServer();
+    if (!(await isHelperInstalled(serial))) await installHelper(serial);
+    if (!activeAppLoads.has(loadId)) return;
+    await ensureHelperReady(serial, loadId);
+    let capabilities = await httpGet(helperUrl("/ping"), 0).catch(() => ({}));
+    if (capabilities.protocol !== 2 && !helperUpgradeAttempted.has(serial)) {
+      helperUpgradeAttempted.add(serial);
+      try {
+        await installHelper(serial);
+        await adbShell(serial, "am", "force-stop", HELPER_PACKAGE);
+        await startHelperService(serial);
+        if (await waitForHelper()) {
+          capabilities = await httpGet(helperUrl("/ping"), 0).catch(() => capabilities);
+        }
+      } catch {
+        // Keep using the legacy icon endpoint when an in-place upgrade fails.
+      }
+    }
+
+    const response = await httpGet(helperUrl("/apps"));
+    if (!response || !Array.isArray(response.apps)) throw new Error("Invalid app list response");
+    const now = Date.now();
+    const normalizedApps = uniqueApps(response.apps);
+    const cache = await readAppCache(serial);
+    const { snapshotApps, iconsToFetch } = reconcileCachedApps(normalizedApps, cache, now);
+    const snapshotByPackage = new Map(snapshotApps.map((app) => [app.packageName, app]));
+    const createSnapshot = () => ({
+      version: 1,
+      authoritativeAt: now,
+      writtenAt: Date.now(),
+      apps: [...snapshotByPackage.values()],
+    });
+
+    await writeAppCache(serial, createSnapshot());
+    emit("authoritative", rendererApps(snapshotApps));
+    if (!activeAppLoads.has(loadId)) return;
+
+    let iconChanged = false;
+    const emitIcons = (apps) => {
+      if (!activeAppLoads.has(loadId)) return;
+      const updates = [];
+      for (const app of Array.isArray(apps) ? apps : [apps]) {
+        const existing = snapshotByPackage.get(app.packageName);
+        if (!existing || !app.iconUrl) continue;
+        existing.iconUrl = app.iconUrl;
+        existing.iconUpdatedAt = Date.now();
+        updates.push({ packageName: app.packageName, iconUrl: app.iconUrl });
+      }
+      if (updates.length > 0) {
+        iconChanged = true;
+        emit("icons", updates);
+      }
+    };
+    await fetchIcons(iconsToFetch, emitIcons, loadId, capabilities.batchIcons === true);
+    if (!activeAppLoads.has(loadId)) return;
+    if (iconChanged) await writeAppCache(serial, createSnapshot());
+    emit("complete");
   } finally {
-    // 只移除端口转发，不停止helper app（保持运行以便下次使用）
-    console.log('[getInstalledApps] Cleaning up...');
-    await removeForward(serial);
-    console.log('[getInstalledApps] Cleanup done');
+    activeAppLoads.delete(loadId);
+    await removeForward(serial, loadId);
+    releaseForwardLock();
   }
 }
 
-// 兼容旧接口（现在不需要了，因为getInstalledApps一次返回所有数据）
-export async function getAppDetails(serial, apkPath) {
-  return { label: null, icon: null };
-}
-
-export async function getAppName(serial, packageName) {
-  return packageName.split('.').pop();
-}
-
-export async function getAppIcon(serial, packageName) {
-  return null;
+export function cancelInstalledAppsLoad(loadId) {
+  activeAppLoads.delete(loadId);
 }
 
 export async function getDeviceInfo(serial) {
