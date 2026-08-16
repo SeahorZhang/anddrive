@@ -8,34 +8,34 @@ import { useAdb } from './composables/useAdb'
 const { getDevices } = useAdb()
 const deviceDialogVisible = ref(false)
 const pageType = ref('addDevice') // 'addDevice' or 'home'
-const currentSerial = ref('')
+const serial = ref('')
 
 const disconnect = () => {
   pageType.value = 'addDevice'
-  currentSerial.value = ''
+  serial.value = ''
 }
 
-// 启动时检查已连接的设备
-onMounted(async () => {
+const loadDevice = async () => {
   try {
-    const devices = await getDevices()
-    console.log(111, devices)
-    if (devices.length > 0) {
-      currentSerial.value = devices[0].serial
+    const [devices] = await getDevices()
+    if (devices) {
+      serial.value = devices.serial
       pageType.value = 'home'
     }
   } catch (e) {
-    console.error('检查设备失败:', e)
+    console.error('获取设备失败:', e)
   }
-})
+}
+
+loadDevice()
 </script>
 
 <template>
   <PageHeader @disconnect="disconnect" :pageType="pageType" />
 
-  <div class="flex flex-col px-7 pb-12">
+  <div class="flex flex-1 flex-col px-7 pb-12">
     <AddDevice v-if="pageType === 'addDevice'" v-model="deviceDialogVisible" />
-    <PageHome v-else :serial="currentSerial" />
+    <PageHome v-else :serial="serial" />
   </div>
-  <AddDeviceDialog v-model="deviceDialogVisible" @paired="pageType = 'home'" />
+  <AddDeviceDialog v-model="deviceDialogVisible" @paired="loadDevice" />
 </template>

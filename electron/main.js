@@ -28,15 +28,22 @@ function createWindow() {
   win = new BrowserWindow({
     title: "Main window",
     icon: path.join(process.env.VITE_PUBLIC, "favicon.ico"),
-    minWidth: 672,
-    minHeight: 600,
+    // minWidth: 672,
+    // minHeight: 600,
+    height: 600,
+    width: 1000,
     titleBarStyle: "hiddenInset",
     backgroundColor: "#00000000",
+    x: 0,
+    y: 0,
     webPreferences: { preload },
   });
-  VITE_DEV_SERVER_URL
-    ? win.loadURL(VITE_DEV_SERVER_URL)
-    : win.loadFile(path.join(RENDERER_DIST, "index.html"));
+  if (VITE_DEV_SERVER_URL) {
+    win.loadURL(VITE_DEV_SERVER_URL);
+    win.webContents.openDevTools();
+  } else {
+    win.loadFile(path.join(RENDERER_DIST, "index.html"));
+  }
 }
 
 // ADB IPC handlers
@@ -69,5 +76,9 @@ app.on("second-instance", () => {
   }
 });
 app.on("activate", () => {
-  BrowserWindow.getAllWindows().length ? BrowserWindow.getAllWindows()[0].focus() : createWindow();
+  if (BrowserWindow.getAllWindows().length) {
+    BrowserWindow.getAllWindows()[0].focus();
+  } else {
+    createWindow();
+  }
 });
