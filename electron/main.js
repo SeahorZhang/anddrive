@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import * as adb from "./adb.js";
 import { getCachedInstalledApps } from "./appCache.js";
+import { startScrcpy, stopScrcpy } from "./scrcpy.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 process.env.APP_ROOT = path.join(__dirname, "..");
@@ -47,6 +48,32 @@ function createWindow() {
   }
 }
 
+function startScrcpyRequest(options) {
+  if (!options || typeof options !== "object") {
+    throw new Error("启动参数无效");
+  }
+  if (
+    !Array.isArray(options.args) ||
+    !options.args.length ||
+    options.args.length > 32 ||
+    options.args.some((arg) => typeof arg !== "string" || !arg.length || arg.length > 1024)
+  ) {
+    throw new Error("scrcpy 参数无效");
+  }
+  if (typeof options.packageName !== "string" || !options.packageName || options.packageName.length > 256) {
+    throw new Error("应用包名无效");
+  }
+  if (
+    typeof options.iconDataUrl !== "string" ||
+    options.iconDataUrl.length > 1024 * 1024 ||
+    !options.iconDataUrl.startsWith("data:image/png;base64,")
+  ) {
+    throw new Error("应用图标无效");
+  }
+
+  return startScrcpy(options.args, options.iconDataUrl);
+}
+
 // ADB IPC handlers
 for (const [channel, handler] of Object.entries({
   "adb:pair": (_, h, p, c) => adb.pair(h, p, c),
@@ -68,11 +95,13 @@ for (const [channel, handler] of Object.entries({
     adb.cancelInstalledAppsLoad(loadId);
     return true;
   },
+  start_scrcpy: (_, options) => startScrcpyRequest(options),
 })) {
   ipcMain.handle(channel, handler);
 }
 
 app.whenReady().then(createWindow);
+app.on("before-quit", stopScrcpy);
 app.on("window-all-closed", () => {
   win = null;
   if (process.platform !== "darwin") app.quit();

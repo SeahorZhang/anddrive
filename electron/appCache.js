@@ -3,7 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;
 const CACHE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 const ICON_REFRESH_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_APPS = 5000;

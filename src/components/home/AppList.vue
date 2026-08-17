@@ -5,16 +5,16 @@ const props = defineProps({
   serial: String,
 })
 
-const {
-  getCachedInstalledApps,
-  loadInstalledApps,
-  cancelInstalledAppsLoad,
-  onInstalledApp,
-} = useAdb()
-
+const { getCachedInstalledApps, loadInstalledApps, cancelInstalledAppsLoad, onInstalledApp } =
+  useAdb()
 const appsByPackage = ref(new Map())
+const mruPackages = ref([])
 const searchText = ref('')
 const loading = ref(false)
+const iconLoadComplete = ref(false)
+const pendingIconLaunches = ref(new Set())
+const launchingPackages = ref(new Set())
+const launchErrors = ref(new Map())
 let nextLoadId = 0
 let currentLoadId = 0
 let unsubscribe = null
@@ -31,9 +31,50 @@ const displayApps = computed(() => {
 })
 
 function replaceApps(apps) {
-  const next = new Map()
+  const available = new Map()
   for (const app of apps || []) {
-    if (app?.packageName) next.set(app.packageName, app)
+    if (app?.packageName) available.set(app.packageName, app)
+  }
+
+  mruPackages.value = mruPackages.value.filter((pkg) => available.has(pkg))
+
+  const next = new Map()
+  for (const pkg of mruPackages.value) {
+    next.set(pkg, available.get(pkg))
+  }
+  for (const [pkg, app] of available) {
+    if (!next.has(pkg)) next.set(pkg, app)
+  }
+  appsByPackage.value = next
+}
+
+function setPackageState(state, packageName, active) {
+  const next = new Set(state.value)
+  if (active) next.add(packageName)
+  else next.delete(packageName)
+  state.value = next
+}
+
+function setLaunchError(packageName, message) {
+  const next = new Map(launchErrors.value)
+  if (message) next.set(packageName, message)
+  else next.delete(packageName)
+  launchErrors.value = next
+}
+
+function promoteApp(app) {
+  mruPackages.value = [
+    app.packageName,
+    ...mruPackages.value.filter((pkg) => pkg !== app.packageName),
+  ]
+
+  const available = new Map(appsByPackage.value)
+  const next = new Map()
+  for (const pkg of mruPackages.value) {
+    if (available.has(pkg)) next.set(pkg, available.get(pkg))
+  }
+  for (const [pkg, availableApp] of available) {
+    if (!next.has(pkg)) next.set(pkg, availableApp)
   }
   appsByPackage.value = next
 }
@@ -41,11 +82,77 @@ function replaceApps(apps) {
 function mergeIcons(apps) {
   if (!apps?.length) return
   const next = new Map(appsByPackage.value)
+  const readyToLaunch = []
   for (const app of apps) {
     const existing = next.get(app?.packageName)
-    if (existing) next.set(app.packageName, { ...existing, iconUrl: app.iconUrl })
+    if (!existing) continue
+    const updated = { ...existing, iconUrl: app.iconUrl }
+    next.set(app.packageName, updated)
+    if (updated.iconUrl && pendingIconLaunches.value.has(updated.packageName)) {
+      readyToLaunch.push(updated)
+    }
   }
   appsByPackage.value = next
+  for (const app of readyToLaunch) {
+    setPackageState(pendingIconLaunches, app.packageName, false)
+    void launchApp(app)
+  }
+}
+
+async function launchApp(app) {
+  if (launchingPackages.value.has(app.packageName)) return
+
+  setPackageState(launchingPackages, app.packageName, true)
+  setLaunchError(app.packageName, null)
+  try {
+    await Reflect.get(window, 'electronAPI').startScrcpy({
+      args: [
+        '-s',
+        props.serial,
+        '--new-display=1920x1080/320',
+        `--start-app=${app.packageName}`,
+        '--video-codec=h265',
+        '-b',
+        '24M',
+        '--window-x=auto',
+        '--window-y=auto',
+        `--window-title=${app.label}`,
+      ],
+      iconDataUrl: app.iconUrl,
+      packageName: app.packageName,
+    })
+    promoteApp(app)
+  } catch (error) {
+    console.error('launchApp failed:', error)
+    setLaunchError(app.packageName, error?.message || '启动失败')
+  } finally {
+    setPackageState(launchingPackages, app.packageName, false)
+  }
+}
+
+function requestLaunch(app) {
+  if (pendingIconLaunches.value.has(app.packageName) || launchingPackages.value.has(app.packageName)) return
+
+  setLaunchError(app.packageName, null)
+  if (app.iconUrl) {
+    void launchApp(app)
+    return
+  }
+  if (iconLoadComplete.value) {
+    setLaunchError(app.packageName, '无法加载应用图标')
+    return
+  }
+  setPackageState(pendingIconLaunches, app.packageName, true)
+}
+
+function clearLaunchState(message) {
+  if (message) {
+    for (const packageName of pendingIconLaunches.value) {
+      setLaunchError(packageName, message)
+    }
+  }
+  pendingIconLaunches.value = new Set()
+  launchingPackages.value = new Set()
 }
 
 function stopLoad() {
@@ -60,13 +167,19 @@ function stopLoad() {
 async function loadApps() {
   if (!props.serial) {
     stopLoad()
+    clearLaunchState()
     appsByPackage.value = new Map()
+    mruPackages.value = []
+    iconLoadComplete.value = false
     loading.value = false
     return
   }
 
   stopLoad()
+  clearLaunchState()
   appsByPackage.value = new Map()
+  mruPackages.value = []
+  iconLoadComplete.value = false
   loading.value = true
 
   const serial = props.serial
@@ -80,6 +193,11 @@ async function loadApps() {
     } else if (phase === 'icons') {
       mergeIcons(apps)
     } else if (phase === 'complete') {
+      for (const packageName of pendingIconLaunches.value) {
+        setLaunchError(packageName, '无法加载应用图标')
+      }
+      pendingIconLaunches.value = new Set()
+      iconLoadComplete.value = true
       loading.value = false
     }
   })
@@ -105,7 +223,10 @@ async function loadApps() {
 
 if (props.serial) loadApps()
 watch(() => props.serial, loadApps)
-onUnmounted(stopLoad)
+onUnmounted(() => {
+  stopLoad()
+  clearLaunchState()
+})
 </script>
 
 <template>
@@ -128,7 +249,11 @@ onUnmounted(stopLoad)
         <div
           v-for="app in displayApps"
           :key="app.packageName"
-          class="flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-black/8 bg-gray-50 p-2 transition-all hover:border-black/12 hover:bg-gray-100"
+          class="relative flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-black/8 bg-gray-50 p-2 transition-all hover:border-black/12 hover:bg-gray-100"
+          :class="{
+            'cursor-wait opacity-60': pendingIconLaunches.has(app.packageName) || launchingPackages.has(app.packageName),
+          }"
+          @click="requestLaunch(app)"
         >
           <img
             v-if="app.iconUrl"
@@ -156,6 +281,15 @@ onUnmounted(stopLoad)
           <span class="pointer-events-none w-full truncate text-center text-[10px] text-black/60">{{
             app.label
           }}</span>
+          <span
+            v-if="pendingIconLaunches.has(app.packageName) || launchingPackages.has(app.packageName)"
+            class="pointer-events-none absolute right-1 top-1 h-2 w-2 animate-pulse rounded-full bg-blue-500"
+          />
+          <span
+            v-else-if="launchErrors.has(app.packageName)"
+            class="pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500"
+            :title="launchErrors.get(app.packageName)"
+          />
         </div>
       </div>
 

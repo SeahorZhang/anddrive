@@ -45,7 +45,8 @@ import java.util.concurrent.FutureTask;
 public class HelperService extends Service {
     private static final String TAG = "AndDriveHelper";
     private static final int PORT = 18923;
-    private static final int PROTOCOL_VERSION = 2;
+    private static final int PROTOCOL_VERSION = 3;
+    private static final int ICON_SIZE_PX = 256;
     private static final int MAX_BATCH_PACKAGES = 32;
     private static final int MAX_PACKAGE_NAME_BYTES = 512;
     private static final int MAX_ICON_BYTES = 1024 * 1024;
@@ -289,7 +290,7 @@ public class HelperService extends Service {
         if (icon == null) icon = getPackageManager().getApplicationIcon(pkg);
 
         Bitmap bmp = toBitmap(icon);
-        Bitmap scaled = Bitmap.createScaledBitmap(bmp, 48, 48, true);
+        Bitmap scaled = Bitmap.createScaledBitmap(bmp, ICON_SIZE_PX, ICON_SIZE_PX, true);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         scaled.compress(Bitmap.CompressFormat.PNG, 80, baos);
         byte[] data = baos.toByteArray();

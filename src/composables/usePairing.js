@@ -20,15 +20,27 @@ export function usePairing() {
     status.value = "waiting";
     statusMessage.value = "等待设备扫码...";
 
-    await startDiscovery();
-    pollTimer = setInterval(async () => {
-      const devices = await getDiscoveredDevices();
-      if (devices.length > 0) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-        await doPair(devices[0].address);
-      }
-    }, 1000);
+    try {
+      await startDiscovery();
+      pollTimer = setInterval(async () => {
+        try {
+          const devices = await getDiscoveredDevices();
+          if (devices.length > 0) {
+            clearInterval(pollTimer);
+            pollTimer = null;
+            await doPair(devices[0].address);
+          }
+        } catch (e) {
+          clearInterval(pollTimer);
+          pollTimer = null;
+          status.value = "error";
+          statusMessage.value = `发现设备失败: ${e.message}`;
+        }
+      }, 1000);
+    } catch (e) {
+      status.value = "error";
+      statusMessage.value = `启动发现失败: ${e.message}`;
+    }
   };
 
   const doPair = async (address) => {

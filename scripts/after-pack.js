@@ -1,6 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
+
+const require = createRequire(import.meta.url);
+const electronBuilderRequire = createRequire(require.resolve("electron-builder/package.json"));
+const { statFile: statAsarFile } = electronBuilderRequire("@electron/asar");
 
 function requireFile(filePath) {
   if (!existsSync(filePath) || !statSync(filePath).isFile() || statSync(filePath).size === 0) {
@@ -12,9 +17,21 @@ export default async function afterPack(context) {
   const resources = context.electronPlatformName === "darwin"
     ? path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, "Contents", "Resources")
     : path.join(context.appOutDir, "resources");
+  const appAsar = path.join(resources, "app.asar");
+  requireFile(appAsar);
+  try {
+    statAsarFile(appAsar, "dist-electron/preload.mjs");
+  } catch {
+    throw new Error(`Required packaged preload is missing: ${appAsar}/dist-electron/preload.mjs`);
+  }
   requireFile(path.join(resources, "helper-app.apk"));
 
   if (context.electronPlatformName === "darwin") {
+    const scrcpyPath = path.join(resources, "scrcpy", "scrcpy");
+    requireFile(scrcpyPath);
+    requireFile(path.join(resources, "scrcpy", "scrcpy-server"));
+    chmodSync(scrcpyPath, 0o755);
+
     const adbPath = path.join(resources, "adb", "mac", "adb");
     requireFile(adbPath);
     const architecture = { 1: "x86_64", 3: "arm64" }[context.arch];

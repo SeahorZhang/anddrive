@@ -21,6 +21,7 @@ function getHelperApkPath() {
 }
 
 const HELPER_PACKAGE = "com.anddrive.helper";
+const HELPER_PROTOCOL_VERSION = 3;
 const HELPER_PORT = 18923;
 const ICON_BATCH_SIZE = 24;
 const ICON_BATCH_CONCURRENCY = 4;
@@ -359,7 +360,7 @@ export async function loadInstalledApps(serial, loadId, sender) {
     if (!activeAppLoads.has(loadId)) return;
     await ensureHelperReady(serial, loadId);
     let capabilities = await httpGet(helperUrl("/ping"), 0).catch(() => ({}));
-    if (capabilities.protocol !== 2 && !helperUpgradeAttempted.has(serial)) {
+    if (capabilities.protocol !== HELPER_PROTOCOL_VERSION && !helperUpgradeAttempted.has(serial)) {
       helperUpgradeAttempted.add(serial);
       try {
         await installHelper(serial);
