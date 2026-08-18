@@ -3,9 +3,9 @@
 html,
 body,
 #app {
-  @apply h-full
+  @apply h-full;
 }
 
 #app {
-  @apply flex h-full flex-col bg-white
+  @apply flex h-full flex-col bg-white;
 }

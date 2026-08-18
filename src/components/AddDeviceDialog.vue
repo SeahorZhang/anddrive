@@ -6,7 +6,7 @@ const modelValue = defineModel({ default: false })
 const emit = defineEmits(['paired'])
 const { qrDataUrl, status, statusMessage, start, stop } = usePairing()
 
-watch(modelValue, (v) => v ? start() : stop())
+watch(modelValue, (v) => (v ? start() : stop()))
 
 watch(status, (v) => {
   if (v === 'success') {
@@ -42,8 +42,17 @@ watch(status, (v) => {
           class="flex size-8 cursor-pointer items-center justify-center rounded-full transition-colors hover:bg-gray-100"
           @click="modelValue = false"
         >
-          <svg class="size-4.5 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+          <svg
+            class="size-4.5 text-gray-400"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
           </svg>
         </button>
       </div>
@@ -53,12 +62,15 @@ watch(status, (v) => {
       </div>
 
       <div class="px-8 py-3 text-center text-sm">
-        <span :class="{
-          'text-gray-500': status === 'waiting',
-          'text-blue-500': status === 'pairing',
-          'text-green-500': status === 'success',
-          'text-red-500': status === 'error',
-        }">{{ statusMessage }}</span>
+        <span
+          :class="{
+            'text-gray-500': status === 'waiting',
+            'text-blue-500': status === 'pairing',
+            'text-green-500': status === 'success',
+            'text-red-500': status === 'error',
+          }"
+          >{{ statusMessage }}</span
+        >
       </div>
 
       <div class="px-8 pb-10 text-center text-sm text-gray-500">

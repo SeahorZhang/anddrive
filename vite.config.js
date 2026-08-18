@@ -1,32 +1,32 @@
-import fs from "node:fs";
-import { fileURLToPath, URL } from "node:url";
-import tailwindcss from "@tailwindcss/vite";
-import AutoImport from "unplugin-auto-import/vite";
-import Components from "unplugin-vue-components/vite";
-import RekaResolver from "reka-ui/resolver";
+import fs from 'node:fs'
+import { fileURLToPath, URL } from 'node:url'
+import tailwindcss from '@tailwindcss/vite'
+import AutoImport from 'unplugin-auto-import/vite'
+import Components from 'unplugin-vue-components/vite'
+import RekaResolver from 'reka-ui/resolver'
 
-import { defineConfig, perEnvironmentPlugin } from "vite";
-import vue from "@vitejs/plugin-vue";
-import { electronSimple } from "vite-plugin-electron/multi-env";
-import { notBundle } from "vite-plugin-electron/plugin";
+import { defineConfig, perEnvironmentPlugin } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import { electronSimple } from 'vite-plugin-electron/multi-env'
+import { notBundle } from 'vite-plugin-electron/plugin'
 
 // https://vite.dev/config/
 export default defineConfig(({ command }) => {
-  fs.rmSync("dist-electron", { recursive: true, force: true });
+  fs.rmSync('dist-electron', { recursive: true, force: true })
 
-  const isServe = command === "serve";
-  const isBuild = command === "build";
-  const sourcemap = isServe || !!process.env.VSCODE_DEBUG;
+  const isServe = command === 'serve'
+  const isBuild = command === 'build'
+  const sourcemap = isServe || !!process.env.VSCODE_DEBUG
 
   return {
     plugins: [
       tailwindcss(),
-      perEnvironmentPlugin("renderer", (environment) =>
-        environment.name === "client"
+      perEnvironmentPlugin('renderer', (environment) =>
+        environment.name === 'client'
           ? [
               vue(),
               AutoImport({
-                imports: ["vue"],
+                imports: ['vue'],
                 dts: true,
               }),
               Components({
@@ -38,7 +38,7 @@ export default defineConfig(({ command }) => {
       ),
       electronSimple({
         main: {
-          input: "electron/main.js",
+          input: 'electron/main.js',
           plugins: [notBundle()],
           options: {
             build: {
@@ -48,11 +48,11 @@ export default defineConfig(({ command }) => {
           },
         },
         preload: {
-          input: "electron/preload.js",
+          input: 'electron/preload.js',
           plugins: [notBundle()],
           options: {
             build: {
-              sourcemap: sourcemap ? "inline" : undefined,
+              sourcemap: sourcemap ? 'inline' : undefined,
               minify: isBuild,
             },
           },
@@ -61,9 +61,9 @@ export default defineConfig(({ command }) => {
     ],
     resolve: {
       alias: {
-        "@": fileURLToPath(new URL("./src", import.meta.url)),
+        '@': fileURLToPath(new URL('./src', import.meta.url)),
       },
     },
     clearScreen: false,
-  };
-});
+  }
+})

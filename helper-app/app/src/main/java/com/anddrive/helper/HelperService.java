@@ -30,9 +30,6 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.net.URLDecoder;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,11 +42,7 @@ import java.util.concurrent.FutureTask;
 public class HelperService extends Service {
     private static final String TAG = "AndDriveHelper";
     private static final int PORT = 18923;
-    private static final int PROTOCOL_VERSION = 3;
     private static final int ICON_SIZE_PX = 256;
-    private static final int MAX_BATCH_PACKAGES = 32;
-    private static final int MAX_PACKAGE_NAME_BYTES = 512;
-    private static final int MAX_ICON_BYTES = 1024 * 1024;
     private static final long APPS_CACHE_TTL_MS = 30_000L;
     private static final String CHANNEL_ID = "anddrive_helper";
     private ServerSocket serverSocket;
@@ -131,15 +124,15 @@ public class HelperService extends Service {
             if ("/apps".equals(path)) {
                 writeResponse(client, "application/json; charset=utf-8", getAppsJson().getBytes(StandardCharsets.UTF_8));
             } else if (path.startsWith("/icons-bin")) {
-                writeResponse(client, "application/octet-stream", getIconsBinary(parsePackages(path)));
+                writeResponse(client, "application/octet-stream", getIconsBinary(HelperProtocol.parsePackages(path)));
             } else if (path.startsWith("/icon-bin")) {
-                String pkg = queryValue(path, "pkg");
+                String pkg = HelperProtocol.queryValue(path, "pkg");
                 byte[] iconData = getIconBinary(pkg);
                 if (iconData == null) writeStatus(client, "404 Not Found");
                 else writeResponse(client, "application/octet-stream", iconData);
             } else if ("/ping".equals(path)) {
                 writeResponse(client, "application/json; charset=utf-8",
-                    ("{\"ok\":true,\"protocol\":" + PROTOCOL_VERSION + ",\"batchIcons\":true}").getBytes(StandardCharsets.UTF_8));
+                    ("{\"ok\":true,\"protocol\":" + HelperProtocol.PROTOCOL_VERSION + ",\"batchIcons\":true}").getBytes(StandardCharsets.UTF_8));
             } else {
                 writeStatus(client, "404 Not Found");
             }
@@ -163,29 +156,6 @@ public class HelperService extends Service {
 
     private void writeStatus(Socket client, String status) throws Exception {
         client.getOutputStream().write(("HTTP/1.1 " + status + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.UTF_8));
-    }
-
-    private String queryValue(String path, String key) {
-        int queryStart = path.indexOf('?');
-        if (queryStart < 0) return "";
-        for (String pair : path.substring(queryStart + 1).split("&")) {
-            String[] parts = pair.split("=", 2);
-            if (parts.length == 2 && key.equals(parts[0])) {
-                try { return URLDecoder.decode(parts[1], "UTF-8"); }
-                catch (Exception ignored) { return parts[1]; }
-            }
-        }
-        return "";
-    }
-
-    private String[] parsePackages(String path) {
-        String value = queryValue(path, "pkgs");
-        if (value.isEmpty()) return new String[0];
-        String[] raw = value.split(",");
-        int count = Math.min(raw.length, MAX_BATCH_PACKAGES);
-        String[] result = new String[count];
-        System.arraycopy(raw, 0, result, 0, count);
-        return result;
     }
 
     private synchronized String getAppsJson() {
@@ -242,24 +212,7 @@ public class HelperService extends Service {
     }
 
     private byte[] getIconsBinary(String[] packages) {
-        try {
-            ByteArrayOutputStream output = new ByteArrayOutputStream();
-            for (String pkg : packages) {
-                if (pkg == null || pkg.isEmpty()) continue;
-                byte[] name = pkg.getBytes(StandardCharsets.UTF_8);
-                if (name.length > MAX_PACKAGE_NAME_BYTES) continue;
-                byte[] icon = getIconBinary(pkg);
-                if (icon != null && icon.length > MAX_ICON_BYTES) icon = null;
-                output.write(ByteBuffer.allocate(2).order(ByteOrder.BIG_ENDIAN).putShort((short) name.length).array());
-                output.write(name);
-                output.write(ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(icon == null ? 0 : icon.length).array());
-                if (icon != null) output.write(icon);
-            }
-            return output.toByteArray();
-        } catch (Exception e) {
-            Log.e(TAG, "getIconsBinary error", e);
-            return new byte[0];
-        }
+        return HelperProtocol.encodeIconBatch(packages, this::getIconBinary);
     }
 
     private byte[] getIconBinary(String pkg) {

@@ -38,7 +38,7 @@ const open = ref(false)
         :side-offset="4"
         align="start"
       >
-        <div class="text-[10px] font-medium text-black/40 px-2 py-1">已连接设备</div>
+        <div class="px-2 py-1 text-[10px] font-medium text-black/40">已连接设备</div>
         <BaseButton
           v-for="device in devices"
           :key="device.serial"
@@ -46,19 +46,19 @@ const open = ref(false)
           size="sm"
           class="w-full justify-start"
           :active="device.serial === currentSerial"
-          @click="emit('select', device.serial); open = false"
+          @click="
+            emit('select', device.serial)
+            open = false
+          "
         >
           <span
-            class="h-1.5 w-1.5 rounded-full flex-shrink-0"
+            class="h-1.5 w-1.5 flex-shrink-0 rounded-full"
             :class="device.serial === currentSerial ? 'bg-green-500' : 'bg-black/15'"
           ></span>
           <span class="flex-1 truncate text-[11px] text-black/70">
             {{ device.deviceName || device.model }}
           </span>
-          <BaseBadge
-            variant="blue"
-            :label="device.type === 'wireless' ? 'Wi-Fi' : 'USB'"
-          />
+          <BaseBadge variant="blue" :label="device.type === 'wireless' ? 'Wi-Fi' : 'USB'" />
         </BaseButton>
 
         <div class="my-1 border-t border-black/8"></div>
@@ -68,7 +68,10 @@ const open = ref(false)
           size="sm"
           icon="lucide:plus"
           class="w-full"
-          @click="emit('pairNew'); open = false"
+          @click="
+            emit('pairNew')
+            open = false
+          "
         >
           配对新设备
         </BaseButton>

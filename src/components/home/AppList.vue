@@ -131,7 +131,11 @@ async function launchApp(app) {
 }
 
 function requestLaunch(app) {
-  if (pendingIconLaunches.value.has(app.packageName) || launchingPackages.value.has(app.packageName)) return
+  if (
+    pendingIconLaunches.value.has(app.packageName) ||
+    launchingPackages.value.has(app.packageName)
+  )
+    return
 
   setLaunchError(app.packageName, null)
   if (app.iconUrl) {
@@ -251,7 +255,8 @@ onUnmounted(() => {
           :key="app.packageName"
           class="relative flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-black/8 bg-gray-50 p-2 transition-all hover:border-black/12 hover:bg-gray-100"
           :class="{
-            'cursor-wait opacity-60': pendingIconLaunches.has(app.packageName) || launchingPackages.has(app.packageName),
+            'cursor-wait opacity-60':
+              pendingIconLaunches.has(app.packageName) || launchingPackages.has(app.packageName),
           }"
           @click="requestLaunch(app)"
         >
@@ -282,12 +287,14 @@ onUnmounted(() => {
             app.label
           }}</span>
           <span
-            v-if="pendingIconLaunches.has(app.packageName) || launchingPackages.has(app.packageName)"
-            class="pointer-events-none absolute right-1 top-1 h-2 w-2 animate-pulse rounded-full bg-blue-500"
+            v-if="
+              pendingIconLaunches.has(app.packageName) || launchingPackages.has(app.packageName)
+            "
+            class="pointer-events-none absolute top-1 right-1 h-2 w-2 animate-pulse rounded-full bg-blue-500"
           />
           <span
             v-else-if="launchErrors.has(app.packageName)"
-            class="pointer-events-none absolute right-1 top-1 h-2 w-2 rounded-full bg-red-500"
+            class="pointer-events-none absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500"
             :title="launchErrors.get(app.packageName)"
           />
         </div>

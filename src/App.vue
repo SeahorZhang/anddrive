@@ -4,6 +4,7 @@ import AddDevice from './components/AddDevice.vue'
 import PageHome from './components/home/index.vue'
 import PageHeader from './components/PageHeader.vue'
 import { useAdb } from './composables/useAdb'
+import { selectDevice } from '../shared/selectDevice.js'
 
 const { getDevices } = useAdb()
 const deviceDialogVisible = ref(false)
@@ -17,9 +18,9 @@ const disconnect = () => {
 
 const loadDevice = async () => {
   try {
-    const [devices] = await getDevices()
-    if (devices) {
-      serial.value = devices.serial
+    const device = selectDevice(await getDevices())
+    if (device) {
+      serial.value = device.serial
       pageType.value = 'home'
     }
   } catch (e) {
