@@ -67,6 +67,10 @@ for (const [channel, handler] of Object.entries({
     return true
   },
   'adb:getDevices': () => adb.getDevices(),
+  'adb:disconnect': async (_, serial) => {
+    stopScrcpy()
+    return adb.disconnectDevice(serial)
+  },
   'adb:getDeviceInfo': (_, serial) => adb.getDeviceInfo(serial),
   'adb:getCachedInstalledApps': (_, serial) => getCachedInstalledApps(serial),
   'adb:loadInstalledApps': (event, serial, loadId) =>

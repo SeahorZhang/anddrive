@@ -14,6 +14,9 @@ const unavailableApi = {
   getDevices: async () => {
     throw unavailableError()
   },
+  disconnect: async () => {
+    throw unavailableError()
+  },
   getDeviceInfo: async () => {
     throw unavailableError()
   },

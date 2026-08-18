@@ -1,30 +1,49 @@
 <script setup>
 import ConfirmDialog from './ConfirmDialog.vue'
 import BaseButton from './BaseButton.vue'
-const { pageType } = defineProps(['pageType'])
+
+const props = defineProps({
+  pageType: String,
+  disconnecting: Boolean,
+  disconnectError: { type: String, default: '' },
+})
 const showConfirm = ref(false)
 const emit = defineEmits(['disconnect'])
 
 function handleConfirm() {
   emit('disconnect')
 }
+
+function handleCancel() {
+  if (!props.disconnecting) showConfirm.value = false
+}
+
+watch(
+  () => props.pageType,
+  (pageType) => {
+    if (pageType !== 'home') showConfirm.value = false
+  },
+)
 </script>
 
 <template>
   <TooltipProvider :delay-duration="300">
     <div class="relative">
-      <!-- 可拖拽标题栏 -->
       <div style="-webkit-app-region: drag" class="h-12 w-full"></div>
 
-      <!-- 设备选择器 + 操作按钮 -->
       <div
+        v-if="pageType === 'home'"
         style="-webkit-app-region: no-drag"
         class="absolute top-1/2 right-4 z-10 flex -translate-y-1/2 items-center gap-1"
-        v-if="pageType === 'home'"
       >
         <TooltipRoot>
           <TooltipTrigger as-child>
-            <BaseButton icon="lucide:unplug" icon-only @click="showConfirm = true" />
+            <BaseButton
+              icon="lucide:unplug"
+              icon-only
+              :disabled="disconnecting"
+              @click="showConfirm = true"
+            />
           </TooltipTrigger>
           <TooltipPortal>
             <TooltipContent
@@ -38,7 +57,17 @@ function handleConfirm() {
         </TooltipRoot>
       </div>
 
-      <ConfirmDialog v-model="showConfirm" @confirm="handleConfirm" />
+      <ConfirmDialog
+        v-model="showConfirm"
+        title="断开连接"
+        message="将断开当前无线 ADB 连接。手机端的配对记录仍会保留，之后可以再次连接。若设备已经离线，断开操作仍会视为成功。"
+        confirm-label="断开"
+        :loading="disconnecting"
+        :error="disconnectError"
+        @confirm="handleConfirm"
+        @cancel="handleCancel"
+        @close="handleCancel"
+      />
     </div>
   </TooltipProvider>
 </template>

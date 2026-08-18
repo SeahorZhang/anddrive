@@ -1,217 +1,86 @@
-# 手机连接流程
+# Android 无线连接
 
-## 概述
+AndDrive 当前支持 macOS 上连接一台 Android 11+ 设备。连接链路如下：
 
-AndDrive 使用 ADB (Android Debug Bridge) 通过 WiFi 与 Android 设备建立连接。整个流程基于 Android 11+ 的无线调试功能，采用 mDNS 服务发现 + QR 码配对的方式实现自动化连接。
-
-## 技术架构
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Vue 渲染进程                          │
-│                                                         │
-│  AddDeviceDialog.vue                                    │
-│    └─ usePairing.js (配对业务逻辑)                       │
-│        └─ useAdb.js (IPC 薄封装)                        │
-└───────────────────────┬─────────────────────────────────┘
-                        │ IPC (invoke/handle)
-┌───────────────────────┴─────────────────────────────────┐
-│                  Electron 主进程                         │
-│                                                         │
-│  main.js (IPC handlers)                                 │
-│    └─ adb.js                                            │
-│        ├─ bonjour-service (mDNS 服务发现)                │
-│        └─ child_process (执行 adb pair 命令)             │
-│                                                         │
-│  resources/adb/                                         │
-│    ├─ mac/adb      (macOS)                              │
-│    ├─ win/adb.exe  (Windows)                            │
-│    └─ linux/adb    (Linux)                              │
-└─────────────────────────────────────────────────────────┘
+```text
+Vue renderer
+  → preload IPC bridge
+  → Electron main
+  → electron/adb.js
+  → ADB forward
+  → Android HelperService
 ```
 
-## 连接流程
+## 前置条件
 
-### 1. 用户触发
+- Android 11 或更新版本
+- 手机与 Mac 连接同一局域网
+- 手机已开启“开发者选项 → 无线调试”
+- macOS 防火墙允许本机 mDNS/ADB 通信
 
-用户点击"添加设备"按钮，打开配对对话框。
+无线调试配对不会删除手机上的数据。AndDrive 的二维码只承载本次配对所需的临时 SSID 和配对码。
 
-```
-App.vue: @open="deviceDialogVisible = true"
-    ↓
-AddDeviceDialog.vue: watch(modelValue) → start()
-```
+## 配对步骤
 
-### 2. 生成 QR 码
+1. 打开 AndDrive，点击“添加设备”。
+2. 在手机的“无线调试”中选择“使用二维码配对设备”。
+3. 扫描 AndDrive 显示的二维码。
+4. AndDrive 通过 Bonjour/mDNS 发现 `_adb-tls-pairing` 服务并执行 `adb pair`。
+5. 配对成功后，应用轮询 ADB 设备列表，选择状态为 `device` 的设备。
 
-`usePairing.js` 生成随机配对信息并编码为 QR 码：
+配对记录会由 Android 保留。之后只要无线调试重新可用，AndDrive 可以恢复该设备的连接；这与点击“断开连接”不同。
 
-```javascript
-// 生成 6 位随机密码
-password = randCode()  // 例如: "483921"
+## 应用列表和 Helper
 
-// 生成随机 SSID
-ssid = `d${randCode()}`  // 例如: "d621847"
+连接后主进程会：
 
-// 编码为 WiFi ADB 格式
-qrContent = `WIFI:T:ADB;S:${ssid};P:${password};;`
-// 例如: WIFI:T:ADB;S:d621847;P:483921;;
-```
+1. 检查并安装 `resources/helper-app.apk`（如需要）。
+2. 启动 `com.andrive.helper/.HelperService`。
+3. 执行 `adb -s <serial> forward tcp:18923 tcp:18923`。
+4. 通过本机 HTTP 请求 `/ping`、`/apps` 和 `/icons-bin` 获取数据。
+5. 先显示有效缓存，再以设备返回的权威列表替换，并渐进更新图标。
+6. 加载结束或取消时移除 forward。
 
-QR 码格式说明：
-| 字段 | 含义 | 示例 |
-|------|------|------|
-| `T` | 类型 | `ADB` (固定) |
-| `S` | SSID (标识符) | `d` + 6位随机数字 |
-| `P` | 配对密码 | 6位随机数字 |
+Helper 协议和构建方式见 [`../helper-app/README.md`](../helper-app/README.md)。
 
-### 3. 启动 mDNS 发现
+## 启动应用
 
-`adb.js` 启动 mDNS 服务发现，监听 `_adb-tls-pairing._tcp.local.` 服务：
+应用卡片需要图标才能启动。图标晚到时，点击会暂存请求；图标到达后 AndDrive 调用 scrcpy，并把当前设备 serial、应用包名和图标传给主进程。scrcpy 使用项目内的 macOS 资源运行。
 
-```javascript
-// electron/adb.js
-bonjour = new Bonjour()
-browser = bonjour.find({ type: "adb-tls-pairing" }, (service) => {
-  const ip = service.addresses?.find(a => !a.includes(":") && a !== "127.0.0.1")
-  if (ip) {
-    discovered.set(`${ip}:${service.port}`, { name: service.name, address: `${ip}:${service.port}` })
-  }
-})
-```
+## 断开连接
 
-### 4. 手机扫码
+确认断开后，主进程按以下顺序清理：
 
-用户在 Android 手机上：
-1. 打开 **设置** → **开发者选项**
-2. 开启 **无线调试**
-3. 点击 **使用配对码配对设备**
-4. 选择 **扫描二维码**
-5. 扫描电脑上显示的二维码
+1. 取消该设备的应用加载，阻止旧的列表/图标事件污染页面。
+2. 等待现有 Helper forward 的清理并移除 `tcp:18923`。
+3. 停止关联的 scrcpy 进程。
+4. 执行 `adb disconnect <serial>`。
+5. 成功后回到“添加设备”页面。
 
-手机扫码后会：
-- 解析 QR 码中的密码和 SSID
-- 启动 ADB 配对服务
-- 通过 mDNS 广播 `_adb-tls-pairing._tcp.local.` 服务
+这只结束当前无线 ADB transport，不会删除 Android 的配对记录。若目标已经因为网络中断而不再连接，断开仍视为成功。真正的 ADB、权限或 daemon 错误会留在当前设备页，并允许重试。
 
-### 5. 设备发现与自动配对
-
-`usePairing.js` 每秒轮询一次已发现的设备：
-
-```javascript
-pollTimer = setInterval(async () => {
-  const devices = await getDiscoveredDevices()
-  if (devices.length > 0) {
-    clearInterval(pollTimer)
-    await doPair(devices[0].address)
-  }
-}, 1000)
-```
-
-发现设备后自动执行配对：
-
-```javascript
-const doPair = async (address) => {
-  const [host, port] = address.split(':')
-  await pair(host, port, password)  // 执行 adb pair <host>:<port> <password>
-}
-```
-
-### 6. 执行 ADB 配对命令
-
-`adb.js` 执行 `adb pair` 命令：
-
-```javascript
-// electron/adb.js
-export function pair(host, port, code) {
-  return ensureServer().then(() => new Promise((resolve, reject) => {
-    execFile(getAdbPath(), ["pair", `${host}:${port}`, code], (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr || err.message))
-      else resolve(stdout.trim())
-    })
-  }))
-}
-```
-
-### 7. 配对完成
-
-配对成功后：
-- 显示"配对成功！"状态
-- 1.5 秒后自动关闭对话框
-- 清理 mDNS 发现和轮询定时器
-
-## 文件结构
-
-```
-anddrive_next/
-├── electron/
-│   ├── adb.js              # ADB 核心逻辑 (mDNS 发现 + 配对命令)
-│   ├── main.js             # Electron 主进程 (IPC handlers)
-│   └── preload.js          # 暴露 ADB API 到渲染进程
-├── src/
-│   ├── composables/
-│   │   ├── useAdb.js       # ADB IPC 薄封装
-│   │   └── usePairing.js   # 配对业务逻辑
-│   └── components/
-│       └── AddDeviceDialog.vue  # 配对对话框 UI
-├── resources/
-│   └── adb/                # 内置 ADB 二进制文件
-│       ├── mac/adb
-│       ├── win/adb.exe
-│       └── linux/adb
-└── scripts/
-    └── download-adb.sh     # 下载 ADB 二进制文件脚本
-```
-
-## 依赖说明
-
-| 依赖 | 用途 |
-|------|------|
-| `bonjour-service` | mDNS 服务发现，用于发现 Android 设备的配对服务 |
-| `uqr` | QR 码生成，将配对信息编码为二维码 |
-
-## 状态流转
-
-```
-idle → waiting → pairing → success
-                    ↓
-                  error
-```
-
-| 状态 | 说明 |
-|------|------|
-| `idle` | 初始状态，未开始配对 |
-| `waiting` | 已生成 QR 码，等待设备扫码 |
-| `pairing` | 已发现设备，正在执行配对 |
-| `success` | 配对成功 |
-| `error` | 配对失败 |
+如果要彻底撤销电脑授权，请在手机上进入“无线调试 → 已配对的设备”，移除对应电脑。
 
 ## 故障排查
 
-### 1. 无法发现设备
+### 找不到二维码配对服务
 
-- 确保手机和电脑在同一局域网
-- 确保手机已开启无线调试
-- 检查防火墙是否阻止 mDNS 流量 (端口 5353/UDP)
+确认手机和 Mac 在同一网络，关闭会阻断 UDP 5353 的访客网络隔离或防火墙规则，然后重新打开添加设备对话框。
 
-### 2. 配对失败
+### 配对成功但没有设备
 
-- 确保手机已升级至 Android 11+
-- 确保手机已开启 USB 调试
-- 尝试重启 ADB 服务器：`adb kill-server && adb start-server`
+保持无线调试页面开启，确认设备没有显示 `unauthorized` 或 `offline`。必要时重启 ADB server 后重新配对。
 
-### 3. ADB 二进制文件问题
+### Helper 无法读取应用
 
-重新下载 ADB 二进制文件：
+确认 `resources/helper-app.apk` 存在，并运行：
 
-```bash
-pnpm download-adb
+```sh
+pnpm build-helper
 ```
 
-## 更新 ADB 版本
+查看 Helper 的 `/ping` 能力协商是否成功。首次连接可能需要等待安装和前台服务启动。
 
-```bash
-pnpm download-adb
-```
+### scrcpy 无法启动
 
-此命令会下载最新版本的 ADB 二进制文件到 `resources/adb/` 目录。
+确认 macOS 资源目录包含 `resources/scrcpy/scrcpy` 和 `scrcpy-server`，并且二进制可执行。应用图标缺失时，先等待图标加载完成再重试。

@@ -19,7 +19,6 @@ export default defineConfig([
     '**/coverage/**',
     '**/dist-electron/**',
     'helper-app/**',
-    'preload.mjs',
   ]),
 
   {

@@ -7,6 +7,11 @@ import http from 'node:http'
 import { app } from 'electron'
 import { ICON_REFRESH_MS, readAppCache, writeAppCache } from './appCache.js'
 import { parseAdbDevices, parseDeviceInfo, parseIconBatch } from './adb/parsers.js'
+import {
+  isAlreadyDisconnectedError,
+  isMissingForwardError,
+  normalizeDisconnectSerial,
+} from './adbDisconnect.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -28,8 +33,8 @@ const ICON_BATCH_SIZE = 24
 const ICON_BATCH_CONCURRENCY = 4
 
 let serverStarted = false
-const activeAppLoads = new Set()
-let activeForwardLoadId = null
+const activeAppLoads = new Map()
+let activeForward = null
 let forwardQueue = Promise.resolve()
 const helperUpgradeAttempted = new Set()
 
@@ -123,6 +128,16 @@ function adbShell(serial, ...args) {
   return adbExec('-s', serial, 'shell', ...args)
 }
 
+function isAppLoadActive(loadId) {
+  return activeAppLoads.has(loadId)
+}
+
+function cancelAppLoadsForSerial(serial) {
+  for (const [loadId, loadSerial] of activeAppLoads) {
+    if (loadSerial === serial) activeAppLoads.delete(loadId)
+  }
+}
+
 function httpRequest(url, { retries = 0, timeout = 10000, parse = 'json' } = {}) {
   return new Promise((resolve, reject) => {
     const attempt = (remaining) => {
@@ -197,16 +212,26 @@ async function installHelper(serial) {
 
 async function forwardPort(serial, loadId) {
   await adbExec('-s', serial, 'forward', `tcp:${HELPER_PORT}`, `tcp:${HELPER_PORT}`)
-  activeForwardLoadId = loadId
+  activeForward = { serial, loadId }
 }
 
 async function removeForward(serial, loadId) {
-  if (activeForwardLoadId !== loadId) return
-  activeForwardLoadId = null
+  if (activeForward?.serial !== serial || activeForward.loadId !== loadId) return
+  activeForward = null
   try {
     await adbExec('-s', serial, 'forward', '--remove', `tcp:${HELPER_PORT}`)
-  } catch {
-    // The forwarding may already have been removed by ADB.
+  } catch (error) {
+    if (!isMissingForwardError(error)) throw error
+  }
+}
+
+async function removeForwardForSerial(serial) {
+  if (activeForward?.serial !== serial) return
+  activeForward = null
+  try {
+    await adbExec('-s', serial, 'forward', '--remove', `tcp:${HELPER_PORT}`)
+  } catch (error) {
+    if (!isMissingForwardError(error)) throw error
   }
 }
 
@@ -299,7 +324,7 @@ async function fetchIconsLegacy(apps, emit, loadId) {
   let index = 0
   async function worker() {
     while (index < apps.length) {
-      if (!activeAppLoads.has(loadId)) return
+      if (!isAppLoadActive(loadId)) return
       const app = apps[index++]
       try {
         const buffer = await httpGetBuffer(
@@ -324,7 +349,7 @@ async function fetchIcons(apps, emit, loadId, batchIcons) {
   let fallback = false
   async function worker() {
     while (!fallback && index < apps.length) {
-      if (!activeAppLoads.has(loadId)) return
+      if (!isAppLoadActive(loadId)) return
       const batch = apps.slice(index, (index += ICON_BATCH_SIZE))
       try {
         const packages = batch.map((app) => app.packageName).join(',')
@@ -339,14 +364,14 @@ async function fetchIcons(apps, emit, loadId, batchIcons) {
     }
   }
   await Promise.all(Array.from({ length: ICON_BATCH_CONCURRENCY }, () => worker()))
-  if (fallback && activeAppLoads.has(loadId)) await fetchIconsLegacy(apps, emit, loadId)
+  if (fallback && isAppLoadActive(loadId)) await fetchIconsLegacy(apps, emit, loadId)
 }
 
 export async function loadInstalledApps(serial, loadId, sender) {
-  activeAppLoads.add(loadId)
+  activeAppLoads.set(loadId, serial)
   const releaseForwardLock = await acquireForwardLock()
   const emit = (phase, apps) => {
-    if (!activeAppLoads.has(loadId)) return
+    if (!isAppLoadActive(loadId)) return
     sender.send(
       'adb:installed-app',
       apps === undefined ? { loadId, phase } : { loadId, phase, apps },
@@ -354,10 +379,10 @@ export async function loadInstalledApps(serial, loadId, sender) {
   }
 
   try {
-    if (!activeAppLoads.has(loadId)) return
+    if (!isAppLoadActive(loadId)) return
     await ensureServer()
     if (!(await isHelperInstalled(serial))) await installHelper(serial)
-    if (!activeAppLoads.has(loadId)) return
+    if (!isAppLoadActive(loadId)) return
     await ensureHelperReady(serial, loadId)
     let capabilities = await httpGet(helperUrl('/ping'), 0).catch(() => ({}))
     if (capabilities.protocol !== HELPER_PROTOCOL_VERSION && !helperUpgradeAttempted.has(serial)) {
@@ -389,11 +414,11 @@ export async function loadInstalledApps(serial, loadId, sender) {
 
     await writeAppCache(serial, createSnapshot())
     emit('authoritative', rendererApps(snapshotApps))
-    if (!activeAppLoads.has(loadId)) return
+    if (!isAppLoadActive(loadId)) return
 
     let iconChanged = false
     const emitIcons = (apps) => {
-      if (!activeAppLoads.has(loadId)) return
+      if (!isAppLoadActive(loadId)) return
       const updates = []
       for (const app of Array.isArray(apps) ? apps : [apps]) {
         const existing = snapshotByPackage.get(app.packageName)
@@ -408,18 +433,54 @@ export async function loadInstalledApps(serial, loadId, sender) {
       }
     }
     await fetchIcons(iconsToFetch, emitIcons, loadId, capabilities.batchIcons === true)
-    if (!activeAppLoads.has(loadId)) return
+    if (!isAppLoadActive(loadId)) return
     if (iconChanged) await writeAppCache(serial, createSnapshot())
     emit('complete')
   } finally {
     activeAppLoads.delete(loadId)
-    await removeForward(serial, loadId)
+    try {
+      await removeForward(serial, loadId)
+    } catch (error) {
+      console.warn('Failed to remove helper forward:', error)
+    }
     releaseForwardLock()
   }
 }
 
 export function cancelInstalledAppsLoad(loadId) {
   activeAppLoads.delete(loadId)
+}
+
+/**
+ * Cancel Helper work and remove the forward owned by one device.
+ * @param {string} serial
+ */
+export async function cleanupDevice(serial) {
+  serial = normalizeDisconnectSerial(serial)
+  cancelAppLoadsForSerial(serial)
+  const releaseForwardLock = await acquireForwardLock()
+  try {
+    await removeForwardForSerial(serial)
+  } finally {
+    releaseForwardLock()
+  }
+}
+
+/**
+ * Disconnect a wireless ADB transport. Missing transports are idempotent.
+ * @param {string} serial
+ */
+export async function disconnectDevice(serial) {
+  serial = normalizeDisconnectSerial(serial)
+  await ensureServer()
+  await cleanupDevice(serial)
+  try {
+    await adbExec('disconnect', serial)
+  } catch (error) {
+    if (isAlreadyDisconnectedError(error)) return true
+    throw error
+  }
+  return true
 }
 
 export async function getDeviceInfo(serial) {

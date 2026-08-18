@@ -12,11 +12,11 @@ AndDrive 当前是 Electron 43 + Vue 3 + Vite 的 Android 无线调试桌面工�
 
 - `electron/adb.js`（约 471 行）混合 ADB、mDNS、Helper 生命周期、HTTP/二进制协议、图标加载、缓存和 IPC 事件。
 - `src/components/home/AppList.vue`（约 309 行）同时维护缓存事件、图标状态、搜索、MRU、延迟启动和 scrcpy 参数。
-- `electron/adb.js:createSnapshot()` 写入 `version: 1`，而 `electron/appCache.js` 只接受 `CACHE_VERSION = 2`，导致缓存无法有效写入和复用。
+- 缓存 schema 版本曾在调用方与 `appCache.js` 分散维护；当前已由 `appCacheSchema.js` 独占 `CACHE_VERSION = 2`，写入时统一补入版本，需保留回归验证避免回退。
 - Renderer 同时使用 `useAdb()` 和直接访问 `window.electronAPI.startScrcpy()`；`useDeviceInfo.js` 调用 preload 未暴露的 API。
 - “断开连接”只清理 Vue 状态，没有执行 `adb disconnect`。
 - scrcpy 与 ADB 运行路径硬编码 macOS，但构建配置仍提供 Windows/Linux 入口且未打包 scrcpy。
-- `DeviceSelector.vue`、Android app_process 旧方案、根目录 `preload.mjs` 等属于未使用或失效遗留；lint 命令带 `--fix`，当前没有测试或类型检查。
+- `DeviceSelector.vue`、Android app_process 旧方案、根目录 `preload.mjs` 等属于未使用或失效遗留；Phase 2 已清理这些项目，并保留无副作用的 lint、format、test、typecheck 命令。
 
 ## Recommended approach
 
@@ -49,14 +49,14 @@ AndDrive 当前是 Electron 43 + Vue 3 + Vite 的 Android 无线调试桌面工�
 
 **工作内容**：
 
-1. **修复缓存版本**：让 `appCache.js` 独占快照 schema 版本。`writeAppCache()` 接收不带 version 的领域数据，序列化时统一补入当前版本；禁止调用方手写数字。验证真实加载后可读回缓存、过期/损坏数据仍会被安全清理。
-2. **实现真实断开**：新增 main/preload/renderer 的 disconnect IPC。单设备断开时取消 App 加载、释放 Helper forward、停止关联 scrcpy、执行 `adb disconnect <serial>`，成功后才切回添加设备页；失败时保留当前状态并展示错误。明确这是断开无线 ADB 传输，配对记录仍保留。
-3. **按单设备模型清理 UI**：删除未引用且依赖缺失的 `src/components/home/DeviceSelector.vue`；删除与 `BaseButton.vue` 重复的 `DrButton.vue`，统一使用原生 button 基础组件。
-4. **修复失效 composable**：`useDeviceInfo.js` 不再调用未暴露的 `getprop/dumpsys/df`，改为包装唯一的 `getDeviceInfo(serial)`；移除 `AddDevice.vue` 调试文本和 home 页无条件 `console.log`。
-5. **修复确认框**：`ConfirmDialog.vue` 要么成为真正通用的 props/emits 组件，要么明确改名为断开专用组件；推荐使用 `title/message/confirmLabel`，取消和关闭均有清晰事件语义。
-6. **清理异步资源**：保存 `AddDeviceDialog.vue` 的成功关闭 timer，在关闭、重新打开和卸载时取消。
-7. **删除未接入 Android app_process 旧实现**：删除 `LaunchableAppsMain.java`、`MirrorRuntimeWorkarounds.java`、`MirrorShellContext.java` 及其孤立引用；保留当前 `HelperService` 唯一协议来源。
-8. 停止追踪并忽略 `helper-app/local.properties`、Gradle reports/build outputs、根目录未使用的 `preload.mjs` 等生成物/机器本地文件；同步清理文档中的模板和过时说明。
+1. **修复缓存版本**：让 `appCache.js` 独占快照 schema 版本。`writeAppCache()` 接收不带 version 的领域数据，序列化时统一补入当前版本；禁止调用方手写数字。验证真实加载后可读回缓存、过期/损坏数据仍会被安全清理。（已完成）
+2. **实现真实断开**：新增 main/preload/renderer 的 disconnect IPC。单设备断开时取消 App 加载、释放 Helper forward、停止关联 scrcpy、执行 `adb disconnect <serial>`，成功后才切回添加设备页；失败时保留当前状态并展示错误。明确这是断开无线 ADB 传输，配对记录仍保留。（已完成）
+3. **按单设备模型清理 UI**：删除未引用且依赖缺失的 `src/components/home/DeviceSelector.vue`；删除与 `BaseButton.vue` 重复的 `DrButton.vue`，统一使用原生 button 基础组件。（已完成）
+4. **修复失效 composable**：`useDeviceInfo.js` 不再调用未暴露的 `getprop/dumpsys/df`，改为包装唯一的 `getDeviceInfo(serial)`；移除 `AddDevice.vue` 调试文本和 home 页无条件 `console.log`。（已完成）
+5. **修复确认框**：`ConfirmDialog.vue` 要么成为真正通用的 props/emits 组件，要么明确改名为断开专用组件；推荐使用 `title/message/confirmLabel`，取消和关闭均有清晰事件语义。（已完成）
+6. **清理异步资源**：保存 `AddDeviceDialog.vue` 的成功关闭 timer，在关闭、重新打开和卸载时取消。（已完成）
+7. **删除未接入 Android app_process 旧实现**：删除 `LaunchableAppsMain.java`、`MirrorRuntimeWorkarounds.java`、`MirrorShellContext.java` 及其孤立引用；保留当前 `HelperService` 唯一协议来源。（已完成）
+8. 停止追踪并忽略 `helper-app/local.properties`、Gradle reports/build outputs、根目录未使用的 `preload.mjs` 等生成物/机器本地文件；同步清理文档中的模板和过时说明。（已完成）
 
 **验收**：缓存命中可观察；断开后 `adb devices` 不再列出当前无线连接；断开失败不会伪装成功；Helper 仍能构建并提供 `/ping`、`/apps`、`/icons-bin`；删除项无引用。
 

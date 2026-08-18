@@ -46,6 +46,10 @@ components.d.ts
 # Electron
 dist-electron
 release
+/preload.mjs
 
-helper-app/app/build
-helper-app/.gradle
+# Android/Gradle local and generated files
+/helper-app/local.properties
+/helper-app/build/
+/helper-app/app/build/
+/helper-app/.gradle/

@@ -63,9 +63,9 @@ describe('app cache schema', () => {
     expect(sanitizeIcon(oversized)).toBeNull()
   })
 
-  it('owns the persisted version for versionless input snapshots', () => {
+  it('owns the persisted version for versionless and stale-version input snapshots', () => {
     const { version: _version, ...input } = snapshot()
-    const serialized = serializeSnapshot(input)
+    const serialized = serializeSnapshot({ ...input, version: CACHE_VERSION - 1 })
     expect(serialized).not.toBeNull()
     expect(JSON.parse(serialized).version).toBe(CACHE_VERSION)
     expect(sanitizeSnapshot(JSON.parse(serialized), { now: NOW })).not.toBeNull()

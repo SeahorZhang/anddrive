@@ -5,16 +5,36 @@ import { usePairing } from '@/composables/usePairing'
 const modelValue = defineModel({ default: false })
 const emit = defineEmits(['paired'])
 const { qrDataUrl, status, statusMessage, start, stop } = usePairing()
+let successTimer = null
 
-watch(modelValue, (v) => (v ? start() : stop()))
+function clearSuccessTimer() {
+  if (successTimer) {
+    clearTimeout(successTimer)
+    successTimer = null
+  }
+}
 
-watch(status, (v) => {
-  if (v === 'success') {
-    setTimeout(() => {
+watch(modelValue, (visible) => {
+  clearSuccessTimer()
+  if (visible) start()
+  else stop()
+})
+
+watch(status, (value) => {
+  if (value !== 'success') return
+  clearSuccessTimer()
+  successTimer = setTimeout(() => {
+    successTimer = null
+    if (modelValue.value && status.value === 'success') {
       modelValue.value = false
       emit('paired')
-    }, 800)
-  }
+    }
+  }, 800)
+})
+
+onUnmounted(() => {
+  clearSuccessTimer()
+  stop()
 })
 </script>
 
@@ -74,9 +94,8 @@ watch(status, (v) => {
       </div>
 
       <div class="px-8 pb-10 text-center text-sm text-gray-500">
-        请确保小米设备在附近，已升级至小米澎湃OS 3
-        及以上，并与本机登录相同小米账号、连接相同网络。打开小米设备的"相机"，扫描二维码添加设备。同步手机通知、传手机照片等
-        AI 跨设备能力，需将手机升级至小米澎湃 OS 4 及以上。
+        请在 Android
+        设备上开启无线调试，并确保设备与电脑连接到同一网络。打开无线调试中的“使用二维码配对设备”，扫描上方二维码完成配对。
       </div>
     </Motion>
   </AnimatePresence>

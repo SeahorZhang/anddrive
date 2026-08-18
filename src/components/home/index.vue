@@ -1,42 +1,18 @@
 <script setup>
-import { ref, watch } from 'vue'
 import { Icon } from '@iconify/vue'
 import AppList from './AppList.vue'
-import { useAdb } from '../../composables/useAdb'
-
-const { getDeviceInfo } = useAdb()
+import { useDeviceInfo } from '../../composables/useDeviceInfo'
 
 const props = defineProps({
   serial: String,
 })
 
-const device = ref({
-  model: '', // 设备型号
-  deviceName: '', // 设备名称
-  battery: -1, // 电量
-  isCharging: false, // 是否在充电
-  storage: '', // 存储容量
-  storagePercent: 0, // 存储容量百分比
-})
+const { device, loadDeviceInfo } = useDeviceInfo(() => props.serial)
 
-const loadDeviceInfo = async () => {
-  try {
-    device.value = await getDeviceInfo(props.serial)
-    console.log('设备信息:', device.value)
-  } catch (e) {
-    console.error('获取设备信息失败:', e)
-  }
-}
-
-if (props.serial) {
-  loadDeviceInfo()
-}
-
-watch(() => props.serial, loadDeviceInfo)
+watch(() => props.serial, loadDeviceInfo, { immediate: true })
 </script>
 
 <template>
-  <!-- 设备名称 + 电量 -->
   <div class="mb-3 flex items-center gap-2">
     <span class="text-2xl font-semibold text-black/80">
       {{ device.deviceName || device.model || '未知设备' }}
@@ -51,11 +27,11 @@ watch(() => props.serial, loadDeviceInfo)
     </span>
   </div>
 
-  <!-- 存储空间 -->
   <div class="mb-5">
     <div class="mb-1 flex items-center text-xs text-black/60">
       <span class="flex-1">
-        已用 {{ device.storage.split('/')[0] }} GB，总共 {{ device.storage.split('/')[1] }} GB
+        已用 {{ device.storage.split('/')[0] || '0' }} GB，总共
+        {{ device.storage.split('/')[1] || '0' }} GB
       </span>
       <span>{{ device.storagePercent }}%</span>
     </div>
