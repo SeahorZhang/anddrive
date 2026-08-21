@@ -32,7 +32,6 @@ watch(
       <div style="-webkit-app-region: drag" class="h-12 w-full"></div>
 
       <div
-        v-if="pageType === 'home'"
         style="-webkit-app-region: no-drag"
         class="absolute top-1/2 right-4 z-10 flex -translate-y-1/2 items-center gap-1"
       >

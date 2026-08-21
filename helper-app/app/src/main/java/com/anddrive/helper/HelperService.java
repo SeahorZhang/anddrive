@@ -6,6 +6,7 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.LauncherActivityInfo;
 import android.content.pm.LauncherApps;
@@ -15,8 +16,11 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.os.BatteryManager;
 import android.os.Build;
+import android.os.Environment;
 import android.os.IBinder;
+import android.os.StatFs;
 import android.os.UserHandle;
 import android.os.UserManager;
 import android.util.Log;
@@ -130,6 +134,9 @@ public class HelperService extends Service {
                 byte[] iconData = getIconBinary(pkg);
                 if (iconData == null) writeStatus(client, "404 Not Found");
                 else writeResponse(client, "application/octet-stream", iconData);
+            } else if ("/device-info".equals(path)) {
+                writeResponse(client, "application/json; charset=utf-8",
+                    getDeviceInfoJson().getBytes(StandardCharsets.UTF_8));
             } else if ("/ping".equals(path)) {
                 writeResponse(client, "application/json; charset=utf-8",
                     ("{\"ok\":true,\"protocol\":" + HelperProtocol.PROTOCOL_VERSION + ",\"batchIcons\":true}").getBytes(StandardCharsets.UTF_8));
@@ -208,6 +215,49 @@ public class HelperService extends Service {
         } catch (Exception e) {
             Log.e(TAG, "getAppsJson error", e);
             return "{\"error\":\"app list unavailable\"}";
+        }
+    }
+
+    private String getDeviceInfoJson() {
+        try {
+            String model = Build.MODEL == null ? "" : Build.MODEL;
+            String brand = Build.BRAND == null ? "" : Build.BRAND;
+            String deviceName = (brand + " " + model).trim();
+
+            int battery = -1;
+            boolean isCharging = false;
+            IntentFilter filter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
+            Intent batteryIntent = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                ? registerReceiver(null, filter, Context.RECEIVER_NOT_EXPORTED)
+                : registerReceiver(null, filter);
+            if (batteryIntent != null) {
+                int level = batteryIntent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+                int scale = batteryIntent.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+                int status = batteryIntent.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+                if (level >= 0 && scale > 0) battery = (int) Math.round(level * 100.0 / scale);
+                isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING
+                    || status == BatteryManager.BATTERY_STATUS_FULL;
+            }
+
+            StatFs stat = new StatFs(Environment.getDataDirectory().getPath());
+            long total = stat.getTotalBytes();
+            long used = total - stat.getAvailableBytes();
+            long totalGB = total / (1024L * 1024 * 1024);
+            long usedGB = used / (1024L * 1024 * 1024);
+            int storagePercent = total > 0 ? (int) (used * 100 / total) : 0;
+
+            JSONObject obj = new JSONObject();
+            obj.put("model", model);
+            obj.put("brand", brand);
+            obj.put("deviceName", deviceName);
+            obj.put("battery", battery);
+            obj.put("isCharging", isCharging);
+            obj.put("storage", usedGB + "/" + totalGB);
+            obj.put("storagePercent", storagePercent);
+            return obj.toString();
+        } catch (Exception e) {
+            Log.e(TAG, "getDeviceInfoJson error", e);
+            return "{\"error\":\"device info unavailable\"}";
         }
     }
 

@@ -1,10 +1,10 @@
 import { renderSVG } from 'uqr'
-import { useAdb } from './useAdb'
+import { adb } from '../electronApi'
 
 const randCode = () => String(Date.now() % 1000000).padStart(6, '0')
 
 export function usePairing() {
-  const { startDiscovery, getDiscoveredDevices, stopDiscovery, pair } = useAdb()
+  const { startDiscovery, getDiscoveredDevices, stopDiscovery, pair } = adb
 
   const qrDataUrl = ref('')
   const status = ref('idle') // idle | waiting | pairing | success | error
