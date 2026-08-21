@@ -222,7 +222,14 @@ public class HelperService extends Service {
         try {
             String model = Build.MODEL == null ? "" : Build.MODEL;
             String brand = Build.BRAND == null ? "" : Build.BRAND;
-            String deviceName = (brand + " " + model).trim();
+            String marketName = readSystemProperty("ro.product.marketname");
+            String deviceName;
+            if (marketName != null && !marketName.isEmpty()) {
+                deviceName = (brand.isEmpty() || marketName.startsWith(brand))
+                    ? marketName : brand + " " + marketName;
+            } else {
+                deviceName = (brand + " " + model).trim();
+            }
 
             int battery = -1;
             boolean isCharging = false;
@@ -244,7 +251,7 @@ public class HelperService extends Service {
             long used = total - stat.getAvailableBytes();
             long totalGB = total / (1024L * 1024 * 1024);
             long usedGB = used / (1024L * 1024 * 1024);
-            int storagePercent = total > 0 ? (int) (used * 100 / total) : 0;
+            int storagePercent = total > 0 ? (int) Math.round(used * 100.0 / total) : 0;
 
             JSONObject obj = new JSONObject();
             obj.put("model", model);
@@ -258,6 +265,21 @@ public class HelperService extends Service {
         } catch (Exception e) {
             Log.e(TAG, "getDeviceInfoJson error", e);
             return "{\"error\":\"device info unavailable\"}";
+        }
+    }
+
+    /**
+     * 读取系统属性。SystemProperties 是隐藏 API，helper 以 debuggable 安装可豁免
+     * hidden API 限制；读不到时返回空串，由调用方回退到 Build.MODEL。
+     */
+    private String readSystemProperty(String key) {
+        try {
+            Class<?> cls = Class.forName("android.os.SystemProperties");
+            java.lang.reflect.Method get = cls.getMethod("get", String.class);
+            Object value = get.invoke(null, key);
+            return value == null ? "" : value.toString();
+        } catch (Exception e) {
+            return "";
         }
     }
 

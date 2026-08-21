@@ -33,5 +33,15 @@ export function useDevice() {
     return true;
   };
 
-  return { device, connect };
+  /**
+   * 重新拉取设备信息（充电状态、电量、名称可能已变化）。
+   * 失败时保持旧数据不动，由调用方决定是否告警。
+   */
+  const refresh = async () => {
+    if (!device.value.serial) return;
+    const info = await getDeviceInfo(device.value.serial);
+    device.value = { ...createEmptyDevice(), ...info, serial: device.value.serial };
+  };
+
+  return { device, connect, refresh };
 }

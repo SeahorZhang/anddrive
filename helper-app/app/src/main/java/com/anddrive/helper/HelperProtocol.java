@@ -8,7 +8,7 @@ import java.nio.charset.StandardCharsets;
 
 /** Pure protocol helpers shared by the HTTP service and local JVM tests. */
 public final class HelperProtocol {
-    public static final int PROTOCOL_VERSION = 4;
+    public static final int PROTOCOL_VERSION = 6;
     public static final int MAX_BATCH_PACKAGES = 32;
     public static final int MAX_PACKAGE_NAME_BYTES = 512;
     public static final int MAX_ICON_BYTES = 1024 * 1024;

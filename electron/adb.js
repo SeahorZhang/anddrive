@@ -27,7 +27,7 @@ function getHelperApkPath() {
 }
 
 const HELPER_PACKAGE = "com.anddrive.helper";
-const HELPER_PROTOCOL_VERSION = 4;
+const HELPER_PROTOCOL_VERSION = 6;
 const HELPER_PORT = 18923;
 const DEVICE_INFO_LOAD_ID = "device-info";
 const ICON_BATCH_SIZE = 24;
