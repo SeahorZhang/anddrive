@@ -81,6 +81,23 @@
  */
 
 /**
+ * mDNS 发现的服务目标：
+ * - pairing：配对握手服务（扫码阶段）
+ * - connect：无线连接服务（建立 transport）
+ * @typedef {{ kind: 'pairing' | 'connect', address: string }} DiscoveredServiceTarget
+ */
+
+/**
+ * 配对编排进度事件（main 在 pairDevice 过程中即时推送）：
+ * pairing → paired → connecting → connected → (installing → installed)。
+ * 编排 promise 在 connected/installed 后以 serial resolve；任一步失败整体 reject。
+ *
+ * @typedef {'pairing' | 'paired' | 'connecting' | 'connected' | 'installing' | 'installed'} PairingPhase
+ * @typedef {object} PairingEvent
+ * @property {PairingPhase} phase
+ */
+
+/**
  * Renderer 提交的 scrcpy 启动请求（纯领域数据）。
  * CLI args、码率、窗口参数与资源路径由 main 侧构建，不属于本契约。
 

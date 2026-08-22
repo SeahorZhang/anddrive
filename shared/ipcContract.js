@@ -4,13 +4,14 @@
  * 渲染进程一律通过 src/services/desktopApi.js 访问，不得引用 channel 或 window.electronAPI。
  *
  * payload 类型定义见 shared/types.js：
- * - adb:pair            (host, port, code) → string
- * - adb:startDiscovery  () → boolean（同时浏览 pairing 与 tls-connect 两类服务）
- * - adb:getDiscoveredDevices () → DiscoveryDevice[]（{ name, address }）
- * - adb:getDiscoveredConnectTargets () → string[]（tls-connect 目标 "ip:port"）
- * - adb:connectDevice   (host, port) → string；"already connected" 视为成功
+ * - adb:pairDevice      (host, port, code) → Promise<serial>；编排 配对→连接→按需安装 Helper，
+ *                       进度经 adb:pairing-event 即时推送（回调驱动，无轮询）
+ * - adb:pairing-event   事件 → PairingEvent（phase：pairing/paired/connecting/connected/installing/installed）
+ * - adb:startDiscovery  () → boolean；服务出现经 adb:discovered-target 推送
+ * - adb:discovered-target 事件 → DiscoveredServiceTarget（{ kind, address }，每目标只推一次）
+ * - adb:devices-changed 事件 → AdbDevice[]（adb track-devices 变更即推，无轮询）
  * - adb:stopDiscovery   () → boolean
- * - adb:getDevices      () → AdbDevice[]
+ * - adb:getDevices      () → AdbDevice[]（一次性快照查询）
  * - adb:disconnect      (serial) → boolean（已离线视为成功）
  * - adb:getDeviceInfo   (serial) → DeviceInfo
  * - adb:getCachedInstalledApps (serial) → AppCacheSnapshot | null
@@ -21,11 +22,11 @@
  */
 
 export const IPC = {
-  pair: 'adb:pair',
+  pairDevice: 'adb:pairDevice',
+  pairingEvent: 'adb:pairing-event',
   startDiscovery: 'adb:startDiscovery',
-  getDiscoveredDevices: 'adb:getDiscoveredDevices',
-  getDiscoveredConnectTargets: 'adb:getDiscoveredConnectTargets',
-  connectDevice: 'adb:connectDevice',
+  discoveredTargetEvent: 'adb:discovered-target',
+  devicesChangedEvent: 'adb:devices-changed',
   stopDiscovery: 'adb:stopDiscovery',
   getDevices: 'adb:getDevices',
   disconnect: 'adb:disconnect',

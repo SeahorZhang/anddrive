@@ -4,12 +4,18 @@ interface AndDriveElectronApi {
   platform: string
   startScrcpy: (options: import('../../shared/types.js').ScrcpyLaunchInput) => Promise<unknown>
   adb: {
-    pair: (host: string, port: number, code: string) => Promise<string>
-    startDiscovery: () => Promise<void>
-    getDiscoveredDevices: () => Promise<{ name: string; address: string }[]>
-    getDiscoveredConnectTargets: () => Promise<string[]>
-    connectDevice: (host: string, port: number) => Promise<string>
-    stopDiscovery: () => Promise<void>
+    pairDevice: (host: string, port: number, code: string) => Promise<string>
+    onPairingEvent: (
+      callback: (event: import('../../shared/types.js').PairingEvent) => void,
+    ) => () => void
+    startDiscovery: () => Promise<boolean>
+    stopDiscovery: () => Promise<boolean>
+    onDiscoveredTarget: (
+      callback: (target: import('../../shared/types.js').DiscoveredServiceTarget) => void,
+    ) => () => void
+    onDevicesChanged: (
+      callback: (devices: import('../../shared/types.js').AdbDevice[]) => void,
+    ) => () => void
     getDevices: () => Promise<import('../../shared/types.js').AdbDevice[]>
     disconnect: (serial: string) => Promise<boolean>
     getDeviceInfo: (serial: string) => Promise<import('../../shared/types.js').DeviceInfo>
