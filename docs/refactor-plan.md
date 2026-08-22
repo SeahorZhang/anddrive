@@ -62,6 +62,15 @@ shared/ 不 import Vue、Electron、Node —— 违反即为边界破坏
 
 **验收**：`pnpm verify-resources && pnpm build-helper && pnpm build` 一条链通过；故意删除任一资源时在打包开始前失败并指明缺什么。
 
+**实施结果**（已完成）：
+
+1. 删除 `build:win/linux` 脚本、builder 配置 win/nsis/linux 段；`main.js` win32 分支与 `os` import 移除；`window-all-closed` 简化（darwin 行为不变）。
+2. `resourceResolver.js` 非 darwin 平台抛错快速失败；`download-adb.sh` 仅下载 macOS 二进制。
+3. `build-helper.sh` 重写：项目 `gradlew` 唯一入口（缺失给出 chmod 提示），支持 `test|lint|assemble` 分层。
+4. 新增 `scripts/verify-resources.js`（缺失/空文件/不可执行 → 精确路径报错退出 1，已验证失败路径）；新增 `scripts/clean-electron.mjs` 替代 vite.config.js 顶层 `rmSync` 副作用。
+5. `build` 链改为 `clean → verify-resources → vite → electron-builder`；`after-pack.js` 非 darwin 直接抛错。
+6. 完整 `pnpm build` 冒烟通过：dmg 产出、after-pack 校验（APK/scrcpy-server/adb 单架构）全部通过；签名跳过为本机无证书的预期行为。README 已对齐。
+
 ## 3. Phase 7 — Android Helper 内部拆分（协议稳定后，可与 6 并行评估）
 
 **目标**：HelperService.java 按"先测后拆"推进，每步 ADB forward 真机回归。**不引入多 Gradle module**，单模块内分包即可。
