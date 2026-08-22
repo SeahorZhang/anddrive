@@ -81,9 +81,11 @@ function broadcast(channel, payload) {
 /**
  * 等待任一可用设备上线（全程事件驱动 + mDNS 视图主动 connect）。
  * @param {string|null} preferHost 优先匹配的配对来源 IP；null 表示任意设备
+ * @param {number} timeoutMs 总护栏；恢复场景用短超时快速失败
+ * @param {number} fallbackMs mDNS 视图兜底轮询间隔
  * @returns {Promise<string>} 上线设备的 serial
  */
-function onceDeviceOnline(preferHost = null, timeoutMs = 30000) {
+function onceDeviceOnline(preferHost = null, timeoutMs = 30000, fallbackMs = 3000) {
   return new Promise((resolve, reject) => {
     let settled = false
     let busy = false
@@ -140,7 +142,8 @@ function onceDeviceOnline(preferHost = null, timeoutMs = 30000) {
     // 而不是被动等 adb 隔轮重试。30s 护栏内有效。
     const offMdnsFallback = setInterval(() => {
       if (!settled && !busy) void reconnectViaAdbMdns()
-    }, 3000)
+    }, fallbackMs)
+    void reconnectViaAdbMdns() // 立即查一次：手机在广播时毫秒级就能拿到端口
     // 配对后密钥同步存在竞态，自动连接常以 offline 收场。
     // tls-connect 端口一已知就立刻显式 connect（重复 connect 幂等），
     // 成功后 track-devices 即推事件——不被动等 adb 自己重试。
@@ -188,10 +191,11 @@ async function pairDevice(event, host, port, code) {
 /**
  * 启动恢复：主动经 adb 自带 mDNS 视图重连已配对设备。
  * mDNS 自动连接已被禁用（断开后不得静默重连），恢复连接必须显式发起。
+ * 手机不在时快速失败（2s），不拖慢进入扫码页。
  * @returns {Promise<string | null>} 上线设备的 serial；超时未发现返回 null
  */
 async function restoreDevice() {
-  return await onceDeviceOnline(null, 6000).catch(() => null)
+  return await onceDeviceOnline(null, 2000, 600).catch(() => null)
 }
 
 // IPC handlers：channel 名以 shared/ipcContract.js 为唯一事实来源
