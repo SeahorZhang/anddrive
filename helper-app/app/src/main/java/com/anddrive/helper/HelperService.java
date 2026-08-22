@@ -16,10 +16,12 @@ import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
+import android.net.wifi.WifiManager;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Environment;
 import android.os.IBinder;
+import android.os.PowerManager;
 import android.os.StatFs;
 import android.os.UserHandle;
 import android.os.UserManager;
@@ -49,6 +51,9 @@ public class HelperService extends Service {
     private static final int ICON_SIZE_PX = 256;
     private static final long APPS_CACHE_TTL_MS = 30_000L;
     private static final String CHANNEL_ID = "anddrive_helper";
+    private static final String KEEPALIVE_TAG = "anddrive:mirror";
+    // 唤醒锁最长持有时间：桌面端异常退出未释放时自动过期，避免 CPU 长期不眠耗电
+    private static final long KEEPALIVE_MAX_MS = 12 * 60 * 60 * 1000L;
     private ServerSocket serverSocket;
     private final ExecutorService executor = Executors.newFixedThreadPool(8);
     private final Map<String, LauncherActivityInfo> appInfoCache = new ConcurrentHashMap<>();
@@ -56,6 +61,8 @@ public class HelperService extends Service {
     private final Map<String, FutureTask<byte[]>> iconTasks = new ConcurrentHashMap<>();
     private volatile String appsJsonCache;
     private volatile long appsCacheTime;
+    private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
 
     @Override
     public void onCreate() {
@@ -101,6 +108,51 @@ public class HelperService extends Service {
             .build();
     }
 
+    /**
+     * 投屏保活：持有 CPU 唤醒锁与 WiFi 低延迟锁，防止手机息屏后
+     * 系统挂起 CPU / WiFi 进入省电模式，导致无线 ADB 视频流卡死。
+     * 非引用计数：重复 acquire/release 幂等。
+     */
+    private synchronized void acquireKeepAlive() {
+        try {
+            if (wakeLock == null) {
+                PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                if (pm != null) {
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, KEEPALIVE_TAG);
+                    wakeLock.setReferenceCounted(false);
+                }
+            }
+            if (wakeLock != null && !wakeLock.isHeld()) wakeLock.acquire(KEEPALIVE_MAX_MS);
+        } catch (Exception e) {
+            Log.e(TAG, "acquire wake lock error", e);
+        }
+        try {
+            if (wifiLock == null) {
+                WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                if (wm != null) {
+                    int mode = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                        ? WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                        : WifiManager.WIFI_MODE_FULL_HIGH_PERF;
+                    wifiLock = wm.createWifiLock(mode, KEEPALIVE_TAG);
+                    wifiLock.setReferenceCounted(false);
+                }
+            }
+            if (wifiLock != null && !wifiLock.isHeld()) wifiLock.acquire();
+        } catch (Exception e) {
+            Log.e(TAG, "acquire wifi lock error", e);
+        }
+    }
+
+    /** 投屏结束时释放保活锁；服务销毁时兜底调用。 */
+    private synchronized void releaseKeepAlive() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();
+        } catch (Exception ignored) { }
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) wifiLock.release();
+        } catch (Exception ignored) { }
+    }
+
     private void startServer() {
         new Thread(() -> {
             try {
@@ -137,6 +189,14 @@ public class HelperService extends Service {
             } else if ("/device-info".equals(path)) {
                 writeResponse(client, "application/json; charset=utf-8",
                     getDeviceInfoJson().getBytes(StandardCharsets.UTF_8));
+            } else if ("/wake-lock/acquire".equals(path)) {
+                acquireKeepAlive();
+                writeResponse(client, "application/json; charset=utf-8",
+                    "{\"ok\":true}".getBytes(StandardCharsets.UTF_8));
+            } else if ("/wake-lock/release".equals(path)) {
+                releaseKeepAlive();
+                writeResponse(client, "application/json; charset=utf-8",
+                    "{\"ok\":true}".getBytes(StandardCharsets.UTF_8));
             } else if ("/ping".equals(path)) {
                 writeResponse(client, "application/json; charset=utf-8",
                     ("{\"ok\":true,\"protocol\":" + HelperProtocol.PROTOCOL_VERSION + ",\"batchIcons\":true}").getBytes(StandardCharsets.UTF_8));
@@ -338,6 +398,7 @@ public class HelperService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        releaseKeepAlive();
         try { if (serverSocket != null) serverSocket.close(); } catch (Exception ignored) { }
         executor.shutdownNow();
     }

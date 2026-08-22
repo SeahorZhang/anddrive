@@ -22,8 +22,10 @@
  * - adb:cancelInstalledAppsLoad (loadId) → boolean
  * - adb:installed-app   事件 → AppLoadEvent（authoritative/icons/complete/error，带 loadId）
  * - scrcpy:start        (ScrcpyLaunchInput) → boolean；CLI args 由 main 侧构建
- * - diagnostics:run     () → { items: DiagnosticItem[] }（资源/adb/mDNS/防火墙/组播自检）
+ * - diagnostics:run     () → { items: DiagnosticItem[], packaged }（资源/adb/mDNS/防火墙/组播自检）
  * - diagnostics:listen-pairing (windowMs?) → 广播捕获结果（需用户在手机端打开配对弹窗配合）
+ * - diagnostics:allow-firewall () → { ok, detail }；管理员授权放行防火墙（仅打包版）
+ * - diagnostics:open-local-network () → boolean；打开系统"本地网络"设置面板
  */
 
 export const IPC = {
@@ -44,4 +46,6 @@ export const IPC = {
   startScrcpy: 'scrcpy:start',
   diagnosticsRun: 'diagnostics:run',
   diagnosticsListenPairing: 'diagnostics:listen-pairing',
+  diagnosticsAllowFirewall: 'diagnostics:allow-firewall',
+  diagnosticsOpenLocalNetwork: 'diagnostics:open-local-network',
 }

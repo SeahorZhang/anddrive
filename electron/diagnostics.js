@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { promisify } from 'node:util'
+import { app } from 'electron'
 import Bonjour from 'bonjour-service'
 import * as adb from './adb/adbClient.js'
 import {
@@ -14,7 +16,18 @@ const execAsync = promisify(execFile)
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const FIREWALL_CLI = '/usr/libexec/ApplicationFirewall/socketfilterfw'
+// macOS 26 起为独立面板；旧版本回退到安全隐私页锚点
+const LOCAL_NETWORK_ANCHORS = [
+  'x-apple.systempreferences:com.apple.Local-Network-Settings.extension',
+  'x-apple.systempreferences:com.apple.preference.security?Privacy_LocalNetwork',
+]
 
+/** 打包后的 .app 路径；开发模式返回 null */
+function appBundlePath() {
+  if (!app.isPackaged) return null
+  // process.execPath = <bundle>/Contents/MacOS/<name>，向上三级到 .app
+  return dirname(dirname(dirname(process.execPath)))
+}
 /**
  * @typedef {{ id: string, name: string, status: 'pass' | 'warn' | 'fail', detail: string }} DiagnosticItem
  */
@@ -121,7 +134,7 @@ async function checkMulticast() {
 
 /**
  * 运行环境诊断（各项独立执行，单项失败不影响其余）。
- * @returns {Promise<{ items: DiagnosticItem[] }>}
+ * @returns {Promise<{ items: DiagnosticItem[], packaged: boolean }>}
  */
 export async function runDiagnostics() {
   const items = []
@@ -139,7 +152,7 @@ export async function runDiagnostics() {
       items.push(item('unknown', '未知检查项', 'fail', String(result.reason)))
     }
   }
-  return { items }
+  return { items, packaged: app.isPackaged }
 }
 
 /**
@@ -165,4 +178,44 @@ export async function listenDeviceBroadcast(windowMs = 10000) {
   browsers.forEach((browser) => browser.stop())
   bonjour.destroy()
   return found
+}
+
+/**
+ * 以管理员授权把本应用加入防火墙放行列表（系统原生密码弹窗）。
+ * 仅打包安装后可用；开发模式返回提示。
+ * @returns {Promise<{ ok: boolean, detail: string }>}
+ */
+export async function allowFirewall() {
+  const bundlePath = appBundlePath()
+  if (!bundlePath) {
+    return { ok: false, detail: '开发模式不适用，仅打包安装后可用' }
+  }
+  const script =
+    `do shell script "'${FIREWALL_CLI}' --add '${bundlePath}'; ` +
+    `'${FIREWALL_CLI}' --unblock '${bundlePath}'" with administrator privileges`
+  try {
+    await execAsync('osascript', ['-e', script], { timeout: 120000 })
+    return { ok: true, detail: '防火墙已放行本应用' }
+  } catch (error) {
+    const message = String(error.message || error)
+    return {
+      ok: false,
+      detail: /cancel/i.test(message) ? '已取消管理员授权' : message,
+    }
+  }
+}
+
+/** 深链打开"本地网络"设置面板；多锚点依次尝试。 */
+export async function openLocalNetworkSettings() {
+  // 先做一次真实组播访问：若从未询问过，系统会借机弹出授权窗
+  await checkMulticast()
+  for (const anchor of LOCAL_NETWORK_ANCHORS) {
+    try {
+      await execAsync('open', [anchor], { timeout: 5000 })
+      return true
+    } catch {
+      // 尝试下一个锚点
+    }
+  }
+  return false
 }

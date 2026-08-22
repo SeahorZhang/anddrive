@@ -2,17 +2,23 @@
 import { diagnostics } from '../services/desktopApi'
 
 const items = ref([])
+const packaged = ref(false)
 const running = ref(false)
 const listening = ref(false)
 const sightings = ref([])
+const actionMessage = ref('')
+const actionBusy = ref('')
 
 const statusColor = { pass: 'bg-green-500', warn: 'bg-yellow-500', fail: 'bg-red-500' }
+const firewallItem = () => items.value.find((item) => item.id === 'firewall')
 
 const runAll = async () => {
   running.value = true
+  actionMessage.value = ''
   try {
     const result = await diagnostics.run()
     items.value = result.items
+    packaged.value = result.packaged
   } finally {
     running.value = false
   }
@@ -27,6 +33,24 @@ const listenOnce = async () => {
   } finally {
     listening.value = false
   }
+}
+
+/** 管理员授权放行防火墙 */
+const allowFirewall = async () => {
+  actionBusy.value = 'firewall'
+  try {
+    const result = await diagnostics.allowFirewall()
+    actionMessage.value = result.detail
+    if (result.ok) await runAll()
+  } finally {
+    actionBusy.value = ''
+  }
+}
+
+/** 打开系统"本地网络"设置面板（顺带触发首次授权弹窗） */
+const openLocalNetwork = async () => {
+  const ok = await diagnostics.openLocalNetworkSettings()
+  actionMessage.value = ok ? '已打开本地网络设置，请确认 AndDrive 开关为开启' : '无法打开设置面板'
 }
 
 runAll()
@@ -63,6 +87,31 @@ runAll()
     </ul>
 
     <div class="mt-3 border-t border-black/5 pt-2.5">
+      <div
+        v-if="actionMessage"
+        class="mb-2 rounded-md bg-blue-500/8 px-2 py-1.5 text-[11px] leading-relaxed text-blue-600"
+      >
+        {{ actionMessage }}
+      </div>
+
+      <!-- 修复动作 -->
+      <div class="mb-2 space-y-1.5">
+        <button
+          v-if="packaged && firewallItem()?.status === 'warn'"
+          class="w-full cursor-pointer rounded-md border border-black/10 bg-white py-1.5 text-[11px] text-black/60 transition-colors hover:bg-gray-100 disabled:opacity-50"
+          :disabled="actionBusy === 'firewall'"
+          @click="allowFirewall"
+        >
+          {{ actionBusy === 'firewall' ? '等待管理员授权...' : '以管理员身份放行防火墙' }}
+        </button>
+        <button
+          class="w-full cursor-pointer rounded-md border border-black/10 bg-white py-1.5 text-[11px] text-black/60 transition-colors hover:bg-gray-100"
+          @click="openLocalNetwork"
+        >
+          打开"本地网络"系统设置
+        </button>
+      </div>
+
       <button
         class="w-full cursor-pointer rounded-md border border-black/10 py-1.5 text-[11px] text-black/60 transition-colors hover:bg-white disabled:opacity-50"
         :disabled="listening"

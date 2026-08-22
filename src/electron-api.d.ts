@@ -17,8 +17,10 @@ interface AndDriveElectronApi {
   platform: string
   startScrcpy: (options: import('../../shared/types.js').ScrcpyLaunchInput) => Promise<unknown>
   diagnostics: {
-    run: () => Promise<{ items: DiagnosticItem[] }>
+    run: () => Promise<{ items: DiagnosticItem[]; packaged: boolean }>
     listenPairingBroadcast: (windowMs?: number) => Promise<DiagnosticSighting[]>
+    allowFirewall: () => Promise<{ ok: boolean; detail: string }>
+    openLocalNetworkSettings: () => Promise<boolean>
   }
   adb: {
     pairDevice: (host: string, port: number, code: string) => Promise<string>

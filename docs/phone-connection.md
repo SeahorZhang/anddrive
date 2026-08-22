@@ -64,6 +64,35 @@ Helper 协议和构建方式见 [`../helper-app/README.md`](../helper-app/README
 
 ## 故障排查
 
+### 打包安装后扫码无反应（开发模式正常）
+
+macOS 15+ 的"本地网络"权限按代码签名身份授权。ad-hoc 签名的包（无稳定身份，每次重新打包
+cdhash 都变）会出现：系统设置里开关显示已打开，但应用实际仍收不到 mDNS 组播。
+
+验证方法：
+
+```sh
+# 用已安装的二进制跑组播监听，同时手机打开配对弹窗；收不到广播即中招
+ELECTRON_RUN_AS_NODE=1 /Applications/AndDrive.app/Contents/MacOS/AndDrive -e "
+const {Bonjour}=require('bonjour-service');const b=new Bonjour();
+b.find({type:'adb-tls-pairing'},s=>console.log('收到',s.addresses,s.port));
+setTimeout(()=>process.exit(0),15000)"
+```
+
+修复：构建配置已固定 `mac.identity: "AndDrive Dev Cert"`（登录钥匙串中的自签代码签名证书，
+有效期至 2036 年）。证书丢失时重建步骤：
+
+```sh
+openssl req -newkey rsa:2048 -nodes -keyout anddrive.key -x509 -days 3650 \
+  -out anddrive.crt -subj "/CN=AndDrive Dev Cert" \
+  -addext "keyUsage=critical,digitalSignature" -addext "extendedKeyUsage=codeSigning"
+openssl pkcs12 -export -out anddrive.p12 -inkey anddrive.key -in anddrive.crt -passout pass:临时密码
+security import anddrive.p12 -k ~/Library/Keychains/login.keychain-db -P 临时密码 -T /usr/bin/codesign
+security add-trusted-cert -r trustRoot -p codeSign anddrive.crt
+```
+
+重装后首次启动会弹"本地网络"授权，允许一次后因身份稳定而长期有效。
+
 ### 找不到二维码配对服务
 
 确认手机和 Mac 在同一网络，关闭会阻断 UDP 5353 的访客网络隔离或防火墙规则，然后重新打开添加设备对话框。

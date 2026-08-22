@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   diagnostics: {
     run: () => invoke(IPC.diagnosticsRun),
     listenPairingBroadcast: (windowMs) => invoke(IPC.diagnosticsListenPairing, windowMs),
+    allowFirewall: () => invoke(IPC.diagnosticsAllowFirewall),
+    openLocalNetworkSettings: () => invoke(IPC.diagnosticsOpenLocalNetwork),
   },
   adb: {
     // 配对编排：一次调用完成 配对→连接→按需安装 Helper，进度经 onPairingEvent 即时推送
