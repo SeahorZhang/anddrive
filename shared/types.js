@@ -53,9 +53,12 @@
  */
 
 /**
+ * Domain payload the renderer submits to launch an app via scrcpy.
+ * CLI arguments are constructed in the main process (electron/scrcpyRequest.js).
  * @typedef {object} ScrcpyRequest
- * @property {string[]} args
+ * @property {string} serial
  * @property {string} packageName
+ * @property {string} label
  * @property {string} iconDataUrl
  */
 

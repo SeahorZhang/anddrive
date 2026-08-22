@@ -7,6 +7,7 @@ import http from 'node:http'
 import { app } from 'electron'
 import { ICON_REFRESH_MS, readAppCache, writeAppCache } from './appCache.js'
 import { parseAdbDevices, parseDeviceInfo, parseIconBatch } from './adb/parsers.js'
+import { CHANNELS } from './ipcContract.js'
 import {
   isAlreadyDisconnectedError,
   isMissingForwardError,
@@ -372,7 +373,7 @@ export async function loadInstalledApps(serial, loadId, sender) {
   const emit = (phase, apps) => {
     if (!isAppLoadActive(loadId)) return
     sender.send(
-      'adb:installed-app',
+      CHANNELS.installedAppEvent,
       apps === undefined ? { loadId, phase } : { loadId, phase, apps },
     )
   }

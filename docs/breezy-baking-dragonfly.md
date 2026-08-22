@@ -14,7 +14,7 @@ AndDrive 当前是 Electron 43 + Vue 3 + Vite 的 Android 无线调试桌面工�
 | --- | --- |
 | Phase 1 质量安全网 | ✅ 已完成 |
 | Phase 2 缺陷修复与清理 | ✅ 已完成 |
-| Phase 3 IPC bridge 与单设备会话 | ◐ desktopApi 已建立，其余未动 |
+| Phase 3 IPC bridge 与单设备会话 | ✅ 已完成 |
 | Phase 4 拆分 Electron 服务 | ○ 未开始 |
 | Phase 5 拆分 AppList | ○ 未开始 |
 | Phase 6 macOS-only 构建收敛 | ◐ 第 1 项已完成 |
@@ -30,30 +30,26 @@ AndDrive 当前是 Electron 43 + Vue 3 + Vite 的 Android 无线调试桌面工�
 ### 当前剩余问题
 
 - `electron/adb.js`（约 500 行）仍混合 ADB 执行、mDNS 发现、Helper 安装/升级、HTTP 客户端、图标批量协议与缓存协调。
-- `src/components/home/AppList.vue`（约 316 行）同时维护缓存事件、图标状态、搜索、MRU、延迟启动和 scrcpy 参数拼接。
-- scrcpy CLI 参数（分辨率/码率/codec/窗口标题）由 Renderer 拼接直传 `start_scrcpy` channel。
-- 多设备在线时 `selectDevice` 静默取首个 `state === device` 设备，无冲突提示。
-- `App.vue` 用字符串页面切换（addDevice/home）掩盖连接生命周期。
+- `src/components/home/AppList.vue`（约 316 行）同时维护缓存事件、图标状态、搜索、MRU 与启动状态管理。
+- scrcpy 进程与 App load 仍未按 serial 建立归属注册表（Phase 4 范围）。
 - ADB/scrcpy 资源路径在 `electron/adb.js` 与 `electron/scrcpy.js` 各自硬编码；`scripts/build-helper.sh` 仍优先 Homebrew 固定 Gradle 路径而非 `helper-app/gradlew`；`vite.config.js` 读取配置时即删除 `dist-electron`。
 
 ## Recommended approach
 
 保持"先安全网、再修复行为、最后拆分职责"的顺序。每一阶段保持可构建、可验证，避免同时改动 IPC、Helper 协议和 Vue 状态机。不一次性迁移全项目 TypeScript；新模块用 JSDoc/checkJs 渐进补充。
 
-## Phase 3 — 统一 IPC bridge 与单设备会话（部分完成）
+## Phase 3 — 统一 IPC bridge 与单设备会话 ✅
 
-**已完成**：desktopApi facade 建立，Renderer 不再直接访问 `window.electronAPI`。
+**关键文件**：`electron/ipcContract.js`、`electron/main.js`、`electron/preload.js`、`shared/deviceSession.js`、`electron/scrcpyRequest.js`、`src/services/desktopApi.js`、`src/App.vue`。
 
-**关键文件**：`electron/main.js`、`electron/preload.js`、`src/services/desktopApi.js`、`shared/types.js`、`src/App.vue`。
+**落地内容**：
 
-**剩余工作**：
+1. **唯一 IPC contract**：新增 `electron/ipcContract.js` 集中定义全部 channel（invoke + 推送事件）；preload 与 main handler map 均引用常量，channel 字符串不再散落。
+2. **scrcpy 参数下沉**：Renderer 只提交 `{ serial, packageName, label, iconDataUrl }`；`buildScrcpyRequest` 在 main 校验领域数据并构造 CLI args（分辨率/codec/码率/窗口策略留在主进程），原 `validateScrcpyRequest` 退役。
+3. **单设备 session**：`resolveSession(devices)` 纯函数输出 `empty/connected/conflict` 三态，替代静默取首项的 `selectDevice`（已删除）；main 经 `adb:getActiveSession` 暴露，多设备冲突返回 serials 列表由 UI 展示。无消费方的 `adb:getDevices` 桥接通道一并移除。scrcpy 进程与 App load 的按 serial 归属注册表归入 Phase 4。
+4. **App.vue 显式状态机**：`idle/restoring/connected/disconnecting/error` 替代字符串页面切换。断开失败保持当前设备页并在确认框内展示错误、允许重试；恢复失败与多设备冲突在添加设备页显示横幅。`PageHome` 以 serial 为 key 强制重挂载，杜绝旧事件污染。
 
-1. 建立唯一 IPC contract：channel 名目前散落在 main 与 preload 两处字符串字面量；集中定义 channel、参数、返回值、错误语义和 `authoritative/icons/complete/error` 事件 payload（JSDoc 即可）。
-2. `startScrcpy` 参数下沉：Renderer 只提交 `{ serial, packageName, label, iconDataUrl }` 领域数据；CLI args、默认码率、窗口参数由 main 构建，现有 `validateScrcpyRequest` 演进为构造器。
-3. 轻量单设备 session：main 记录 active serial 及其 load/forward/scrcpy 归属；发现多个 `state === device` 时向 Renderer 报冲突错误，禁止静默取数组第一项。
-4. `App.vue` 显式状态机：idle/restoring/connected/disconnecting/error，替代字符串页面切换。
-
-**验收**：channel 字符串只存在于 contract/main/preload；Renderer 源码不再出现 scrcpy CLI 参数；多设备冲突可见且不静默选择；serial 切换或断开后旧事件不会污染当前状态。
+**验收结果**：channel 字符串仅存在于 contract/main/preload；Renderer 源码无 scrcpy CLI 参数；多设备冲突可见且不静默选择；serial 切换或断开后旧状态不会污染当前视图。
 
 ## Phase 4 — 拆分 Electron ADB/Helper/scrcpy 服务
 
@@ -141,7 +137,7 @@ Phase 6 与 3/4/5 无依赖，可随时并行
 5. ✅ 功能精简：电量/存储删除；
 6. ✅ 构建收敛：Win/Linux/mac-x64 移除；
 7. ✅ desktopApi facade（useAdb 删除）；
-8. IPC contract 与 scrcpy 参数下沉；
+8. ✅ IPC contract 与 scrcpy 参数下沉、单设备 session 与 App 状态机；
 9. Electron service 拆分；
 10. AppList composables/UI 拆分；
 11. 资源 resolver、verify-resources 与 gradlew 收敛。

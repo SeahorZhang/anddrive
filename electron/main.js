@@ -2,9 +2,11 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import * as adb from './adb.js'
+import { CHANNELS } from './ipcContract.js'
 import { getCachedInstalledApps } from './appCache.js'
 import { startScrcpy, stopScrcpy } from './scrcpy.js'
-import { validateScrcpyRequest } from './scrcpyRequest.js'
+import { buildScrcpyRequest } from './scrcpyRequest.js'
+import { resolveSession } from '../shared/deviceSession.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 process.env.APP_ROOT = path.join(__dirname, '..')
@@ -45,37 +47,37 @@ function createWindow() {
   }
 }
 
-function startScrcpyRequest(options) {
-  const request = validateScrcpyRequest(options)
+function startScrcpyFromRequest(options) {
+  const request = buildScrcpyRequest(options)
   return startScrcpy(request.args, request.iconDataUrl)
 }
 
 // ADB IPC handlers
 for (const [channel, handler] of Object.entries({
-  'adb:pair': (_, h, p, c) => adb.pair(h, p, c),
-  'adb:startDiscovery': () => {
+  [CHANNELS.adbPair]: (_, h, p, c) => adb.pair(h, p, c),
+  [CHANNELS.adbStartDiscovery]: () => {
     adb.startDiscovery()
     return true
   },
-  'adb:getDiscoveredDevices': () => adb.getDiscoveredDevices(),
-  'adb:stopDiscovery': () => {
+  [CHANNELS.adbGetDiscoveredDevices]: () => adb.getDiscoveredDevices(),
+  [CHANNELS.adbStopDiscovery]: () => {
     adb.stopDiscovery()
     return true
   },
-  'adb:getDevices': () => adb.getDevices(),
-  'adb:disconnect': async (_, serial) => {
+  [CHANNELS.adbGetActiveSession]: async () => resolveSession(await adb.getDevices()),
+  [CHANNELS.adbDisconnect]: async (_, serial) => {
     stopScrcpy()
     return adb.disconnectDevice(serial)
   },
-  'adb:getDeviceInfo': (_, serial) => adb.getDeviceInfo(serial),
-  'adb:getCachedInstalledApps': (_, serial) => getCachedInstalledApps(serial),
-  'adb:loadInstalledApps': (event, serial, loadId) =>
+  [CHANNELS.adbGetDeviceInfo]: (_, serial) => adb.getDeviceInfo(serial),
+  [CHANNELS.adbGetCachedInstalledApps]: (_, serial) => getCachedInstalledApps(serial),
+  [CHANNELS.adbLoadInstalledApps]: (event, serial, loadId) =>
     adb.loadInstalledApps(serial, loadId, event.sender),
-  'adb:cancelInstalledAppsLoad': (_, loadId) => {
+  [CHANNELS.adbCancelInstalledAppsLoad]: (_, loadId) => {
     adb.cancelInstalledAppsLoad(loadId)
     return true
   },
-  start_scrcpy: (_, options) => startScrcpyRequest(options),
+  [CHANNELS.scrcpyStart]: (_, options) => startScrcpyFromRequest(options),
 })) {
   ipcMain.handle(channel, handler)
 }

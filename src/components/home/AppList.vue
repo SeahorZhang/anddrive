@@ -106,20 +106,10 @@ async function launchApp(app) {
   setLaunchError(app.packageName, null)
   try {
     await startScrcpy({
-      args: [
-        '-s',
-        props.serial,
-        '--new-display=1920x1080/320',
-        `--start-app=${app.packageName}`,
-        '--video-codec=h265',
-        '-b',
-        '24M',
-        '--window-x=auto',
-        '--window-y=auto',
-        `--window-title=${app.label}`,
-      ],
-      iconDataUrl: app.iconUrl,
+      serial: props.serial,
       packageName: app.packageName,
+      label: app.label,
+      iconDataUrl: app.iconUrl,
     })
     promoteApp(app)
   } catch (error) {
