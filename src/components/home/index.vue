@@ -3,17 +3,28 @@ import { Icon } from '@iconify/vue'
 import AppList from './AppList.vue'
 import PageHeader from '../PageHeader.vue'
 
+// 断开的编排（状态机、IPC 调用）在 App.vue；本组件只转发 props 与事件。
 defineProps({
   serial: String,
   device: {
     type: Object,
     default: () => ({}),
   },
+  disconnecting: Boolean,
+  disconnectError: {
+    type: String,
+    default: '',
+  },
 })
+const emit = defineEmits(['disconnect'])
 </script>
 
 <template>
-  <PageHeader />
+  <PageHeader
+    :disconnecting="disconnecting"
+    :disconnect-error="disconnectError"
+    @disconnect="emit('disconnect')"
+  />
 
   <div class="flex flex-1 flex-col overflow-hidden px-7 pb-6">
     <div class="mb-3 flex items-center gap-2">
@@ -33,7 +44,7 @@ defineProps({
     </div>
 
     <div class="mb-5">
-      <div class="mb-1 flex items-center text-xs text-black/60">
+      <div class="mb-1 flex items-center gap-2 text-xs text-black/60">
         <span class="flex-1">
           已用 {{ device.storage?.split('/')[0] || '0' }} GB，总共
           {{ device.storage?.split('/')[1] || '0' }} GB

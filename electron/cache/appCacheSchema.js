@@ -40,7 +40,7 @@ export function sanitizeApp(value) {
 /**
  * @param {unknown} value
  * @param {{ allowExpired?: boolean, now?: number }=} options
- * @returns {import('../shared/types.js').AppCacheSnapshot | null}
+ * @returns {import('../../shared/types.js').AppCacheSnapshot | null}
  */
 export function sanitizeSnapshot(value, { allowExpired = false, now = Date.now() } = {}) {
   if (!value || typeof value !== 'object') return null
@@ -69,7 +69,7 @@ export function sanitizeSnapshot(value, { allowExpired = false, now = Date.now()
 }
 
 /**
- * @param {import('../shared/types.js').AppCacheSnapshotInput} snapshot
+ * @param {import('../../shared/types.js').AppCacheSnapshotInput} snapshot
  * @returns {string | null}
  */
 export function serializeSnapshot(snapshot) {

@@ -2,7 +2,7 @@
 // 与 preload.js 的导出保持一致；类型复用 shared/types.js 里的 typedef。
 interface AndDriveElectronApi {
   platform: string
-  startScrcpy: (options: import('../../shared/types.js').ScrcpyRequest) => Promise<unknown>
+  startScrcpy: (options: import('../../shared/types.js').ScrcpyLaunchInput) => Promise<unknown>
   adb: {
     pair: (host: string, port: number, code: string) => Promise<string>
     startDiscovery: () => Promise<void>

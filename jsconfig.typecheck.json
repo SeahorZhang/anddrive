@@ -12,8 +12,10 @@
   "include": [
     "shared/types.js",
     "shared/selectDevice.js",
-    "electron/appCacheSchema.js",
-    "electron/adb/parsers.js",
-    "electron/scrcpyRequest.js"
+    "electron/cache/appCacheSchema.js",
+    "electron/adb/deviceParser.js",
+    "electron/helper/helperProtocol.js",
+    "electron/helper/appLoader.js",
+    "electron/scrcpy/scrcpyRequest.js"
   ]
 }

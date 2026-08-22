@@ -64,17 +64,17 @@ AndDrive 当前是 Electron 43 + Vue 3 + Vite 的 Android 无线调试桌面工�
 
 **目标**：Renderer 只依赖一个受控桌面 API，所有系统策略集中在 main。
 
-**关键文件**：`electron/main.js`、`electron/preload.js`、`src/composables/useAdb.js`、`src/composables/useDeviceInfo.js`、`src/App.vue`、新增共享 contract/facade 模块。
+**关键文件**：`electron/main.js`、`electron/preload.js`、`electron/scrcpyRequest.js`、`shared/ipcContract.js`（新增）、`shared/types.js`、`shared/selectDevice.js`、`src/services/desktopApi.js`（新增）、`src/composables/useDevice.js`、`src/App.vue`、`src/components/home/{index,AppList}.vue`。
 
 **工作内容**：
 
-1. 建立唯一 IPC contract，集中定义 channel、参数、返回值、错误语义和 `authoritative/icons/complete/error` 事件 payload。使用 JSDoc 类型即可，不强行迁移全项目 TS。
-2. Renderer 通过 `src/services/desktopApi.js` 或功能 composables 调用 bridge；删除所有业务组件对 `window.electronAPI` 的直接访问。
-3. 将 `startScrcpy` 归入统一桌面 API。Renderer 只提交 `serial/packageName/label/iconDataUrl` 等领域数据；scrcpy CLI args、默认码率、窗口参数和资源路径由 main/service 构建。
-4. 建立轻量单设备 session：记录 active serial、当前 App load、forward、scrcpy 进程；新的加载取消旧加载，事件带 loadId，断开统一释放资源。发现多个 `state === device` 时显示冲突错误，禁止静默取数组第一项。
-5. 让 `App.vue` 管理明确的 idle/restoring/connected/disconnecting/error 状态，避免以字符串页面切换掩盖连接生命周期。
+1. 建立唯一 IPC contract：新增 `shared/ipcContract.js` 集中定义全部 channel 常量和参数/返回值/事件 payload 说明；main、preload 与 adb.js 的事件发送侧均改为引用 `IPC.*` 常量，channel 字符串不再散落。（已完成）
+2. Renderer 统一走 facade：新增 `src/services/desktopApi.js` 取代原 `src/electronApi.js`，成为渲染进程访问桥接的唯一入口；业务组件对 `window.electronAPI` 的直接访问为零。（已完成）
+3. `startScrcpy` 归入统一桌面 API：请求契约改为纯领域数据 `ScrcpyLaunchInput{ serial, packageName, label, iconDataUrl }`（channel 更名 `scrcpy:start`）；CLI args、默认码率与窗口参数由 main 侧 `buildScrcpyArgs()` 构建，renderer 不再拼接 scrcpy 参数。（已完成）
+4. 轻量单设备 session 与多设备冲突：`selectDevice()` 改为返回 `none/ok/conflict` 判别结果，多台在线时在添加设备页展示冲突错误并中止连接，禁止静默取数组第一项；active serial、loadId 取消旧加载、forward 锁与断开统一释放沿用既有实现并保持回归测试。（已完成）
+5. `App.vue` 管理显式连接生命周期：`connectionState = restoring | idle | connected | disconnecting | error` 状态机取代字符串页面切换；断开编排上收到 App.vue（成功才回 idle 并清空轮询与设备状态，失败回退 connected 且错误展示在确认框），home 页仅转发 props/事件。（已完成）
 
-**验收**：Renderer 源码不再出现 `window.electronAPI` 或 `start_scrcpy`；channel 只存在于 contract/main/preload；多设备不会被静默选择；serial 切换或断开后旧事件不会污染当前状态。
+**验收**：Renderer 源码不再出现 `window.electronAPI` 或 `start_scrcpy`（已验证）；channel 只存在于 contract/main/preload（已验证）；多设备不会被静默选择（selectDevice 冲突用例覆盖）；serial 切换或断开后旧事件不会污染当前状态（loadId 过滤 + 卸载清理）。
 
 ## Phase 4 — 拆分 Electron ADB/Helper/scrcpy 服务
 
@@ -109,6 +109,17 @@ Android 侧先不全面重写 `HelperService.java`；在协议稳定后再按 `H
 
 **验收**：配对、Helper 安装、首次列表、缓存、图标批量和 legacy fallback、取消加载、断开、scrcpy 启停行为保持不变；失败和取消路径不遗留 forward、进程或临时目录；每个新服务有纯单元测试或明确的集成边界。
 
+**实施结果**（已完成）：
+
+1. `electron/adb.js` 单体（约 493 行）已删除，拆分为目标结构中的 9 个模块；另新增 `electron/resourceResolver.js`（迁移步骤 7 的资源路径唯一来源，adb/helper/scrcpy 均经它取路径）、`electron/adb/adbDisconnect.js`（原根目录错误分类模块归入 adb 分组）、`electron/scrcpy/scrcpyRequest.js`（校验 + args 构建纯函数随 scrcpy 服务分组）。`cache/appCacheSchema.js` 同步迁入 cache 分组。
+2. `adbClient.js`：ensureServer/exec/shell/pair（保留 protocol-fault 自动重试）/listDevices/disconnect（已离线幂等成功）。
+3. `discoveryService.js`：start/stop 幂等（stop 先于 start），自持生命周期不依赖 renderer。
+4. `helperLifecycle.js`：安装/启动/ping/waitForHelper/协议升级去重 + 单 session forward 状态与串行锁（acquireForwardLock/releaseSession/releaseForSerial）；`getDeviceInfo` 走 helper /device-info 会话。
+5. `appLoader.js`：`createAppLoader(helper)` 工厂注入会话能力；进度经 `emit(AppLoadEvent)` 回调上报，ipc sender 只在 main.js 组合边界触碰一次；缓存→authoritative→icons 渐进/batch+legacy fallback→complete 编排与取消语义保持不变。纯函数 `uniqueApps/reconcileCachedApps/rendererApps` 导出并新增单测。
+6. `scrcpyService.js`：以 serial 关联进程（同 serial 重启先停旧进程），`stopForSerial(serial)`/`stopAll()` 统一停止并清理临时图标目录；启动入口直接接收领域数据并在内部构建 CLI args。
+7. 断开链路由 main.js `disconnectDevice()` 组合：normalize → 停镜像 → 取消加载 → 持锁释放 forward → adb disconnect，保持原有加锁语义。
+8. 测试调整：`parseIconBatch` 用例移至 `helperProtocol.test.js`；devices/device info 解析用例在 `deviceParser.test.js`；新增 `appLoader.test.js` 覆盖去重、label 回退与缓存 reconcile 刷新规则（缺失/过期/改名触发刷新）。8 个测试文件 57 个用例全绿；vite build 冒烟通过（16 modules 内联）。真机 smoke（配对/列表/断开）待 macOS 实机复核。
+
 ## Phase 5 — 拆分 AppList 与 Vue 状态逻辑
 
 **目标**：让组件只负责组合 composable 和渲染，保留现有缓存优先、图标渐进加载、搜索和 MRU 行为。
@@ -124,6 +135,15 @@ Android 侧先不全面重写 `HelperService.java`；在协议稳定后再按 `H
 5. 将当前 `replaceApps`/`promoteApp` 的重复 Map 重排逻辑合并为一个小型纯函数并测试。
 
 **验收**：搜索、缓存先显、权威结果替换、图标晚到后启动、图标失败、launch error、MRU、serial 切换和卸载行为均有测试或可重复手工验证；`AppList.vue` 不直接访问 window、不拼 scrcpy CLI、不维护 IPC listener 细节。
+
+**实施结果**（已完成）：
+
+1. `src/composables/useInstalledApps.js`：管理缓存优先读取、loadId 订阅/取消、authoritative/icons/complete 阶段数据、loading/iconLoadComplete 状态与 serial 切换/卸载清理；通过 `bind(handlers)` 暴露 `onAuthoritative/onIcons/onComplete/onReset` 组合点，不感知启动逻辑。
+2. `src/composables/useAppLauncher(serial, installed)`：管理 pendingIconLaunches、launchingPackages、launchErrors、MRU 与 `displayApps` 派生排序；`requestLaunch` 保持原语义（有图标立即启动 / 无图标且加载中挂起 / 加载完成后判失败）；scrcpy 仅提交领域数据。
+3. `shared/appOrdering.js`：原 `replaceApps`/`promoteApp` 两份重复的 Map 重排合并为纯函数 `orderAppsByMru`（去重、MRU 优先、修剪失效项并返回可持久化 MRU）与 `promoteToMruFront`，新增 `tests/shared/appOrdering.test.js` 覆盖（含不可变性）。测试现为 9 文件 64 用例。
+4. `AppList.vue` 从 306 行减至约 114 行：只保留搜索过滤与组合渲染，无 window 访问、无 CLI 拼接、无 IPC listener 细节；未提取 AppSearch/AppGrid/AppTile（markup 简单，避免过度拆分）。
+5. Home 页面在 Phase 3 已收敛为只消费 App.vue 统一 `useDevice()` 输出的 device prop，无重复解析与调试日志，本轮无需改动。
+6. 行为保持逐行对应：缓存先显 → 权威替换（MRU 剪枝持久化）→ 图标 patch 触发挂起启动 → complete 结算剩余 pending 为失败；serial 切换/卸载经 onReset 同步清理两侧状态。lint/format/typecheck/test 全绿，vite build 冒烟通过。真机 smoke（图标渐进点击启动、MRU 置顶、搜索）待 macOS 实机复核。
 
 ## Phase 6 — 收敛 macOS-only 构建与资源流程
 

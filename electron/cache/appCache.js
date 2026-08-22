@@ -13,17 +13,22 @@ import {
 const MAX_DEVICE_CACHES = 20
 
 const cacheRoot = () => path.join(app.getPath('userData'), 'app-cache', 'apps-v1')
+/** @param {string} serial */
 const cacheKey = (serial) => createHash('sha256').update(serial).digest('hex')
+/** @param {string} serial */
 const cachePath = (serial) => path.join(cacheRoot(), `${cacheKey(serial)}.json`)
 
+/** @param {string} filePath */
 async function removeFile(filePath) {
   try {
     await fs.unlink(filePath)
   } catch (error) {
-    if (error?.code !== 'ENOENT') console.warn('Failed to remove app cache:', error)
+    if (/** @type {any} */ (error)?.code !== 'ENOENT')
+      console.warn('Failed to remove app cache:', error)
   }
 }
 
+/** @param {string} serial @returns {Promise<import('../../shared/types.js').AppCacheSnapshot | null>} */
 export async function readAppCache(serial) {
   if (typeof serial !== 'string' || !serial || serial.length > 1024) return null
   const filePath = cachePath(serial)
@@ -37,7 +42,7 @@ export async function readAppCache(serial) {
     if (!snapshot) await removeFile(filePath)
     return snapshot
   } catch (error) {
-    if (error?.code !== 'ENOENT') {
+    if (/** @type {any} */ (error)?.code !== 'ENOENT') {
       console.warn('Failed to read app cache:', error)
       await removeFile(filePath)
     }
@@ -45,6 +50,7 @@ export async function readAppCache(serial) {
   }
 }
 
+/** @param {string} serial */
 export async function getCachedInstalledApps(serial) {
   const snapshot = await readAppCache(serial)
   if (!snapshot) return null
@@ -58,6 +64,7 @@ export async function getCachedInstalledApps(serial) {
   }
 }
 
+/** @param {string} protectedPath */
 async function pruneCaches(protectedPath) {
   try {
     const root = cacheRoot()
@@ -83,13 +90,14 @@ async function pruneCaches(protectedPath) {
       if (file.filePath !== protectedPath) await removeFile(file.filePath)
     }
   } catch (error) {
-    if (error?.code !== 'ENOENT') console.warn('Failed to prune app caches:', error)
+    if (/** @type {any} */ (error)?.code !== 'ENOENT')
+      console.warn('Failed to prune app caches:', error)
   }
 }
 
 /**
  * @param {string} serial
- * @param {import('../shared/types.js').AppCacheSnapshotInput} snapshot
+ * @param {import('../../shared/types.js').AppCacheSnapshotInput} snapshot
  */
 export async function writeAppCache(serial, snapshot) {
   if (typeof serial !== 'string' || !serial || serial.length > 1024) return false

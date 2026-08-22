@@ -2,10 +2,15 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import os from 'node:os'
-import * as adb from './adb.js'
-import { getCachedInstalledApps } from './appCache.js'
-import { startScrcpy, stopScrcpy } from './scrcpy.js'
-import { validateScrcpyRequest } from './scrcpyRequest.js'
+import { IPC } from '../shared/ipcContract.js'
+import * as adb from './adb/adbClient.js'
+import { normalizeDisconnectSerial } from './adb/adbDisconnect.js'
+import * as discovery from './adb/discoveryService.js'
+import { getCachedInstalledApps } from './cache/appCache.js'
+import * as helper from './helper/helperLifecycle.js'
+import { createAppLoader } from './helper/appLoader.js'
+import { validateScrcpyRequest } from './scrcpy/scrcpyRequest.js'
+import * as scrcpyService from './scrcpy/scrcpyService.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 process.env.APP_ROOT = path.join(__dirname, '..')
@@ -15,6 +20,16 @@ const VITE_DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL
 process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   ? path.join(process.env.APP_ROOT, 'public')
   : RENDERER_DIST
+
+// 组合根：注入 helper 会话能力，构造单例 app loader
+const appLoader = createAppLoader({
+  isInstalled: helper.isInstalled,
+  install: helper.install,
+  ensureReady: helper.ensureReady,
+  ensureProtocol: helper.ensureProtocol,
+  releaseSession: helper.releaseSession,
+  acquireForwardLock: helper.acquireForwardLock,
+})
 
 if (process.platform === 'win32' && os.release().startsWith('6.1'))
   app.disableHardwareAcceleration()
@@ -49,43 +64,53 @@ function createWindow() {
   }
 }
 
-function startScrcpyRequest(options) {
-  const request = validateScrcpyRequest(options)
-  return startScrcpy(request.args, request.iconDataUrl)
+/**
+ * 断开一台设备：停镜像、取消加载、释放 forward 会话，再断开无线 transport。
+ * @param {string} rawSerial
+ */
+async function disconnectDevice(rawSerial) {
+  const serial = normalizeDisconnectSerial(rawSerial)
+  scrcpyService.stopForSerial(serial)
+  appLoader.cancelForSerial(serial)
+  await helper.releaseForSerial(serial)
+  return adb.disconnect(serial)
 }
 
-// ADB IPC handlers
+// IPC handlers：channel 名以 shared/ipcContract.js 为唯一事实来源
 for (const [channel, handler] of Object.entries({
-  'adb:pair': (_, h, p, c) => adb.pair(h, p, c),
-  'adb:startDiscovery': () => {
-    adb.startDiscovery()
+  [IPC.pair]: (_, h, p, c) => adb.pair(h, p, c),
+  [IPC.startDiscovery]: () => {
+    discovery.startDiscovery()
     return true
   },
-  'adb:getDiscoveredDevices': () => adb.getDiscoveredDevices(),
-  'adb:stopDiscovery': () => {
-    adb.stopDiscovery()
+  [IPC.getDiscoveredDevices]: () => discovery.getDiscoveredDevices(),
+  [IPC.stopDiscovery]: () => {
+    discovery.stopDiscovery()
     return true
   },
-  'adb:getDevices': () => adb.getDevices(),
-  'adb:disconnect': async (_, serial) => {
-    stopScrcpy()
-    return adb.disconnectDevice(serial)
-  },
-  'adb:getDeviceInfo': (_, serial) => adb.getDeviceInfo(serial),
-  'adb:getCachedInstalledApps': (_, serial) => getCachedInstalledApps(serial),
-  'adb:loadInstalledApps': (event, serial, loadId) =>
-    adb.loadInstalledApps(serial, loadId, event.sender),
-  'adb:cancelInstalledAppsLoad': (_, loadId) => {
-    adb.cancelInstalledAppsLoad(loadId)
+  [IPC.getDevices]: () => adb.listDevices(),
+  [IPC.disconnect]: (_, serial) => disconnectDevice(serial),
+  [IPC.getDeviceInfo]: (_, serial) => helper.getDeviceInfo(serial),
+  [IPC.getCachedInstalledApps]: (_, serial) => getCachedInstalledApps(serial),
+  // 进度经 contract 中定义的 AppLoadEvent 推送；sender 只在组合边界触碰一次
+  [IPC.loadInstalledApps]: (event, serial, loadId) =>
+    appLoader.load({
+      serial,
+      loadId,
+      emit: (appLoadEvent) => event.sender.send(IPC.installedAppEvent, appLoadEvent),
+    }),
+  [IPC.cancelInstalledAppsLoad]: (_, loadId) => {
+    appLoader.cancelLoad(loadId)
     return true
   },
-  start_scrcpy: (_, options) => startScrcpyRequest(options),
+  // renderer 只提交领域数据；CLI args 与资源路径由 service 构建
+  [IPC.startScrcpy]: (_, options) => scrcpyService.start(validateScrcpyRequest(options)),
 })) {
   ipcMain.handle(channel, handler)
 }
 
 app.whenReady().then(createWindow)
-app.on('before-quit', stopScrcpy)
+app.on('before-quit', scrcpyService.stopAll)
 app.on('window-all-closed', () => {
   win = null
   if (process.platform !== 'darwin') app.quit()

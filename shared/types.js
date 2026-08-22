@@ -23,6 +23,13 @@
  */
 
 /**
+ * 图标渐进加载阶段的增量更新（仅含包名与新图标）。
+ * @typedef {object} IconUpdate
+ * @property {string} packageName
+ * @property {string} iconUrl
+ */
+
+/**
  * @typedef {InstalledApp & { iconUpdatedAt: number | null }} CachedInstalledApp
  */
 
@@ -49,17 +56,38 @@
  */
 
 /**
+ * App 加载进度事件：
+ * - authoritative：完整权威列表
+ * - icons：图标增量更新（InstalledApp | IconUpdate）
+ * - complete / error：无 apps 字段
+ *
  * @typedef {object} AppLoadEvent
  * @property {number} loadId
  * @property {AppLoadPhase} phase
- * @property {InstalledApp[]=} apps
+ * @property {(InstalledApp | IconUpdate)[]=} apps
  * @property {string=} message
  */
 
 /**
- * @typedef {object} ScrcpyRequest
- * @property {string[]} args
+ * 单设备选择结果：
+ * - none：没有在线设备
+ * - ok：恰好一台在线设备
+ * - conflict：多台在线，禁止静默取第一台
+ *
+ * @typedef {{ status: 'none' }} AdbSelectionNone
+ * @typedef {{ status: 'ok', device: AdbDevice }} AdbSelectionOk
+ * @typedef {{ status: 'conflict', devices: AdbDevice[] }} AdbSelectionConflict
+ * @typedef {AdbSelectionNone | AdbSelectionOk | AdbSelectionConflict} AdbSelection
+ */
+
+/**
+ * Renderer 提交的 scrcpy 启动请求（纯领域数据）。
+ * CLI args、码率、窗口参数与资源路径由 main 侧构建，不属于本契约。
+
+ * @typedef {object} ScrcpyLaunchInput
+ * @property {string} serial
  * @property {string} packageName
+ * @property {string} label
  * @property {string} iconDataUrl
  */
 

@@ -1,5 +1,5 @@
 import { renderSVG } from 'uqr'
-import { adb } from '../electronApi'
+import { adb } from '../services/desktopApi'
 
 const randCode = () => String(Date.now() % 1000000).padStart(6, '0')
 
