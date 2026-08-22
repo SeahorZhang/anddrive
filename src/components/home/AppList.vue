@@ -1,12 +1,12 @@
 <script setup>
-import { useAdb } from '../../composables/useAdb'
+import { adb, startScrcpy } from '../../services/desktopApi'
 
 const props = defineProps({
   serial: String,
 })
 
 const { getCachedInstalledApps, loadInstalledApps, cancelInstalledAppsLoad, onInstalledApp } =
-  useAdb()
+  adb
 const appsByPackage = ref(new Map())
 const mruPackages = ref([])
 const searchText = ref('')
@@ -105,7 +105,7 @@ async function launchApp(app) {
   setPackageState(launchingPackages, app.packageName, true)
   setLaunchError(app.packageName, null)
   try {
-    await Reflect.get(window, 'electronAPI').startScrcpy({
+    await startScrcpy({
       args: [
         '-s',
         props.serial,

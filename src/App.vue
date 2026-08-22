@@ -3,10 +3,10 @@ import AddDeviceDialog from './components/AddDeviceDialog.vue'
 import AddDevice from './components/AddDevice.vue'
 import PageHome from './components/home/index.vue'
 import PageHeader from './components/PageHeader.vue'
-import { useAdb } from './composables/useAdb'
 import { selectDevice } from '../shared/selectDevice.js'
+import { adb } from './services/desktopApi'
 
-const { getDevices, disconnect: disconnectDevice } = useAdb()
+const { getDevices, disconnect: disconnectDevice } = adb
 const deviceDialogVisible = ref(false)
 const pageType = ref('addDevice') // 'addDevice' or 'home'
 const serial = ref('')

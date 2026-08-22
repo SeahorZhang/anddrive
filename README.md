@@ -2,7 +2,7 @@
 
 AndDrive 是一个 macOS 桌面工具，通过 Android 无线调试连接单台 Android 设备，浏览已安装应用并使用 scrcpy 启动应用镜像窗口。
 
-> 当前发布目标为 macOS。Windows/Linux 构建配置仍在逐步收敛，不属于本轮支持范围。
+> 仅支持 macOS（Apple Silicon）。Windows/Linux 构建配置已移除。
 
 ## 工作方式
 

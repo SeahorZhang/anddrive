@@ -1,4 +1,4 @@
-import { useAdb } from './useAdb'
+import { adb } from '../services/desktopApi'
 
 const emptyDevice = () => ({
   model: '',
@@ -8,7 +8,7 @@ const emptyDevice = () => ({
 })
 
 export function useDeviceInfo(serial) {
-  const { getDeviceInfo } = useAdb()
+  const { getDeviceInfo } = adb
   const device = ref(emptyDevice())
   const loading = ref(false)
   const lastError = ref(null)
