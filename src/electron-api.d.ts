@@ -1,8 +1,25 @@
 // electron/preload.js 通过 contextBridge 暴露到 window 的 API 类型。
 // 与 preload.js 的导出保持一致；类型复用 shared/types.js 里的 typedef。
+interface DiagnosticItem {
+  id: string
+  name: string
+  status: 'pass' | 'warn' | 'fail'
+  detail: string
+}
+
+interface DiagnosticSighting {
+  type: string
+  address: string
+  name?: string
+}
+
 interface AndDriveElectronApi {
   platform: string
   startScrcpy: (options: import('../../shared/types.js').ScrcpyLaunchInput) => Promise<unknown>
+  diagnostics: {
+    run: () => Promise<{ items: DiagnosticItem[] }>
+    listenPairingBroadcast: (windowMs?: number) => Promise<DiagnosticSighting[]>
+  }
   adb: {
     pairDevice: (host: string, port: number, code: string) => Promise<string>
     restoreDevice: () => Promise<string | null>

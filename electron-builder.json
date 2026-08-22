@@ -26,6 +26,13 @@
       "dmg"
     ],
     "artifactName": "${productName}-Mac-${arch}-${version}-Installer.${ext}",
+    "extendInfo": {
+      "NSLocalNetworkUsageDescription": "AndDrive 需要访问本地网络，以发现并连接处于无线调试模式的 Android 设备。",
+      "NSBonjourServices": [
+        "_adb-tls-pairing._tcp",
+        "_adb-tls-connect._tcp"
+      ]
+    },
     "extraResources": [
       {
         "from": "resources/adb/mac/adb",

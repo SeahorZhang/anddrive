@@ -16,6 +16,7 @@ declare module 'vue' {
     AppList: typeof import('./src/components/home/AppList.vue')['default']
     BaseButton: typeof import('./src/components/BaseButton.vue')['default']
     ConfirmDialog: typeof import('./src/components/ConfirmDialog.vue')['default']
+    DiagnosticsPanel: typeof import('./src/components/DiagnosticsPanel.vue')['default']
     DialogContent: typeof import('reka-ui')['DialogContent']
     DialogOverlay: typeof import('reka-ui')['DialogOverlay']
     DialogPortal: typeof import('reka-ui')['DialogPortal']

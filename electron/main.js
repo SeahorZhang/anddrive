@@ -6,6 +6,7 @@ import * as adb from './adb/adbClient.js'
 import { normalizeDisconnectSerial } from './adb/adbDisconnect.js'
 import * as deviceMonitor from './adb/deviceMonitor.js'
 import * as discovery from './adb/discoveryService.js'
+import { listenDeviceBroadcast, runDiagnostics } from './diagnostics.js'
 import { getCachedInstalledApps } from './cache/appCache.js'
 import * as helper from './helper/helperLifecycle.js'
 import { createAppLoader } from './helper/appLoader.js'
@@ -251,6 +252,8 @@ for (const [channel, handler] of Object.entries({
   },
   // renderer 只提交领域数据；CLI args 与资源路径由 service 构建
   [IPC.startScrcpy]: (_, options) => scrcpyService.start(validateScrcpyRequest(options)),
+  [IPC.diagnosticsRun]: () => runDiagnostics(),
+  [IPC.diagnosticsListenPairing]: (_, windowMs) => listenDeviceBroadcast(windowMs),
 })) {
   ipcMain.handle(channel, handler)
 }

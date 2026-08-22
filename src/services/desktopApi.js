@@ -6,3 +6,4 @@ const bridge = window.electronAPI
 export const adb = bridge.adb
 export const platform = bridge.platform
 export const startScrcpy = bridge.startScrcpy
+export const diagnostics = bridge.diagnostics

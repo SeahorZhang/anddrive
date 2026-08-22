@@ -22,6 +22,8 @@
  * - adb:cancelInstalledAppsLoad (loadId) → boolean
  * - adb:installed-app   事件 → AppLoadEvent（authoritative/icons/complete/error，带 loadId）
  * - scrcpy:start        (ScrcpyLaunchInput) → boolean；CLI args 由 main 侧构建
+ * - diagnostics:run     () → { items: DiagnosticItem[] }（资源/adb/mDNS/防火墙/组播自检）
+ * - diagnostics:listen-pairing (windowMs?) → 广播捕获结果（需用户在手机端打开配对弹窗配合）
  */
 
 export const IPC = {
@@ -40,4 +42,6 @@ export const IPC = {
   cancelInstalledAppsLoad: 'adb:cancelInstalledAppsLoad',
   installedAppEvent: 'adb:installed-app',
   startScrcpy: 'scrcpy:start',
+  diagnosticsRun: 'diagnostics:run',
+  diagnosticsListenPairing: 'diagnostics:listen-pairing',
 }
