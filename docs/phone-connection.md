@@ -6,7 +6,7 @@ AndDrive 当前支持 macOS 上连接一台 Android 11+ 设备。连接链路如
 Vue renderer
   → preload IPC bridge
   → Electron main
-  → electron/adb.js
+  → electron/adb|helper|cache|scrcpy 分组模块
   → ADB forward
   → Android HelperService
 ```
@@ -26,9 +26,9 @@ Vue renderer
 2. 在手机的“无线调试”中选择“使用二维码配对设备”。
 3. 扫描 AndDrive 显示的二维码。
 4. AndDrive 通过 Bonjour/mDNS 发现 `_adb-tls-pairing` 服务并执行 `adb pair`。
-5. 配对成功后，应用轮询 ADB 设备列表，选择状态为 `device` 的设备。
+5. 配对成功后，应用等待手机确认连接（部分机型会弹授权提示），建立无线传输并按需安装 Helper App，随后进入主界面。
 
-配对记录会由 Android 保留。之后只要无线调试重新可用，AndDrive 可以恢复该设备的连接；这与点击“断开连接”不同。
+配对记录会由 Android 保留。重新打开 AndDrive 时会主动恢复已配对设备的连接；但点击"断开连接"后设备会保持离线，直到你再次扫码连接。
 
 ## 应用列表和 Helper
 
@@ -51,11 +51,12 @@ Helper 协议和构建方式见 [`../helper-app/README.md`](../helper-app/README
 
 确认断开后，主进程按以下顺序清理：
 
-1. 取消该设备的应用加载，阻止旧的列表/图标事件污染页面。
-2. 等待现有 Helper forward 的清理并移除 `tcp:18923`。
-3. 停止关联的 scrcpy 进程。
-4. 执行 `adb disconnect <serial>`。
-5. 成功后回到“添加设备”页面。
+1. 终止后台恢复任务，确保不会静默重连。
+2. 停止关联的 scrcpy 进程。
+3. 取消该设备的应用加载，阻止旧的列表/图标事件污染页面。
+4. 等待现有 Helper forward 的清理并移除 `tcp:18923`。
+5. 执行 `adb disconnect <serial>`。
+6. 成功后回到“添加设备”页面。
 
 这只结束当前无线 ADB transport，不会删除 Android 的配对记录。若目标已经因为网络中断而不再连接，断开仍视为成功。真正的 ADB、权限或 daemon 错误会留在当前设备页，并允许重试。
 
