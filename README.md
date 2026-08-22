@@ -2,7 +2,7 @@
 
 AndDrive 是一个 macOS 桌面工具，通过 Android 无线调试连接单台 Android 设备，浏览已安装应用并使用 scrcpy 启动应用镜像窗口。
 
-> 当前发布目标为 macOS。Windows/Linux 构建配置仍在逐步收敛，不属于本轮支持范围。
+> 仅支持 macOS。Windows/Linux 构建入口与资源已移除，不在支持范围。
 
 ## 工作方式
 
@@ -43,22 +43,27 @@ pnpm typecheck
 pnpm test
 pnpm test:helper
 pnpm lint:helper
-pnpm build-helper
-pnpm build
+pnpm build-helper            # 构建 APK 到 resources/（支持 test|lint|assemble 分层）
+pnpm verify-resources        # 打包资源前置检查
+pnpm build                   # 清理 dist-electron → 资源检查 → vite → electron-builder (dmg)
 ```
 
 `pnpm lint`、`pnpm format:check` 和测试命令只检查，不应修改工作区。需要自动修复 lint 时使用 `pnpm lint:fix`。
 
-`pnpm build-helper` 使用 `helper-app/gradlew` 构建 APK，并复制到 `resources/helper-app.apk`。构建桌面包前确认 ADB、scrcpy 及 Helper APK 资源存在。
+`pnpm build-helper` 始终使用项目自带 `helper-app/gradlew`（不可执行时先 `chmod +x gradlew`），不依赖系统 Gradle；首次准备 ADB 二进制运行 `pnpm download-adb`。构建桌面前确认 ADB、scrcpy 及 Helper APK 资源存在（`pnpm verify-resources` 会在缺失时报出精确路径）。
 
 ## 架构
 
 ```text
-Vue renderer
-  → electron/preload.js
-  → electron/main.js (IPC 与单设备 teardown)
-  → electron/adb.js (ADB、mDNS、Helper forward、应用加载)
-  → Android HelperService (本地 HTTP 协议)
+Vue renderer（组件 → composables → services/desktopApi.js）
+  → electron/preload.js（IPC bridge）
+  → electron/main.js（组合根：IPC 注册 + 单设备 teardown）
+      ├─ adb/       adbClient · deviceParser · discoveryService · adbDisconnect
+      ├─ helper/    helperLifecycle · helperClient · helperProtocol · appLoader
+      ├─ cache/     appCache · appCacheSchema
+      ├─ scrcpy/    scrcpyService · scrcpyRequest
+      └─ resourceResolver.js（打包资源路径唯一来源）
+  → Android HelperService（本地 HTTP 协议 v6）
 ```
 
 缓存位于 Electron userData 目录，并按设备 serial 隔离。应用列表先显示有效缓存，再用设备上的权威列表和渐进图标更新。
