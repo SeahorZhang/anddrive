@@ -1,7 +1,12 @@
 import { execFile } from 'node:child_process'
 import { getAdbPath } from '../resourceResolver.js'
 import { isAlreadyDisconnectedError, normalizeDisconnectSerial } from './adbDisconnect.js'
-import { parseAdbDevices, parseMdnsConnectTargets } from './deviceParser.js'
+import {
+  parseAdbDevices,
+  parseAdbDevicesVerbose,
+  parseMdnsConnectTargets,
+  splitShadowTransports,
+} from './deviceParser.js'
 
 // adb 是 client/server 架构：所有 adb 命令前先确保守护进程已启动（幂等）。
 let serverStarted = false
@@ -136,17 +141,23 @@ export async function isReachable(serial) {
 
 /**
  * 清理不可用的无线传输，返回清理后的真实在线列表：
+ * - 同一物理设备的 mDNS 命名影子传输（与 ip:port 并存时）直接断开；
  * - offline 即握手失败产物（mdns 自动连接竞态），直接断开；
  * - device 态经短超时探测甄别僵尸（假在线）后清理。
  * USB 设备不探测、不动。
  * @returns {Promise<import('../../shared/types.js').AdbDevice[]>}
  */
 export async function pruneWirelessTransports() {
-  const devices = await listDevices()
+  const verbose = await exec('devices', '-l').then(parseAdbDevicesVerbose)
+  const { drop } = splitShadowTransports(verbose)
   await Promise.all(
-    devices
+    verbose
       .filter((device) => isWirelessSerial(device.serial))
       .map(async (device) => {
+        if (drop.includes(device)) {
+          await disconnect(device.serial).catch(() => {})
+          return
+        }
         if (device.state === 'offline') {
           await disconnect(device.serial).catch(() => {})
           return

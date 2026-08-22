@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   parseAdbDevices,
+  parseAdbDevicesVerbose,
   parseDeviceInfo,
   parseMdnsConnectTargets,
+  splitShadowTransports,
 } from '../../electron/adb/deviceParser.js'
 
 describe('parseAdbDevices', () => {
@@ -42,6 +44,57 @@ describe('parseMdnsConnectTargets', () => {
   it('returns empty for header-only or unrelated output', () => {
     expect(parseMdnsConnectTargets('List of discovered mdns services\n')).toEqual([])
     expect(parseMdnsConnectTargets('')).toEqual([])
+  })
+})
+
+describe('splitShadowTransports', () => {
+  const ipEntry = {
+    serial: '192.168.100.91:43879',
+    state: 'device',
+    model: '2509FPN0BC',
+  }
+  const mdnsTwin = {
+    serial: 'adb-af3d7abd-Zvci5V._adb-tls-connect._tcp',
+    state: 'device',
+    model: '2509FPN0BC',
+  }
+
+  it('marks the mdns twin as drop when an ip transport of the same device exists', () => {
+    const { keep, drop } = splitShadowTransports([ipEntry, mdnsTwin])
+    expect(keep).toEqual([ipEntry])
+    expect(drop).toEqual([mdnsTwin])
+  })
+
+  it('keeps a lone mdns transport (no ip twin to shadow)', () => {
+    const { keep, drop } = splitShadowTransports([mdnsTwin])
+    expect(keep).toEqual([mdnsTwin])
+    expect(drop).toEqual([])
+  })
+
+  it('ignores offline entries and different models', () => {
+    const offlineMdns = { ...mdnsTwin, state: 'offline' }
+    const otherPhone = { serial: '10.0.0.8:39085', state: 'device', model: 'Pixel8' }
+    const { keep, drop } = splitShadowTransports([offlineMdns, otherPhone])
+    expect(drop).toEqual([])
+    expect(keep).toEqual([offlineMdns, otherPhone])
+  })
+})
+
+describe('parseAdbDevicesVerbose', () => {
+  it('captures model props and keeps plain parse compatible', () => {
+    const output = [
+      'List of devices attached',
+      '192.168.100.91:43879\tdevice product:popsicle model:2509FPN0BC device:popsicle',
+      'usb-id\tunauthorized usb:1-1',
+    ].join('\r\n')
+    expect(parseAdbDevicesVerbose(output)).toEqual([
+      { serial: '192.168.100.91:43879', state: 'device', model: '2509FPN0BC' },
+      { serial: 'usb-id', state: 'unauthorized' },
+    ])
+    expect(parseAdbDevices(output)).toEqual([
+      { serial: '192.168.100.91:43879', state: 'device' },
+      { serial: 'usb-id', state: 'unauthorized' },
+    ])
   })
 })
 
