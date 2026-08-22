@@ -6,6 +6,11 @@ import { parseAdbDevices } from './deviceParser.js'
 // adb 是 client/server 架构：所有 adb 命令前先确保守护进程已启动（幂等）。
 let serverStarted = false
 
+// 常规 adb 命令（devices/forward/shell 等）的超时护栏：
+// 无线传输可能出现"状态在线但已僵死"的 transport，无超时会永久挂起。
+const ROUTINE_TIMEOUT_MS = 10000
+export const INSTALL_TIMEOUT_MS = 180000
+
 export async function ensureServer() {
   if (serverStarted) return
   await new Promise((resolve, reject) => {
@@ -21,11 +26,26 @@ export async function ensureServer() {
 
 /** @param {...string} args */
 export function exec(...args) {
+  return execWithTimeout(ROUTINE_TIMEOUT_MS, ...args)
+}
+
+/**
+ * 带超时的 adb 调用；timeoutMs ≤ 0 表示不限制（如 APK 安装等慢操作自行指定）。
+ * @param {number} timeoutMs
+ * @param {...string} args
+ */
+export function execWithTimeout(timeoutMs, ...args) {
   return new Promise((resolve, reject) => {
-    execFile(getAdbPath(), args, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr || err.message))
-      else resolve(stdout.trim())
-    })
+    execFile(
+      getAdbPath(),
+      args,
+      { timeout: timeoutMs > 0 ? timeoutMs : undefined },
+      (err, stdout, stderr) => {
+        if (err) {
+          reject(new Error(err.killed ? `adb 命令超时: ${args.join(' ')}` : stderr || err.message))
+        } else resolve(stdout.trim())
+      },
+    )
   })
 }
 
@@ -67,9 +87,18 @@ export async function pair(host, port, code) {
  * @param {string|number} port
  */
 export async function connect(host, port) {
-  const output = await exec('connect', `${host}:${port}`)
+  const output = await execWithTimeout(15000, 'connect', `${host}:${port}`)
   if (!/connected to/i.test(output)) throw new Error(output || 'adb connect 失败')
   return output
+}
+
+/**
+ * 无线安装 APK；传输耗时长，单独使用宽松超时。
+ * @param {string} serial
+ * @param {string} apkPath
+ */
+export function install(serial, apkPath) {
+  return execWithTimeout(INSTALL_TIMEOUT_MS, '-s', serial, 'install', '-r', apkPath)
 }
 
 /** @returns {Promise<import('../../shared/types.js').AdbDevice[]>} */

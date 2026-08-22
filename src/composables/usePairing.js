@@ -5,12 +5,12 @@ const randCode = () => String(Date.now() % 1000000).padStart(6, '0')
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-// 配对完成后等待设备广播 tls-connect 服务的时间上限
-const CONNECT_TIMEOUT_MS = 20000
+// 配对完成后等待设备可连接的时间上限
+const CONNECT_TIMEOUT_MS = 30000
 
 export function usePairing() {
   const { startDiscovery, getDiscoveredDevices, getDiscoveredConnectTargets, stopDiscovery } = adb
-  const { pair, connectDevice } = adb
+  const { pair, connectDevice, getDevices } = adb
 
   const qrDataUrl = ref('')
   const status = ref('idle') // idle | waiting | pairing | success | error
@@ -69,8 +69,10 @@ export function usePairing() {
   }
 
   /**
-   * 配对只建立信任，还需对设备 tls-connect 端口执行 adb connect 才会出现在设备列表。
-   * 优先选择与配对目标同 IP 的服务；刚配对完 TLS 握手可能未就绪，轮询重试直至超时。
+   * 配对只建立信任，设备不会自动出现在 adb devices。三条路径谁先到都算成功：
+   * 1. 权威判定：轮询设备列表——adb server 自带 mdns 会自动连接已配对设备（实测最可靠）
+   * 2. 显式连接：对我们浏览到的 tls-connect 目标执行 connect（优先配对时同 IP）
+   * 3. 超时失败：设备离线/关屏等导致始终不可达时给出明确错误
    * @param {string} pairHost 配对目标的 IP
    */
   const establishConnection = async (pairHost) => {
@@ -79,18 +81,24 @@ export function usePairing() {
     let lastError = new Error('未发现设备的无线调试连接服务')
 
     while (Date.now() < deadline) {
-      if (status.value !== 'pairing') return // 弹窗已关闭，停止流程
+      if (status.value !== 'pairing') return false // 弹窗已关闭，停止流程
+      try {
+        const devices = await getDevices()
+        if (devices.some((device) => device.state === 'device')) return true
+      } catch {
+        // 设备列表查询失败不致命，下轮重试
+      }
       try {
         const targets = await getDiscoveredConnectTargets()
-        const matched = targets.find((target) => target.startsWith(`${pairHost}:`))
-        const target = matched || targets[0]
+        const target =
+          targets.find((candidate) => candidate.startsWith(`${pairHost}:`)) || targets[0]
         if (target) {
           const [host, port] = target.split(':')
           await connectDevice(host, Number(port))
-          return
+          return true
         }
       } catch (e) {
-        lastError = e
+        lastError = e // 刚配完 TLS 握手可能未就绪，等下一轮重试
       }
       await sleep(1000)
     }

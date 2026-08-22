@@ -65,7 +65,7 @@ export async function isInstalled(serial) {
 export async function install(serial) {
   const apkPath = getHelperApkPath()
   if (!fs.existsSync(apkPath)) throw new Error('Helper APK not found: ' + apkPath)
-  await adb.exec('-s', serial, 'install', '-r', apkPath)
+  await adb.install(serial, apkPath)
 }
 
 /** @param {string} serial */
