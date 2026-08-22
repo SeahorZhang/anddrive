@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { getAdbPath } from '../resourceResolver.js'
 import { isAlreadyDisconnectedError, normalizeDisconnectSerial } from './adbDisconnect.js'
-import { parseAdbDevices } from './deviceParser.js'
+import { parseAdbDevices, parseMdnsConnectTargets } from './deviceParser.js'
 
 // adb 是 client/server 架构：所有 adb 命令前先确保守护进程已启动（幂等）。
 let serverStarted = false
@@ -104,6 +104,52 @@ export function install(serial, apkPath) {
 /** @returns {Promise<import('../../shared/types.js').AdbDevice[]>} */
 export function listDevices() {
   return exec('devices').then(parseAdbDevices)
+}
+
+/**
+ * 查询 adb server 自带的 mDNS 发现结果中的无线连接目标。
+ * 实测比本机 Bonjour 浏览可靠（adb daemon 与设备端 adbd 同源协议）。
+ * @returns {Promise<string[]>} "ip:port" 列表
+ */
+export async function listMdnsConnectTargets() {
+  return parseMdnsConnectTargets(await exec('mdns', 'services'))
+}
+
+/** 无线传输 serial：ip:port 或 adb 的 mdns 命名条目。 */
+export function isWirelessSerial(serial) {
+  return /^(?:\d{1,3}(?:\.\d{1,3}){3}:\d+|adb-\S+)$/.test(serial)
+}
+
+/**
+ * 探测传输是否真正可用。僵死 transport 在 `adb devices` 里仍显示在线，
+ * 但任何 shell 都会挂起——用短超时区分真假在线。
+ * @param {string} serial
+ */
+export async function isReachable(serial) {
+  try {
+    await execWithTimeout(4000, '-s', serial, 'shell', 'echo', 'ok')
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 清理不可达的无线传输（僵尸），返回清理后的真实在线列表。
+ * USB 设备不探测、不动。
+ * @returns {Promise<import('../../shared/types.js').AdbDevice[]>}
+ */
+export async function pruneWirelessTransports() {
+  const devices = await listDevices()
+  const wireless = devices.filter(
+    (device) => device.state === 'device' && isWirelessSerial(device.serial),
+  )
+  await Promise.all(
+    wireless.map(async (device) => {
+      if (!(await isReachable(device.serial))) await disconnect(device.serial).catch(() => {})
+    }),
+  )
+  return listDevices()
 }
 
 /**

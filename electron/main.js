@@ -81,16 +81,19 @@ deviceMonitor.onDevicesChanged((devices) => broadcast(IPC.devicesChangedEvent, d
 discovery.onDiscovered((target) => broadcast(IPC.discoveredTargetEvent, target))
 
 /**
- * 等待任一在线设备（优先与配对同 IP），全程事件驱动：
+ * 等待配对目标设备真正可用，全程事件驱动：
  * - deviceMonitor 变更推送（覆盖 adb 自带 mdns 自动连接路径）
  * - 发现 tls-connect 服务时主动 connect 加速上线
- * 兜底超时仅防"永不成功"的挂起，不参与流程推进。
+ * 候选 serial 须经可达性探测（防僵尸传输假在线骗过选择）；
+ * 探测失败即自动断开清理。兜底超时仅防"永不成功"，不参与流程推进。
  * @param {string} preferHost
  * @returns {Promise<string>} 上线设备的 serial
  */
 function onceDeviceOnline(preferHost, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     let settled = false
+    let probing = false
+    const rejected = new Set()
     const pick = (devices) => {
       const online = devices.filter((device) => device.state === 'device')
       return online.find((d) => d.serial.startsWith(`${preferHost}:`)) || online[0]
@@ -99,20 +102,26 @@ function onceDeviceOnline(preferHost, timeoutMs = 30000) {
       if (settled) return
       settled = true
       offDevices()
-      offTargets()
       clearTimeout(guard)
       fn()
     }
+    /** 校验候选：探测通过才算上线；僵尸传输顺手清理。 */
+    const consider = async (serial) => {
+      if (settled || !serial || probing || rejected.has(serial)) return
+      probing = true
+      try {
+        if (!(await adb.isReachable(serial))) {
+          rejected.add(serial)
+          await adb.disconnect(serial).catch(() => {}) // 清理僵尸，避免污染后续列表
+          return
+        }
+        finish(() => resolve(serial))
+      } finally {
+        probing = false
+      }
+    }
     const offDevices = deviceMonitor.onDevicesChanged((devices) => {
-      const hit = pick(devices)
-      if (hit) finish(() => resolve(hit.serial))
-    })
-    const offTargets = discovery.onDiscovered((target) => {
-      if (target.kind !== 'connect') return
-      // 只主动连接配对目标本身，避免误连局域网内其他已配对设备
-      if (!target.address.startsWith(`${preferHost}:`)) return
-      const [host, port] = target.address.split(':')
-      adb.connect(host, Number(port)).catch(() => {}) // 失败等后续事件；成功后 monitor 即推
+      void consider(pick(devices)?.serial)
     })
     const guard = setTimeout(
       () => finish(() => reject(new Error('等待设备上线超时，请确认手机亮屏且无线调试已开启'))),
@@ -121,10 +130,7 @@ function onceDeviceOnline(preferHost, timeoutMs = 30000) {
     // 订阅前可能已经连上：立即查一次快照
     adb
       .listDevices()
-      .then((devices) => {
-        const hit = pick(devices)
-        if (hit) finish(() => resolve(hit.serial))
-      })
+      .then((devices) => consider(pick(devices)?.serial))
       .catch(() => {})
   })
 }
@@ -164,7 +170,7 @@ for (const [channel, handler] of Object.entries({
     discovery.stopDiscovery()
     return true
   },
-  [IPC.getDevices]: () => adb.listDevices(),
+  [IPC.getDevices]: () => adb.pruneWirelessTransports(),
   [IPC.disconnect]: (_, serial) => disconnectDevice(serial),
   [IPC.getDeviceInfo]: (_, serial) => helper.getDeviceInfo(serial),
   [IPC.getCachedInstalledApps]: (_, serial) => getCachedInstalledApps(serial),

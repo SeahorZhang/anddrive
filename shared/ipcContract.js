@@ -5,13 +5,14 @@
  *
  * payload 类型定义见 shared/types.js：
  * - adb:pairDevice      (host, port, code) → Promise<serial>；编排 配对→连接→按需安装 Helper，
- *                       进度经 adb:pairing-event 即时推送（回调驱动，无轮询）
+ *                       进度经 adb:pairing-event 即时推送（回调驱动，无轮询）；
+ *                       等待上线期间自动清理不可达的僵尸传输
  * - adb:pairing-event   事件 → PairingEvent（phase：pairing/paired/connecting/connected/installing/installed）
- * - adb:startDiscovery  () → boolean；服务出现经 adb:discovered-target 推送
- * - adb:discovered-target 事件 → DiscoveredServiceTarget（{ kind, address }，每目标只推一次）
+ * - adb:startDiscovery  () → boolean；配对服务出现经 adb:discovered-target 推送
+ * - adb:discovered-target 事件 → string（pairing 服务地址 "ip:port"，每目标只推一次）
  * - adb:devices-changed 事件 → AdbDevice[]（adb track-devices 变更即推，无轮询）
  * - adb:stopDiscovery   () → boolean
- * - adb:getDevices      () → AdbDevice[]（一次性快照查询）
+ * - adb:getDevices      () → AdbDevice[]（返回前先探测并清理不可达的无线僵尸传输）
  * - adb:disconnect      (serial) → boolean（已离线视为成功）
  * - adb:getDeviceInfo   (serial) → DeviceInfo
  * - adb:getCachedInstalledApps (serial) → AppCacheSnapshot | null

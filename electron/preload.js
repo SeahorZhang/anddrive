@@ -19,8 +19,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onPairingEvent: (callback) => subscribe(IPC.pairingEvent, callback),
     startDiscovery: () => invoke(IPC.startDiscovery),
     stopDiscovery: () => invoke(IPC.stopDiscovery),
-    onDiscoveredTarget: (callback) => subscribe(IPC.discoveredTargetEvent, callback),
-    // adb track-devices 变更即推，无轮询
+    onDiscoveredTarget: (callback) => subscribe(IPC.discoveredTargetEvent, callback), // adb track-devices 变更即推，无轮询
     onDevicesChanged: (callback) => subscribe(IPC.devicesChangedEvent, callback),
     getDevices: () => invoke(IPC.getDevices),
     disconnect: (serial) => invoke(IPC.disconnect, serial),

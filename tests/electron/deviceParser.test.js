@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { parseAdbDevices, parseDeviceInfo } from '../../electron/adb/deviceParser.js'
+import {
+  parseAdbDevices,
+  parseDeviceInfo,
+  parseMdnsConnectTargets,
+} from '../../electron/adb/deviceParser.js'
 
 describe('parseAdbDevices', () => {
   it('parses all recognized states and trailing metadata', () => {
@@ -19,6 +23,25 @@ describe('parseAdbDevices', () => {
 
   it('ignores daemon noise and malformed lines', () => {
     expect(parseAdbDevices('* daemon started successfully *\ninvalid\n')).toEqual([])
+  })
+})
+
+describe('parseMdnsConnectTargets', () => {
+  it('extracts unique connect targets and skips pairing entries', () => {
+    const output = [
+      'List of discovered mdns services',
+      'adb-af3d7abd-Zvci5V._adb-tls-connect._tcp\t192.168.100.91:43879',
+      'adb-af3d7abd-Zvci5V._adb-tls-pairing._tcp\t192.168.100.91:41111',
+      'adb-other._adb-tls-connect._tcp\t10.0.0.8:39085',
+      'adb-dup._adb-tls-connect._tcp\t192.168.100.91:43879',
+      '',
+    ].join('\n')
+    expect(parseMdnsConnectTargets(output)).toEqual(['192.168.100.91:43879', '10.0.0.8:39085'])
+  })
+
+  it('returns empty for header-only or unrelated output', () => {
+    expect(parseMdnsConnectTargets('List of discovered mdns services\n')).toEqual([])
+    expect(parseMdnsConnectTargets('')).toEqual([])
   })
 })
 

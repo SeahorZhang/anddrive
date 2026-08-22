@@ -81,10 +81,9 @@
  */
 
 /**
- * mDNS 发现的服务目标：
- * - pairing：配对握手服务（扫码阶段）
- * - connect：无线连接服务（建立 transport）
- * @typedef {{ kind: 'pairing' | 'connect', address: string }} DiscoveredServiceTarget
+ * 配对服务发现事件（mDNS up 即时推送，仅 adb-tls-pairing；
+ * 连接阶段不依赖本机 Bonjour，设备上线信号走 adb:devices-changed）。
+ * @typedef {string} DiscoveredPairingTarget
  */
 
 /**

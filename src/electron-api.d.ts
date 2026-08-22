@@ -10,9 +10,7 @@ interface AndDriveElectronApi {
     ) => () => void
     startDiscovery: () => Promise<boolean>
     stopDiscovery: () => Promise<boolean>
-    onDiscoveredTarget: (
-      callback: (target: import('../../shared/types.js').DiscoveredServiceTarget) => void,
-    ) => () => void
+    onDiscoveredTarget: (callback: (address: string) => void) => () => void
     onDevicesChanged: (
       callback: (devices: import('../../shared/types.js').AdbDevice[]) => void,
     ) => () => void

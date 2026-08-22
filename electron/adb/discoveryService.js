@@ -1,14 +1,12 @@
 import Bonjour from 'bonjour-service'
 
-// mDNS 发现：adb-tls-pairing（配对握手）与 adb-tls-connect（无线连接）。
-// 服务出现时即时回调 onDiscovered 订阅者，无轮询。自持生命周期，不依赖 renderer。
-
+// mDNS 发现：仅浏览 adb-tls-pairing（配对握手）。
+// 无线连接阶段不依赖本机 Bonjour——实测其对 adb-tls-connect 浏览不可靠；
+// 设备上线信号由 adb server 自带 mdns（自动连接）经 track-devices 推送。
 let bonjour = null
 /** @type {import('bonjour-service').Browser|null} */
 let pairingBrowser = null
-/** @type {import('bonjour-service').Browser|null} */
-let connectBrowser = null
-/** @type {Set<(target: import('../../shared/types.js').DiscoveredServiceTarget) => void>} */
+/** @type {Set<(address: string) => void>} */
 const listeners = new Set()
 /** @type {Set<string>} 本次发现周期内已广播过的目标，避免重复通知 */
 const announced = new Set()
@@ -16,8 +14,8 @@ const announced = new Set()
 const firstLanAddress = (svc) => svc.addresses?.find((a) => !a.includes(':') && a !== '127.0.0.1')
 
 /**
- * 订阅新发现的服务。返回取消订阅函数。
- * @param {(target: import('../../shared/types.js').DiscoveredServiceTarget) => void} listener
+ * 订阅新发现的配对服务。返回取消订阅函数。
+ * @param {(address: string) => void} listener
  * @returns {() => void}
  */
 export function onDiscovered(listener) {
@@ -28,26 +26,19 @@ export function onDiscovered(listener) {
 export function startDiscovery() {
   stopDiscovery()
   bonjour = new Bonjour()
-  pairingBrowser = bonjour.find({ type: 'adb-tls-pairing' }, (svc) => announce('pairing', svc))
-  connectBrowser = bonjour.find({ type: 'adb-tls-connect' }, (svc) => announce('connect', svc))
-}
-
-function announce(kind, svc) {
-  const ip = firstLanAddress(svc)
-  if (!ip) return
-  const address = `${ip}:${svc.port}`
-  const key = `${kind}:${address}`
-  if (announced.has(key)) return
-  announced.add(key)
-  const target = { kind, address }
-  for (const listener of listeners) listener(target)
+  pairingBrowser = bonjour.find({ type: 'adb-tls-pairing' }, (svc) => {
+    const ip = firstLanAddress(svc)
+    if (!ip) return
+    const address = `${ip}:${svc.port}`
+    if (announced.has(address)) return
+    announced.add(address)
+    for (const listener of listeners) listener(address)
+  })
 }
 
 export function stopDiscovery() {
   pairingBrowser?.stop()
-  connectBrowser?.stop()
   pairingBrowser = null
-  connectBrowser = null
   bonjour?.destroy()
   bonjour = null
   announced.clear()

@@ -42,8 +42,8 @@ export function usePairing() {
 
     try {
       await startDiscovery()
-      offTarget = onDiscoveredTarget(({ kind, address }) => {
-        if (status.value !== 'waiting' || kind !== 'pairing') return
+      offTarget = onDiscoveredTarget((address) => {
+        if (status.value !== 'waiting') return
         void doPair(address)
       })
     } catch (e) {
