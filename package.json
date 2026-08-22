@@ -6,7 +6,8 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && electron-builder",
+    "build": "node scripts/clean-electron.mjs && pnpm verify-resources && vite build && electron-builder",
+    "verify-resources": "node scripts/verify-resources.js",
     "build:mac:arm64": "vite build && electron-builder --mac --arm64",
     "build:mac:x64": "vite build && electron-builder --mac --x64",
     "build-helper": "bash scripts/build-helper.sh",

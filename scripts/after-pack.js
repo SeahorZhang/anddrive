@@ -32,33 +32,26 @@ export default async function afterPack(context) {
   }
   requireFile(path.join(resources, 'helper-app.apk'))
 
-  if (context.electronPlatformName === 'darwin') {
-    const scrcpyPath = path.join(resources, 'scrcpy', 'scrcpy')
-    requireFile(scrcpyPath)
-    requireFile(path.join(resources, 'scrcpy', 'scrcpy-server'))
-    chmodSync(scrcpyPath, 0o755)
+  if (context.electronPlatformName !== 'darwin') {
+    throw new Error(`AndDrive 仅支持 macOS 打包，收到平台: ${context.electronPlatformName}`)
+  }
+  const scrcpyPath = path.join(resources, 'scrcpy', 'scrcpy')
+  requireFile(scrcpyPath)
+  requireFile(path.join(resources, 'scrcpy', 'scrcpy-server'))
+  chmodSync(scrcpyPath, 0o755)
 
-    const adbPath = path.join(resources, 'adb', 'mac', 'adb')
-    requireFile(adbPath)
-    const architecture = { 1: 'x86_64', 3: 'arm64' }[context.arch]
-    if (!architecture) throw new Error(`Unsupported macOS architecture: ${context.arch}`)
-    execFileSync('lipo', [adbPath, '-thin', architecture, '-output', `${adbPath}.thin`])
-    execFileSync('mv', [`${adbPath}.thin`, adbPath])
-    chmodSync(adbPath, 0o755)
-    const info = execFileSync('lipo', ['-info', adbPath], { encoding: 'utf8' })
-    if (
-      !info.includes(`architecture: ${architecture}`) ||
-      info.includes('Architectures in the fat file')
-    ) {
-      throw new Error(`Packaged ADB has the wrong architecture: ${info.trim()}`)
-    }
-  } else if (context.electronPlatformName === 'win32') {
-    for (const name of ['adb.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll']) {
-      requireFile(path.join(resources, 'adb', 'win', name))
-    }
-  } else if (context.electronPlatformName === 'linux') {
-    const adbPath = path.join(resources, 'adb', 'linux', 'adb')
-    requireFile(adbPath)
-    chmodSync(adbPath, 0o755)
+  const adbPath = path.join(resources, 'adb', 'mac', 'adb')
+  requireFile(adbPath)
+  const architecture = { 1: 'x86_64', 3: 'arm64' }[context.arch]
+  if (!architecture) throw new Error(`Unsupported macOS architecture: ${context.arch}`)
+  execFileSync('lipo', [adbPath, '-thin', architecture, '-output', `${adbPath}.thin`])
+  execFileSync('mv', [`${adbPath}.thin`, adbPath])
+  chmodSync(adbPath, 0o755)
+  const info = execFileSync('lipo', ['-info', adbPath], { encoding: 'utf8' })
+  if (
+    !info.includes(`architecture: ${architecture}`) ||
+    info.includes('Architectures in the fat file')
+  ) {
+    throw new Error(`Packaged ADB has the wrong architecture: ${info.trim()}`)
   }
 }
