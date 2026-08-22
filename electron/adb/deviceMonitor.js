@@ -7,17 +7,22 @@ import { parseAdbDevices } from './deviceParser.js'
 
 let proc = null
 let buffer = ''
+/** @type {import('../../shared/types.js').AdbDevice[] | null} 最近一次已知列表，供订阅者立即回放 */
+let current = null
 /** @type {Set<(devices: import('../../shared/types.js').AdbDevice[]) => void>} */
 const listeners = new Set()
 
 /**
- * 订阅设备列表变更；订阅即启动监听进程。返回取消订阅函数。
+ * 订阅设备列表变更；订阅即启动监听进程，
+ * 且若已有快照则立即回放一次（避免错过订阅前的初始帧）。
+ * 返回取消订阅函数。
  * @param {(devices: import('../../shared/types.js').AdbDevice[]) => void} listener
  * @returns {() => void}
  */
 export function onDevicesChanged(listener) {
   listeners.add(listener)
   ensureTracking()
+  if (current) listener(current.map((device) => ({ ...device })))
   return () => listeners.delete(listener)
 }
 
@@ -54,6 +59,7 @@ function drainFrames() {
     const block = buffer.slice(4, 4 + length)
     buffer = buffer.slice(4 + length)
     const devices = parseAdbDevices(block)
+    current = devices
     for (const listener of listeners) listener(devices)
   }
 }
