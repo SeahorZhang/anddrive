@@ -1,7 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import os from 'node:os'
 import { IPC } from '../shared/ipcContract.js'
 import * as adb from './adb/adbClient.js'
 import { normalizeDisconnectSerial } from './adb/adbDisconnect.js'
@@ -31,9 +30,6 @@ const appLoader = createAppLoader({
   acquireForwardLock: helper.acquireForwardLock,
 })
 
-if (process.platform === 'win32' && os.release().startsWith('6.1'))
-  app.disableHardwareAcceleration()
-if (process.platform === 'win32') app.setAppUserModelId(app.getName())
 if (!app.requestSingleInstanceLock()) {
   app.quit()
   process.exit(0)
@@ -112,8 +108,8 @@ for (const [channel, handler] of Object.entries({
 app.whenReady().then(createWindow)
 app.on('before-quit', scrcpyService.stopAll)
 app.on('window-all-closed', () => {
+  // macOS 常规行为：关闭窗口保留应用，激活时重建窗口
   win = null
-  if (process.platform !== 'darwin') app.quit()
 })
 app.on('second-instance', () => {
   if (win) {

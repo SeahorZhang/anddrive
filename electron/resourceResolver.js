@@ -10,10 +10,18 @@ function resourceBase() {
   return app.isPackaged ? process.resourcesPath : path.join(__dirname, '..', 'resources')
 }
 
-const ADB_BIN = { darwin: 'mac/adb', win32: 'win/adb.exe', linux: 'linux/adb' }[process.platform]
+/**
+ * @returns {string} 相对 resources 的 adb 可执行文件路径
+ */
+function adbBin() {
+  if (process.platform !== 'darwin') {
+    throw new Error(`AndDrive 仅支持 macOS 构建，当前平台: ${process.platform}`)
+  }
+  return 'mac/adb'
+}
 
 export function getAdbPath() {
-  return path.join(resourceBase(), 'adb', ADB_BIN)
+  return path.join(resourceBase(), 'adb', adbBin())
 }
 
 export function getHelperApkPath() {
