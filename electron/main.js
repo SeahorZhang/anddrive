@@ -83,9 +83,10 @@ discovery.onDiscovered((target) => broadcast(IPC.discoveredTargetEvent, target))
 /**
  * 等待配对目标设备真正可用，全程事件驱动：
  * - deviceMonitor 变更推送（覆盖 adb 自带 mdns 自动连接路径）
- * - 发现 tls-connect 服务时主动 connect 加速上线
- * 候选 serial 须经可达性探测（防僵尸传输假在线骗过选择）；
- * 探测失败即自动断开清理。兜底超时仅防"永不成功"，不参与流程推进。
+ * - 候选 serial 须经可达性探测（防僵尸传输假在线骗过选择），探测失败自动断开
+ * - offline 传输可能是"等手机端授权"的挂起连接：不动它，等授权后翻转为 device
+ * - 每 3s 兜底轮询 adb 自带 mDNS 视图主动 connect，让授权弹窗尽快出现；
+ *   30s 护栏仅防"永不成功"，不参与流程推进。
  * @param {string} preferHost
  * @returns {Promise<string>} 上线设备的 serial
  */
@@ -103,6 +104,7 @@ function onceDeviceOnline(preferHost, timeoutMs = 30000) {
       settled = true
       offDevices()
       offConnectTarget()
+      clearInterval(offMdnsFallback)
       clearTimeout(guard)
       fn()
     }
@@ -129,40 +131,22 @@ function onceDeviceOnline(preferHost, timeoutMs = 30000) {
         await adb.connect(host, Number(port)).catch(() => {}) // 失败等下一轮事件
       }
     }
-    /**
-     * 离线的无线传输是握手失败产物（mdns 自动连接与配对密钥同步竞态），
-     * 不清理会一直占位导致卡死等待：即时断开并触发显式重连。
-     */
-    const handleOfflineJunk = async () => {
-      for (const device of await adb.listDevices()) {
-        if (device.state === 'offline' && adb.isWirelessSerial(device.serial)) {
-          await adb.disconnect(device.serial).catch(() => {})
-        }
-      }
-      await reconnectViaAdbMdns()
-    }
-    /** 监听事件统一入口：有在线候选走探测，否则清理离线垃圾并重连。 */
+    /** 在线候选经探测才算可用；offline 传输等待手机端授权后自行翻转。 */
     const evaluate = async (devices) => {
       if (settled || busy || !Array.isArray(devices)) return
       const hit = pick(devices)?.serial
-      if (hit) {
-        await consider(hit)
-        return
-      }
-      if (
-        devices.some((device) => device.state === 'offline' && adb.isWirelessSerial(device.serial))
-      ) {
-        busy = true
-        try {
-          await handleOfflineJunk()
-        } finally {
-          busy = false
-        }
-      }
+      if (hit) await consider(hit)
     }
     const offDevices = deviceMonitor.onDevicesChanged((devices) => {
       void evaluate(devices)
     })
+    // offline 传输可能正在等手机端授权（MIUI 等每条新连接都要确认），
+    // 断开它会掐掉弹窗、逼出第二次提示——所以只等待翻转，不动它。
+    // 兜底轮询 adb 自带 mDNS 视图主动 connect：让授权弹窗尽快出现，
+    // 而不是被动等 adb 隔轮重试。30s 护栏内有效。
+    const offMdnsFallback = setInterval(() => {
+      if (!settled && !busy) void reconnectViaAdbMdns()
+    }, 3000)
     // 配对后密钥同步存在竞态，自动连接常以 offline 收场。
     // tls-connect 端口一已知就立刻显式 connect（重复 connect 幂等），
     // 成功后 track-devices 即推事件——不被动等 adb 自己重试。
