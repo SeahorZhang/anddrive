@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     pair: (h, p, c) => invoke(IPC.pair, h, p, c),
     startDiscovery: () => invoke(IPC.startDiscovery),
     getDiscoveredDevices: () => invoke(IPC.getDiscoveredDevices),
+    getDiscoveredConnectTargets: () => invoke(IPC.getDiscoveredConnectTargets),
+    connectDevice: (host, port) => invoke(IPC.connectDevice, host, port),
     stopDiscovery: () => invoke(IPC.stopDiscovery),
     getDevices: () => invoke(IPC.getDevices),
     disconnect: (serial) => invoke(IPC.disconnect, serial),

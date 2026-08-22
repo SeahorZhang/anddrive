@@ -5,8 +5,10 @@
  *
  * payload 类型定义见 shared/types.js：
  * - adb:pair            (host, port, code) → string
- * - adb:startDiscovery  () → boolean
+ * - adb:startDiscovery  () → boolean（同时浏览 pairing 与 tls-connect 两类服务）
  * - adb:getDiscoveredDevices () → DiscoveryDevice[]（{ name, address }）
+ * - adb:getDiscoveredConnectTargets () → string[]（tls-connect 目标 "ip:port"）
+ * - adb:connectDevice   (host, port) → string；"already connected" 视为成功
  * - adb:stopDiscovery   () → boolean
  * - adb:getDevices      () → AdbDevice[]
  * - adb:disconnect      (serial) → boolean（已离线视为成功）
@@ -22,6 +24,8 @@ export const IPC = {
   pair: 'adb:pair',
   startDiscovery: 'adb:startDiscovery',
   getDiscoveredDevices: 'adb:getDiscoveredDevices',
+  getDiscoveredConnectTargets: 'adb:getDiscoveredConnectTargets',
+  connectDevice: 'adb:connectDevice',
   stopDiscovery: 'adb:stopDiscovery',
   getDevices: 'adb:getDevices',
   disconnect: 'adb:disconnect',

@@ -7,6 +7,8 @@ interface AndDriveElectronApi {
     pair: (host: string, port: number, code: string) => Promise<string>
     startDiscovery: () => Promise<void>
     getDiscoveredDevices: () => Promise<{ name: string; address: string }[]>
+    getDiscoveredConnectTargets: () => Promise<string[]>
+    connectDevice: (host: string, port: number) => Promise<string>
     stopDiscovery: () => Promise<void>
     getDevices: () => Promise<import('../../shared/types.js').AdbDevice[]>
     disconnect: (serial: string) => Promise<boolean>

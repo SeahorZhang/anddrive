@@ -60,6 +60,18 @@ export async function pair(host, port, code) {
   throw lastError
 }
 
+/**
+ * 建立无线 ADB transport（连接设备 tls-connect 端口）。
+ * 注意 adb connect 失败时进程退出码可能仍为 0，需检查 stdout 文案判定结果。
+ * @param {string} host
+ * @param {string|number} port
+ */
+export async function connect(host, port) {
+  const output = await exec('connect', `${host}:${port}`)
+  if (!/connected to/i.test(output)) throw new Error(output || 'adb connect 失败')
+  return output
+}
+
 /** @returns {Promise<import('../../shared/types.js').AdbDevice[]>} */
 export function listDevices() {
   return exec('devices').then(parseAdbDevices)

@@ -80,6 +80,8 @@ for (const [channel, handler] of Object.entries({
     return true
   },
   [IPC.getDiscoveredDevices]: () => discovery.getDiscoveredDevices(),
+  [IPC.getDiscoveredConnectTargets]: () => discovery.getDiscoveredConnectTargets(),
+  [IPC.connectDevice]: (_, host, port) => adb.connect(host, port),
   [IPC.stopDiscovery]: () => {
     discovery.stopDiscovery()
     return true
