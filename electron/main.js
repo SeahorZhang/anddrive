@@ -92,7 +92,7 @@ discovery.onDiscovered((target) => broadcast(IPC.discoveredTargetEvent, target))
 function onceDeviceOnline(preferHost, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     let settled = false
-    let probing = false
+    let busy = false
     const rejected = new Set()
     const pick = (devices) => {
       const online = devices.filter((device) => device.state === 'device')
@@ -107,8 +107,8 @@ function onceDeviceOnline(preferHost, timeoutMs = 30000) {
     }
     /** 校验候选：探测通过才算上线；僵尸传输顺手清理。 */
     const consider = async (serial) => {
-      if (settled || !serial || probing || rejected.has(serial)) return
-      probing = true
+      if (settled || !serial || busy || rejected.has(serial)) return
+      busy = true
       try {
         if (!(await adb.isReachable(serial))) {
           rejected.add(serial)
@@ -117,20 +117,59 @@ function onceDeviceOnline(preferHost, timeoutMs = 30000) {
         }
         finish(() => resolve(serial))
       } finally {
-        probing = false
+        busy = false
+      }
+    }
+    /** 清理离线传输后，用 adb 自带 mDNS 视图找到连接端口显式重连。 */
+    const reconnectViaAdbMdns = async () => {
+      for (const target of await adb.listMdnsConnectTargets().catch(() => [])) {
+        if (!target.startsWith(`${preferHost}:`)) continue
+        const [host, port] = target.split(':')
+        await adb.connect(host, Number(port)).catch(() => {}) // 失败等下一轮事件
+      }
+    }
+    /**
+     * 离线的无线传输是握手失败产物（mdns 自动连接与配对密钥同步竞态），
+     * 不清理会一直占位导致卡死等待：即时断开并触发显式重连。
+     */
+    const handleOfflineJunk = async () => {
+      for (const device of await adb.listDevices()) {
+        if (device.state === 'offline' && adb.isWirelessSerial(device.serial)) {
+          await adb.disconnect(device.serial).catch(() => {})
+        }
+      }
+      await reconnectViaAdbMdns()
+    }
+    /** 监听事件统一入口：有在线候选走探测，否则清理离线垃圾并重连。 */
+    const evaluate = async (devices) => {
+      if (settled || busy || !Array.isArray(devices)) return
+      const hit = pick(devices)?.serial
+      if (hit) {
+        await consider(hit)
+        return
+      }
+      if (
+        devices.some((device) => device.state === 'offline' && adb.isWirelessSerial(device.serial))
+      ) {
+        busy = true
+        try {
+          await handleOfflineJunk()
+        } finally {
+          busy = false
+        }
       }
     }
     const offDevices = deviceMonitor.onDevicesChanged((devices) => {
-      void consider(pick(devices)?.serial)
+      void evaluate(devices)
     })
     const guard = setTimeout(
       () => finish(() => reject(new Error('等待设备上线超时，请确认手机亮屏且无线调试已开启'))),
       timeoutMs,
     )
-    // 订阅前可能已经连上：立即查一次快照
+    // 订阅前可能已经连上或已有离线残留：立即评估一次快照
     adb
       .listDevices()
-      .then((devices) => consider(pick(devices)?.serial))
+      .then(evaluate)
       .catch(() => {})
   })
 }

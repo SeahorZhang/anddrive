@@ -135,19 +135,26 @@ export async function isReachable(serial) {
 }
 
 /**
- * 清理不可达的无线传输（僵尸），返回清理后的真实在线列表。
+ * 清理不可用的无线传输，返回清理后的真实在线列表：
+ * - offline 即握手失败产物（mdns 自动连接竞态），直接断开；
+ * - device 态经短超时探测甄别僵尸（假在线）后清理。
  * USB 设备不探测、不动。
  * @returns {Promise<import('../../shared/types.js').AdbDevice[]>}
  */
 export async function pruneWirelessTransports() {
   const devices = await listDevices()
-  const wireless = devices.filter(
-    (device) => device.state === 'device' && isWirelessSerial(device.serial),
-  )
   await Promise.all(
-    wireless.map(async (device) => {
-      if (!(await isReachable(device.serial))) await disconnect(device.serial).catch(() => {})
-    }),
+    devices
+      .filter((device) => isWirelessSerial(device.serial))
+      .map(async (device) => {
+        if (device.state === 'offline') {
+          await disconnect(device.serial).catch(() => {})
+          return
+        }
+        if (device.state === 'device' && !(await isReachable(device.serial))) {
+          await disconnect(device.serial).catch(() => {})
+        }
+      }),
   )
   return listDevices()
 }
