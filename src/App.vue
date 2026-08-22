@@ -60,6 +60,31 @@ const init = async () => {
   }
 }
 
+// 空闲（未连接）状态下若设备自行上线（启动后台恢复、手机恢复广播），
+// 自动重新初始化进入 home；扫码弹窗打开时交给配对编排，不抢流程。
+let offIdleDevices = null
+const stopIdleWatch = () => {
+  offIdleDevices?.()
+  offIdleDevices = null
+}
+const startIdleWatch = () => {
+  if (offIdleDevices) return
+  offIdleDevices = adb.onDevicesChanged((devices) => {
+    if (connectionState.value !== 'idle' || deviceDialogVisible.value) return stopIdleWatch()
+    if (!devices.some((device) => device.state === 'device')) return
+    void init()
+  })
+}
+watch(
+  [connectionState, deviceDialogVisible],
+  ([state, dialogVisible]) => {
+    if (state === 'idle' && !dialogVisible) startIdleWatch()
+    else stopIdleWatch()
+  },
+  { immediate: true },
+)
+onUnmounted(stopIdleWatch)
+
 // 断开当前无线 ADB 连接：main 侧统一释放 scrcpy/加载/forward；
 // 成功后清空状态回到添加设备页；失败保留连接并展示错误。
 const handleDisconnect = async () => {

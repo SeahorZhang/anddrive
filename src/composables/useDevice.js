@@ -29,9 +29,9 @@ export function useDevice() {
 
   /**
    * 选择唯一在线设备并拉取设备信息。
-   * adb server 的 mDNS 自动连接已被禁用（断开后不得静默重连），
-   * 因此无传输时需主动经 mDNS 视图重连已配对设备；
-   * 手机不在广播时约 2s 快速失败，直接进入扫码页。
+   * adb server 的 mDNS 自动连接已被禁用（断开后不得静默重连）。
+   * 首查未发现传输时不阻塞等待：立即返回 false 让 UI 进入扫码页，
+   * 同时触发后台持续重连——设备上线经 devices-changed 推送，由 App 自动进入 home。
    * 行为像一次 api 调用：成功返回 true（device 已填充），
    * 没有可用设备返回 false；多台在线或获取信息失败时抛错，由调用方展示。
    * @returns {Promise<boolean>} 是否成功连接到一台可用设备
@@ -49,10 +49,9 @@ export function useDevice() {
 
     if (await attempt()) return true
 
-    const serial = await restoreDevice().catch(() => null)
-    if (!serial) return false
-    apply(serial, await getDeviceInfo(serial))
-    return true
+    // 后台恢复不阻塞关键路径：成败均由 devices-changed 事件驱动后续流转
+    void restoreDevice().catch(() => null)
+    return false
   }
 
   /**
