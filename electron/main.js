@@ -102,6 +102,7 @@ function onceDeviceOnline(preferHost, timeoutMs = 30000) {
       if (settled) return
       settled = true
       offDevices()
+      offConnectTarget()
       clearTimeout(guard)
       fn()
     }
@@ -161,6 +162,14 @@ function onceDeviceOnline(preferHost, timeoutMs = 30000) {
     }
     const offDevices = deviceMonitor.onDevicesChanged((devices) => {
       void evaluate(devices)
+    })
+    // 配对后密钥同步存在竞态，自动连接常以 offline 收场。
+    // tls-connect 端口一已知就立刻显式 connect（重复 connect 幂等），
+    // 成功后 track-devices 即推事件——不被动等 adb 自己重试。
+    const offConnectTarget = discovery.onConnectTarget((address) => {
+      if (!address.startsWith(`${preferHost}:`)) return
+      const [host, port] = address.split(':')
+      adb.connect(host, Number(port)).catch(() => {})
     })
     const guard = setTimeout(
       () => finish(() => reject(new Error('等待设备上线超时，请确认手机亮屏且无线调试已开启'))),
