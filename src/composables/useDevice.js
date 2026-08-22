@@ -13,11 +13,8 @@ const createEmptyDevice = () => ({
   error: null,
 })
 
-/** 启动恢复宽限窗：adb 自带 mDNS 自动连接通常在服务就绪后数秒内完成 */
-const RESTORE_WINDOW_MS = 6000
-
 export function useDevice() {
-  const { getDevices, getDeviceInfo, onDevicesChanged } = adb
+  const { getDevices, getDeviceInfo, restoreDevice } = adb
   const device = ref(createEmptyDevice())
 
   /**
@@ -32,8 +29,8 @@ export function useDevice() {
 
   /**
    * 选择唯一在线设备并拉取设备信息。
-   * 应用启动时 adb 的 mDNS 自动连接可能在服务就绪后几秒才完成：
-   * 首次查询未发现设备时，保持监听一个宽限窗，期间任何设备上线立即重试。
+   * adb server 的 mDNS 自动连接已被禁用（断开后不得静默重连），
+   * 因此无传输时需主动经 mDNS 视图重连已配对设备（约 6s 内完成，超时视为未连接）。
    * 行为像一次 api 调用：成功返回 true（device 已填充），
    * 没有可用设备返回 false；多台在线或获取信息失败时抛错，由调用方展示。
    * @returns {Promise<boolean>} 是否成功连接到一台可用设备
@@ -51,26 +48,9 @@ export function useDevice() {
 
     if (await attempt()) return true
 
-    const selection = await new Promise((resolve) => {
-      const finish = (value) => {
-        off()
-        clearTimeout(timer)
-        resolve(value)
-      }
-      // 直接评估事件快照，宽限窗内不做探测式重复查询
-      const evaluate = (devices) => {
-        const found = selectDevice(devices)
-        if (found.status !== 'none') finish(found)
-      }
-      const off = onDevicesChanged(evaluate)
-      const timer = setTimeout(() => finish(null), RESTORE_WINDOW_MS)
-    })
-
-    if (!selection) return false
-    if (selection.status === 'conflict') {
-      throw conflictError(selection.devices.map((d) => d.serial).join(', '))
-    }
-    apply(selection.device.serial, await getDeviceInfo(selection.device.serial))
+    const serial = await restoreDevice().catch(() => null)
+    if (!serial) return false
+    apply(serial, await getDeviceInfo(serial))
     return true
   }
 

@@ -16,10 +16,13 @@ let serverStarted = false
 const ROUTINE_TIMEOUT_MS = 10000
 export const INSTALL_TIMEOUT_MS = 180000
 
+// 禁用 adb server 的 mDNS 自动连接：断开后不得静默重连，连接一律由应用显式发起。
+const SERVER_ENV = { ...process.env, ADB_MDNS_AUTO_CONNECT: '0' }
+
 export async function ensureServer() {
   if (serverStarted) return
   await new Promise((resolve, reject) => {
-    execFile(getAdbPath(), ['start-server'], (err) => {
+    execFile(getAdbPath(), ['start-server'], { env: SERVER_ENV }, (err) => {
       if (err) reject(err)
       else {
         serverStarted = true
@@ -27,6 +30,19 @@ export async function ensureServer() {
       }
     })
   })
+}
+
+/**
+ * 以受管配置（重）启 adb server。
+ * 旧实例可能由外部工具或此前版本拉起（未带禁用自动连接的 env），
+ * 先 kill 再启动才能让配置生效；应用启动时调用一次。
+ */
+export async function restartManagedServer() {
+  await new Promise((resolve) => {
+    execFile(getAdbPath(), ['kill-server'], () => resolve())
+  })
+  serverStarted = false
+  await ensureServer()
 }
 
 /** @param {...string} args */

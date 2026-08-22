@@ -8,6 +8,8 @@
  *                       进度经 adb:pairing-event 即时推送（回调驱动，无轮询）；
  *                       等待上线期间自动清理不可达的僵尸传输
  * - adb:pairing-event   事件 → PairingEvent（phase：pairing/paired/connecting/connected/installing/installed）
+ * - adb:restoreDevice   () → Promise<serial | null>；应用启动时主动经 adb mDNS 视图
+ *                       重连已配对设备（mDNS 自动连接已被禁用），超时返回 null
  * - adb:startDiscovery  () → boolean；配对服务出现经 adb:discovered-target 推送
  * - adb:discovered-target 事件 → string（pairing 服务地址 "ip:port"，每目标只推一次）
  * - adb:devices-changed 事件 → AdbDevice[]（adb track-devices 变更即推，无轮询）
@@ -24,6 +26,7 @@
 
 export const IPC = {
   pairDevice: 'adb:pairDevice',
+  restoreDevice: 'adb:restoreDevice',
   pairingEvent: 'adb:pairing-event',
   startDiscovery: 'adb:startDiscovery',
   discoveredTargetEvent: 'adb:discovered-target',

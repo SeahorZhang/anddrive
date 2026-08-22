@@ -77,27 +77,21 @@ async function disconnectDevice(rawSerial) {
 function broadcast(channel, payload) {
   for (const win of BrowserWindow.getAllWindows()) win.webContents.send(channel, payload)
 }
-deviceMonitor.onDevicesChanged((devices) => broadcast(IPC.devicesChangedEvent, devices))
-discovery.onDiscovered((target) => broadcast(IPC.discoveredTargetEvent, target))
 
 /**
- * 等待配对目标设备真正可用，全程事件驱动：
- * - deviceMonitor 变更推送（覆盖 adb 自带 mdns 自动连接路径）
- * - 候选 serial 须经可达性探测（防僵尸传输假在线骗过选择），探测失败自动断开
- * - offline 传输可能是"等手机端授权"的挂起连接：不动它，等授权后翻转为 device
- * - 每 3s 兜底轮询 adb 自带 mDNS 视图主动 connect，让授权弹窗尽快出现；
- *   30s 护栏仅防"永不成功"，不参与流程推进。
- * @param {string} preferHost
+ * 等待任一可用设备上线（全程事件驱动 + mDNS 视图主动 connect）。
+ * @param {string|null} preferHost 优先匹配的配对来源 IP；null 表示任意设备
  * @returns {Promise<string>} 上线设备的 serial
  */
-function onceDeviceOnline(preferHost, timeoutMs = 30000) {
+function onceDeviceOnline(preferHost = null, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     let settled = false
     let busy = false
     const rejected = new Set()
+    const matchHost = (serial) => !preferHost || serial.startsWith(`${preferHost}:`)
     const pick = (devices) => {
       const online = devices.filter((device) => device.state === 'device')
-      return online.find((d) => d.serial.startsWith(`${preferHost}:`)) || online[0]
+      return online.find((d) => matchHost(d.serial)) || null
     }
     const finish = (fn) => {
       if (settled) return
@@ -126,7 +120,7 @@ function onceDeviceOnline(preferHost, timeoutMs = 30000) {
     /** 清理离线传输后，用 adb 自带 mDNS 视图找到连接端口显式重连。 */
     const reconnectViaAdbMdns = async () => {
       for (const target of await adb.listMdnsConnectTargets().catch(() => [])) {
-        if (!target.startsWith(`${preferHost}:`)) continue
+        if (!matchHost(target)) continue
         const [host, port] = target.split(':')
         await adb.connect(host, Number(port)).catch(() => {}) // 失败等下一轮事件
       }
@@ -151,7 +145,7 @@ function onceDeviceOnline(preferHost, timeoutMs = 30000) {
     // tls-connect 端口一已知就立刻显式 connect（重复 connect 幂等），
     // 成功后 track-devices 即推事件——不被动等 adb 自己重试。
     const offConnectTarget = discovery.onConnectTarget((address) => {
-      if (!address.startsWith(`${preferHost}:`)) return
+      if (!matchHost(address)) return
       const [host, port] = address.split(':')
       adb.connect(host, Number(port)).catch(() => {})
     })
@@ -191,9 +185,19 @@ async function pairDevice(event, host, port, code) {
   return serial
 }
 
+/**
+ * 启动恢复：主动经 adb 自带 mDNS 视图重连已配对设备。
+ * mDNS 自动连接已被禁用（断开后不得静默重连），恢复连接必须显式发起。
+ * @returns {Promise<string | null>} 上线设备的 serial；超时未发现返回 null
+ */
+async function restoreDevice() {
+  return await onceDeviceOnline(null, 6000).catch(() => null)
+}
+
 // IPC handlers：channel 名以 shared/ipcContract.js 为唯一事实来源
 for (const [channel, handler] of Object.entries({
   [IPC.pairDevice]: pairDevice,
+  [IPC.restoreDevice]: () => restoreDevice(),
   [IPC.startDiscovery]: () => {
     discovery.startDiscovery()
     return true
@@ -223,7 +227,13 @@ for (const [channel, handler] of Object.entries({
   ipcMain.handle(channel, handler)
 }
 
-app.whenReady().then(createWindow)
+app.whenReady().then(async () => {
+  // 先以受管配置重启 adb server（禁用 mDNS 自动连接），再启动事件监听与窗口
+  await adb.restartManagedServer()
+  deviceMonitor.onDevicesChanged((devices) => broadcast(IPC.devicesChangedEvent, devices))
+  discovery.onDiscovered((target) => broadcast(IPC.discoveredTargetEvent, target))
+  createWindow()
+})
 app.on('before-quit', scrcpyService.stopAll)
 app.on('window-all-closed', () => {
   // macOS 常规行为：关闭窗口保留应用，激活时重建窗口

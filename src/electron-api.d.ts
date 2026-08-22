@@ -5,6 +5,7 @@ interface AndDriveElectronApi {
   startScrcpy: (options: import('../../shared/types.js').ScrcpyLaunchInput) => Promise<unknown>
   adb: {
     pairDevice: (host: string, port: number, code: string) => Promise<string>
+    restoreDevice: () => Promise<string | null>
     onPairingEvent: (
       callback: (event: import('../../shared/types.js').PairingEvent) => void,
     ) => () => void
