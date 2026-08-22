@@ -3,7 +3,7 @@ import {
   isAlreadyDisconnectedError,
   isMissingForwardError,
   normalizeDisconnectSerial,
-} from '../../electron/adbDisconnect.js'
+} from '../../electron/adb/errors.js'
 
 describe('disconnect validation and result classification', () => {
   it.each(['device:5555', '192.168.1.20:5555', '[::1]:5555'])('accepts serial %s', (serial) => {

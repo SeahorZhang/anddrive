@@ -15,8 +15,8 @@ AndDrive 当前是 Electron 43 + Vue 3 + Vite 的 Android 无线调试桌面工�
 | Phase 1 质量安全网 | ✅ 已完成 |
 | Phase 2 缺陷修复与清理 | ✅ 已完成 |
 | Phase 3 IPC bridge 与单设备会话 | ✅ 已完成 |
-| Phase 4 拆分 Electron 服务 | ○ 未开始 |
-| Phase 5 拆分 AppList | ○ 未开始 |
+| Phase 4 拆分 Electron 服务 | ✅ 已完成 |
+| Phase 5 拆分 AppList | ✅ 已完成 |
 | Phase 6 macOS-only 构建收敛 | ◐ 第 1 项已完成 |
 
 ### 已完成基线（含计划外进展）
@@ -26,13 +26,12 @@ AndDrive 当前是 Electron 43 + Vue 3 + Vite 的 Android 无线调试桌面工�
 - **功能精简（计划外）**：电量与存储信息已整体删除——`dumpsys battery`、`df -h`、对应 UI/图标/类型字段全部移除，`getDeviceInfo` 只返回 serial/model/deviceName。
 - **构建收敛（计划外）**：`build:win:x64`、`build:linux:x64`、`build:mac:x64` 脚本、electron-builder 对应段、main/adb/scrcpy/after-pack/download-adb 中的平台分支及 `resources/adb/{win,linux}` 二进制全部移除；README 已声明支持范围。
 - **Renderer API 收口（计划外）**：删除 `useAdb` composable 及其兜底 stub，新增 `src/services/desktopApi.js` 作为唯一桥接，业务组件统一 import 该模块。
+- **Electron 服务拆分（Phase 4）**：`electron/adb.js` 单体已按职责拆分为 `adb/`、`helper/`、`cache/`、`scrcpy/` 四组模块；新增 `electron/paths.js` 统一资源 resolver，消除 ADB/scrcpy 双份硬编码路径；scrcpy 进程按 serial 关联，支持定向停止。
+- **AppList 拆分（Phase 5）**：数据加载与启动流分别收敛到 `useInstalledApps` / `useAppLauncher`；MRU 重排合并为纯函数 `appOrdering.js` 并有单元测试；`AppList.vue` 从 316 行降到 125 行，只保留搜索与组合。
 
 ### 当前剩余问题
 
-- `electron/adb.js`（约 500 行）仍混合 ADB 执行、mDNS 发现、Helper 安装/升级、HTTP 客户端、图标批量协议与缓存协调。
-- `src/components/home/AppList.vue`（约 316 行）同时维护缓存事件、图标状态、搜索、MRU 与启动状态管理。
-- scrcpy 进程与 App load 仍未按 serial 建立归属注册表（Phase 4 范围）。
-- ADB/scrcpy 资源路径在 `electron/adb.js` 与 `electron/scrcpy.js` 各自硬编码；`scripts/build-helper.sh` 仍优先 Homebrew 固定 Gradle 路径而非 `helper-app/gradlew`；`vite.config.js` 读取配置时即删除 `dist-electron`。
+- `scripts/build-helper.sh` 仍优先 Homebrew 固定 Gradle 路径而非 `helper-app/gradlew`；`vite.config.js` 读取配置时即删除 `dist-electron`。
 
 ## Recommended approach
 
@@ -51,55 +50,45 @@ AndDrive 当前是 Electron 43 + Vue 3 + Vite 的 Android 无线调试桌面工�
 
 **验收结果**：channel 字符串仅存在于 contract/main/preload；Renderer 源码无 scrcpy CLI 参数；多设备冲突可见且不静默选择；serial 切换或断开后旧状态不会污染当前视图。
 
-## Phase 4 — 拆分 Electron ADB/Helper/scrcpy 服务
+## Phase 4 — 拆分 Electron ADB/Helper/scrcpy 服务 ✅
 
-**目标**：保留 IPC 行为，按职责拆分 `electron/adb.js`，使核心逻辑可独立测试。
-
-**建议结构**：
+**实际落地结构**：
 
 ```text
 electron/
-  adb/adbClient.js              # ADB 路径、命令执行、设备/断开/forward
-  adb/deviceParser.js           # devices、device info 纯解析（parsers.js 已有基础）
-  adb/discoveryService.js       # Bonjour mDNS 生命周期
-  helper/helperLifecycle.js     # 安装、启动、ping、升级、forward
-  helper/helperClient.js        # HTTP、重试、JSON/buffer 请求
-  helper/helperProtocol.js      # 端点、版本、图标帧解析
-  helper/appLoader.js           # 应用列表、图标、缓存协调和进度事件
-  cache/appCache.js
-  scrcpy/scrcpyService.js       # 资源、进程、临时图标目录
+  paths.js                      # 统一资源 resolver（adb/scrcpy/helper-apk）
+  adb/
+    adbClient.js                # execFile 封装、ensureServer、pair、devices、disconnect、getDeviceInfo
+    deviceParser.js             # devices / device info 纯解析
+    errors.js                   # 断开与 forward 错误分类（原 adbDisconnect.js）
+    discoveryService.js         # Bonjour mDNS 幂等生命周期
+  helper/
+    helperProtocol.js           # 端口/版本/batch 常量、helperUrl、parseIconBatch
+    helperClient.js             # HTTP 超时/重试、JSON/buffer 请求
+    helperLifecycle.js          # 安装、启动、ping、一次性升级、forward 所有权与锁
+    appLoader.js                # 应用列表编排；send 回调注入，不持有 ipc sender
+  cache/appCache.js             # 原 electron/appCache.js 迁入（schema 同迁）
+  scrcpy/scrcpyService.js       # 进程按 serial 关联，stopScrcpy(serial?) 定向停止
 ```
 
-**迁移顺序**：
+**要点**：
 
-1. 先提取 ADB 基础命令封装、forward/remove-forward 与 devices 解析。
-2. 提取 Bonjour discovery，确保 start/stop 幂等且不依赖 renderer。
-3. 提取 Helper 安装/启动/协议升级和 forward 生命周期。
-4. 提取 HTTP/超时/重试、`/ping`、`/apps`、`/icons-bin`、legacy fallback、`parseIconBatch`。
-5. 提取 App loader orchestration：依赖注入使用 ADB/Helper/cache，不直接持有 ipc sender。
-6. 重构 scrcpy service：以 serial 关联进程，统一启动/停止和临时目录清理；资源 resolver 统一后不再各自硬编码。
+- `main.js` 收敛为纯组装层：handler map 只做服务调用与 sender 桥接。
+- `appLoader` 通过注入的 `send(payload)` 回调输出进度事件；`uniqueApps` / `reconcileCachedApps` 作为纯函数导出可单测。
+- forward 队列锁与 `activeForward` 所有权集中在 `helperLifecycle`，加载与断开共用同一把锁，行为与拆分前一致。
 
-> 原第 6 条（getDeviceInfo 命令执行与解析分离、修正 `df -h` 假设）已随电量/存储功能删除而失效，予以移除。
+**验收结果**：配对、Helper 安装、列表/缓存/图标批量及 legacy fallback、取消加载、断开、scrcpy 启停行为保持不变（53 例测试通过）；失败与取消路径仍不遗留 forward、进程或临时目录；纯逻辑模块有单元测试，进程边界收敛在 main 组装层。
 
-Android 侧先不全面重写 `HelperService.java`；在协议稳定后再按 `HelperProtocol`、HTTP server、应用 repository、icon repository、batch codec 逐步提取，并在真实设备上验证 ADB forward 访问仍正常。
+## Phase 5 — 拆分 AppList 与 Vue 状态逻辑 ✅
 
-**验收**：配对、Helper 安装、首次列表、缓存、图标批量和 legacy fallback、取消加载、断开、scrcpy 启停行为保持不变；失败和取消路径不遗留 forward、进程或临时目录；每个新服务有纯单元测试或明确的集成边界。
+**落地内容**：
 
-## Phase 5 — 拆分 AppList 与 Vue 状态逻辑
+1. **`useInstalledApps(serial, getRecency)`**：管理缓存读取、loadId、IPC 订阅/取消、authoritative 替换、图标 patch、loading/complete 状态与 serial/unmount 清理；替换列表时通过 `getRecency` 保留最近启动排序。
+2. **`useAppLauncher(serial, installedApps, recencyPackages)`**：管理 pending icon launch、launching/error 标记、desktopApi 启动调用与 MRU；图标晚到经 `watch(apps)` 触发延迟启动，加载完成仍缺图标的请求统一失败。
+3. **纯函数 `appOrdering.js`**：`orderApps` / `pruneMru` 合并了原 `replaceApps`/`promoteApp` 的重复 Map 重排逻辑（tests/renderer/appOrdering.test.js 覆盖）。
+4. **`AppList.vue`** 只保留搜索框、过滤 computed 与两个 composable 的组合（316 → 125 行）；Home 页仅消费 `useDeviceInfo` 展示设备名。
 
-**目标**：让组件只负责组合 composable 和渲染，保留现有缓存优先、图标渐进加载、搜索和 MRU 行为。
-
-**关键文件**：`src/components/home/AppList.vue`、`src/components/home/index.vue`、`src/services/desktopApi.js`、`src/composables/useDeviceInfo.js`；新增 `useInstalledApps.js`、`useAppLauncher.js` 和必要的展示组件。
-
-**工作内容**：
-
-1. `useInstalledApps(serial)` 管理缓存读取、loadId、IPC 订阅/取消、authoritative 列表、图标 patch、loading/complete/error 和 serial/unmount 清理。
-2. `useAppLauncher(serial)` 管理 pending icon launch、launching/error 状态、desktopApi 调用和 MRU 顺序。
-3. `AppList.vue` 只保留搜索和组合；必要时提取 `AppSearch`、`AppGrid`、`AppTile`，不要为简单 markup 过度拆分。
-4. Home 页面只消费统一 `useDeviceInfo` 并展示唯一设备信息（当前仅设备名）。
-5. 将当前 `replaceApps`/`promoteApp` 的重复 Map 重排逻辑合并为一个小型纯函数并测试。
-
-**验收**：搜索、缓存先显、权威结果替换、图标晚到后启动、图标失败、launch error、MRU、serial 切换和卸载行为均有测试或可重复手工验证；`AppList.vue` 不拼 scrcpy CLI、不维护 IPC listener 细节。
+**验收结果**：搜索、缓存先显、权威结果替换、图标晚到后启动、图标失败、launch error、MRU、serial 切换与卸载清理行为保持不变；`AppList.vue` 不拼 scrcpy 参数、不维护 IPC listener 细节。
 
 ## Phase 6 — 收敛 macOS-only 构建与资源流程（部分完成）
 
@@ -138,8 +127,8 @@ Phase 6 与 3/4/5 无依赖，可随时并行
 6. ✅ 构建收敛：Win/Linux/mac-x64 移除；
 7. ✅ desktopApi facade（useAdb 删除）；
 8. ✅ IPC contract 与 scrcpy 参数下沉、单设备 session 与 App 状态机；
-9. Electron service 拆分；
-10. AppList composables/UI 拆分；
+9. ✅ Electron service 拆分；
+10. ✅ AppList composables/UI 拆分；
 11. 资源 resolver、verify-resources 与 gradlew 收敛。
 
 ## Final verification

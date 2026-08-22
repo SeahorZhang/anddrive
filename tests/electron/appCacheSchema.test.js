@@ -6,7 +6,7 @@ import {
   sanitizeIcon,
   sanitizeSnapshot,
   serializeSnapshot,
-} from '../../electron/appCacheSchema.js'
+} from '../../electron/cache/appCacheSchema.js'
 
 const NOW = 2_000_000_000_000
 const iconUrl = `data:image/png;base64,${Buffer.from('png').toString('base64')}`

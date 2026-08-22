@@ -5,8 +5,8 @@ AndDrive 当前支持 macOS 上连接一台 Android 11+ 设备。连接链路如
 ```text
 Vue renderer
   → preload IPC bridge
-  → Electron main
-  → electron/adb.js
+  → Electron main（组装层）
+  → electron/adb/* · electron/helper/*
   → ADB forward
   → Android HelperService
 ```

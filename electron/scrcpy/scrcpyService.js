@@ -1,39 +1,34 @@
 import { spawn } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
-import path from 'node:path'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { app, nativeImage } from 'electron'
+import path from 'node:path'
 import { tmpdir } from 'node:os'
+import { nativeImage } from 'electron'
+import { adbPath, scrcpyPath, scrcpyServerPath } from '../paths.js'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
+/** child process → { serial, iconDir }; serial comes from the `-s` CLI arg. */
 const scrcpyProcesses = new Map()
 
-function resourceBase() {
-  return app.isPackaged ? process.resourcesPath : path.join(__dirname, '..', 'resources')
-}
-
-function scrcpyPath() {
-  return path.join(resourceBase(), 'scrcpy', 'scrcpy')
-}
-
-function scrcpyServerPath() {
-  return path.join(resourceBase(), 'scrcpy', 'scrcpy-server')
-}
-
-function adbPath() {
-  return path.join(resourceBase(), 'adb', 'mac', 'adb')
+function serialOf(args) {
+  const index = args.indexOf('-s')
+  return index >= 0 ? (args[index + 1] ?? null) : null
 }
 
 async function removeIconDirectory(iconDir) {
   await rm(iconDir, { recursive: true, force: true }).catch(() => {})
 }
 
-export function stopScrcpy() {
-  for (const [child, iconDir] of scrcpyProcesses) {
+/**
+ * Kill running mirror processes. With a serial only that device's mirrors die;
+ * without one everything is stopped (quit / disconnect-all paths).
+ * @param {string} [serial]
+ */
+export function stopScrcpy(serial) {
+  for (const [child, info] of scrcpyProcesses) {
+    if (serial && info.serial !== serial) continue
     child.kill('SIGKILL')
-    void removeIconDirectory(iconDir)
+    void removeIconDirectory(info.iconDir)
+    scrcpyProcesses.delete(child)
   }
-  scrcpyProcesses.clear()
 }
 
 async function prepareIcon(iconDataUrl) {
@@ -56,7 +51,12 @@ async function prepareIcon(iconDataUrl) {
   }
 }
 
+/**
+ * @param {string[]} args full scrcpy CLI arguments built by main
+ * @param {string} iconDataUrl
+ */
 export async function startScrcpy(args, iconDataUrl) {
+  const serial = serialOf(args)
   const iconDir = await prepareIcon(iconDataUrl)
   const env = {
     ...process.env,
@@ -78,7 +78,7 @@ export async function startScrcpy(args, iconDataUrl) {
       return
     }
 
-    scrcpyProcesses.set(child, iconDir)
+    scrcpyProcesses.set(child, { serial, iconDir })
     child.once('spawn', () => resolve(true))
     child.once('error', (error) => {
       scrcpyProcesses.delete(child)

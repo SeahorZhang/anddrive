@@ -1,10 +1,17 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import * as adb from './adb.js'
 import { CHANNELS } from './ipcContract.js'
-import { getCachedInstalledApps } from './appCache.js'
-import { startScrcpy, stopScrcpy } from './scrcpy.js'
+import * as adbClient from './adb/adbClient.js'
+import * as discovery from './adb/discoveryService.js'
+import { normalizeDisconnectSerial } from './adb/errors.js'
+import { getCachedInstalledApps } from './cache/appCache.js'
+import {
+  cleanupDevice,
+  cancelInstalledAppsLoad,
+  loadInstalledApps,
+} from './helper/appLoader.js'
+import { startScrcpy, stopScrcpy } from './scrcpy/scrcpyService.js'
 import { buildScrcpyRequest } from './scrcpyRequest.js'
 import { resolveSession } from '../shared/deviceSession.js'
 
@@ -29,8 +36,6 @@ function createWindow() {
   win = new BrowserWindow({
     title: 'Main window',
     icon: path.join(process.env.VITE_PUBLIC, 'favicon.ico'),
-    // minWidth: 672,
-    // minHeight: 600,
     height: 600,
     width: 1000,
     titleBarStyle: 'hiddenInset',
@@ -47,43 +52,55 @@ function createWindow() {
   }
 }
 
-function startScrcpyFromRequest(options) {
-  const request = buildScrcpyRequest(options)
-  return startScrcpy(request.args, request.iconDataUrl)
+/**
+ * Full disconnect flow for one device: stop its mirrors, release helper
+ * resources, then drop the wireless transport.
+ * @param {string} rawSerial
+ */
+async function disconnectDevice(rawSerial) {
+  const serial = normalizeDisconnectSerial(rawSerial)
+  await adbClient.ensureServer()
+  await cleanupDevice(serial)
+  return adbClient.disconnectTransport(serial)
 }
 
-// ADB IPC handlers
+// IPC handlers: thin composition over the split services.
 for (const [channel, handler] of Object.entries({
-  [CHANNELS.adbPair]: (_, h, p, c) => adb.pair(h, p, c),
+  [CHANNELS.adbPair]: (_, h, p, c) => adbClient.pair(h, p, c),
   [CHANNELS.adbStartDiscovery]: () => {
-    adb.startDiscovery()
+    discovery.startDiscovery()
     return true
   },
-  [CHANNELS.adbGetDiscoveredDevices]: () => adb.getDiscoveredDevices(),
+  [CHANNELS.adbGetDiscoveredDevices]: () => discovery.getDiscoveredDevices(),
   [CHANNELS.adbStopDiscovery]: () => {
-    adb.stopDiscovery()
+    discovery.stopDiscovery()
     return true
   },
-  [CHANNELS.adbGetActiveSession]: async () => resolveSession(await adb.getDevices()),
+  [CHANNELS.adbGetActiveSession]: async () => resolveSession(await adbClient.listDevices()),
   [CHANNELS.adbDisconnect]: async (_, serial) => {
-    stopScrcpy()
-    return adb.disconnectDevice(serial)
+    stopScrcpy(serial)
+    return disconnectDevice(serial)
   },
-  [CHANNELS.adbGetDeviceInfo]: (_, serial) => adb.getDeviceInfo(serial),
+  [CHANNELS.adbGetDeviceInfo]: (_, serial) => adbClient.getDeviceInfo(serial),
   [CHANNELS.adbGetCachedInstalledApps]: (_, serial) => getCachedInstalledApps(serial),
   [CHANNELS.adbLoadInstalledApps]: (event, serial, loadId) =>
-    adb.loadInstalledApps(serial, loadId, event.sender),
+    loadInstalledApps(serial, loadId, (payload) =>
+      event.sender.send(CHANNELS.installedAppEvent, payload),
+    ),
   [CHANNELS.adbCancelInstalledAppsLoad]: (_, loadId) => {
-    adb.cancelInstalledAppsLoad(loadId)
+    cancelInstalledAppsLoad(loadId)
     return true
   },
-  [CHANNELS.scrcpyStart]: (_, options) => startScrcpyFromRequest(options),
+  [CHANNELS.scrcpyStart]: (_, options) => {
+    const request = buildScrcpyRequest(options)
+    return startScrcpy(request.args, request.iconDataUrl)
+  },
 })) {
   ipcMain.handle(channel, handler)
 }
 
 app.whenReady().then(createWindow)
-app.on('before-quit', stopScrcpy)
+app.on('before-quit', () => stopScrcpy())
 app.on('window-all-closed', () => {
   win = null
 })
