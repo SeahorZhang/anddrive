@@ -1,7 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import os from 'node:os'
 import * as adb from './adb.js'
 import { getCachedInstalledApps } from './appCache.js'
 import { startScrcpy, stopScrcpy } from './scrcpy.js'
@@ -16,9 +15,6 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   ? path.join(process.env.APP_ROOT, 'public')
   : RENDERER_DIST
 
-if (process.platform === 'win32' && os.release().startsWith('6.1'))
-  app.disableHardwareAcceleration()
-if (process.platform === 'win32') app.setAppUserModelId(app.getName())
 if (!app.requestSingleInstanceLock()) {
   app.quit()
   process.exit(0)
@@ -88,7 +84,6 @@ app.whenReady().then(createWindow)
 app.on('before-quit', stopScrcpy)
 app.on('window-all-closed', () => {
   win = null
-  if (process.platform !== 'darwin') app.quit()
 })
 app.on('second-instance', () => {
   if (win) {

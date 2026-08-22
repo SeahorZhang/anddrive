@@ -3,10 +3,6 @@
  * @property {string} serial
  * @property {string} model
  * @property {string} deviceName
- * @property {number} battery
- * @property {boolean} isCharging
- * @property {string} storage
- * @property {number} storagePercent
  */
 
 /**

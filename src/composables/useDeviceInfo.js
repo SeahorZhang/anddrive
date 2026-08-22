@@ -4,10 +4,6 @@ const emptyDevice = () => ({
   model: '',
   brand: '',
   deviceName: '',
-  battery: -1,
-  isCharging: false,
-  storage: '',
-  storagePercent: 0,
   error: null,
 })
 

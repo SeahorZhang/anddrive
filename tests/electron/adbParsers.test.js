@@ -33,45 +33,33 @@ describe('parseAdbDevices', () => {
 })
 
 describe('parseDeviceInfo', () => {
-  it('parses market name, battery, charging, and data storage', () => {
+  it('prefers market name when available', () => {
     expect(
       parseDeviceInfo({
         serial: 'device:5555',
         model: 'Model',
         brand: 'Brand',
         marketname: 'Television',
-        batteryOutput: '  level: 87\n  status: 2',
-        storageOutput: '/dev/block/data 100G 25G 75G 25% /data',
       }),
     ).toEqual({
       serial: 'device:5555',
       model: 'Model',
       deviceName: 'Brand Television',
-      battery: 87,
-      isCharging: true,
-      storage: '25G/100G',
-      storagePercent: 25,
     })
   })
 
-  it('falls back to brand and model when outputs are missing', () => {
+  it('falls back to brand and model when market name is missing', () => {
     expect(
       parseDeviceInfo({
         serial: 'serial',
         model: 'Model',
         brand: 'Brand',
         marketname: '',
-        batteryOutput: '',
-        storageOutput: '',
       }),
     ).toEqual({
       serial: 'serial',
       model: 'Model',
       deviceName: 'Brand Model',
-      battery: -1,
-      isCharging: false,
-      storage: '',
-      storagePercent: 0,
     })
   })
 })

@@ -16,9 +16,8 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 function getAdbPath() {
-  const bin = { darwin: 'mac/adb', win32: 'win/adb.exe', linux: 'linux/adb' }[process.platform]
   const base = app.isPackaged ? process.resourcesPath : path.join(__dirname, '..', 'resources')
-  return path.join(base, 'adb', bin)
+  return path.join(base, 'adb', 'mac', 'adb')
 }
 
 function getHelperApkPath() {
@@ -486,12 +485,10 @@ export async function disconnectDevice(serial) {
 export async function getDeviceInfo(serial) {
   await ensureServer()
 
-  const [model, brand, marketname, batteryOutput, storageOutput] = await Promise.all([
+  const [model, brand, marketname] = await Promise.all([
     adbShell(serial, 'getprop', 'ro.product.model').catch(() => ''),
     adbShell(serial, 'getprop', 'ro.product.brand').catch(() => ''),
     adbShell(serial, 'getprop', 'ro.product.marketname').catch(() => ''),
-    adbShell(serial, 'dumpsys', 'battery').catch(() => ''),
-    adbShell(serial, 'df', '-h').catch(() => ''),
   ])
 
   return parseDeviceInfo({
@@ -499,7 +496,5 @@ export async function getDeviceInfo(serial) {
     model,
     brand,
     marketname,
-    batteryOutput,
-    storageOutput,
   })
 }

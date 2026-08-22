@@ -40,45 +40,5 @@
         ]
       }
     ]
-  },
-  "win": {
-    "target": [
-      {
-        "target": "nsis",
-        "arch": [
-          "x64"
-        ]
-      }
-    ],
-    "artifactName": "${productName}-Windows-${arch}-${version}-Setup.${ext}",
-    "extraResources": [
-      {
-        "from": "resources/adb/win",
-        "to": "adb/win",
-        "filter": [
-          "adb.exe",
-          "AdbWinApi.dll",
-          "AdbWinUsbApi.dll"
-        ]
-      }
-    ]
-  },
-  "nsis": {
-    "oneClick": false,
-    "perMachine": false,
-    "allowToChangeInstallationDirectory": true,
-    "deleteAppDataOnUninstall": false
-  },
-  "linux": {
-    "target": [
-      "AppImage"
-    ],
-    "artifactName": "${productName}-Linux-${arch}-${version}.${ext}",
-    "extraResources": [
-      {
-        "from": "resources/adb/linux/adb",
-        "to": "adb/linux/adb"
-      }
-    ]
   }
 }
