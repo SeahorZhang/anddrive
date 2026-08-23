@@ -1,4 +1,4 @@
-import { adb } from '../services/desktopApi'
+const adb = window.electronAPI.adb
 
 const emptyDevice = () => ({
   model: '',

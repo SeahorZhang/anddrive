@@ -1,4 +1,4 @@
-import { startScrcpy } from '../services/desktopApi'
+const startScrcpy = window.electronAPI.startScrcpy
 
 /**
  * Owns the app-launch flow: immediate launches, launches deferred until an

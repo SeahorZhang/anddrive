@@ -6,8 +6,13 @@ import * as adbClient from './adb/adbClient.js'
 import * as discovery from './adb/discoveryService.js'
 import { normalizeDisconnectSerial } from './adb/errors.js'
 import { deleteAppCache, getCachedInstalledApps } from './cache/appCache.js'
-import { cleanupDevice, cancelInstalledAppsLoad, loadInstalledApps } from './helper/appLoader.js'
-import { installHelper, uninstallHelper } from './helper/helperApk.js'
+import {
+  cancelInstalledAppsLoad,
+  cleanupDevice,
+  installHelper,
+  loadInstalledApps,
+  uninstallHelper,
+} from './helper/helper.js'
 import { startScrcpy, stopScrcpy } from './scrcpy/scrcpyService.js'
 import { buildScrcpyRequest } from './scrcpyRequest.js'
 import { resolveSession } from '../shared/deviceSession.js'
@@ -49,18 +54,6 @@ function createWindow() {
   }
 }
 
-/**
- * Full disconnect flow for one device: stop its mirrors, release helper
- * resources, then drop the wireless transport.
- * @param {string} rawSerial
- */
-async function disconnectDevice(rawSerial) {
-  const serial = normalizeDisconnectSerial(rawSerial)
-  await adbClient.ensureServer()
-  await cleanupDevice(serial)
-  return adbClient.disconnectTransport(serial)
-}
-
 // IPC handlers: thin composition over the split services.
 for (const [channel, handler] of Object.entries({
   [CHANNELS.adbPair]: (_, h, p, c) => adbClient.pair(h, p, c),
@@ -74,9 +67,12 @@ for (const [channel, handler] of Object.entries({
     return true
   },
   [CHANNELS.adbGetActiveSession]: async () => resolveSession(await adbClient.listDevices()),
-  [CHANNELS.adbDisconnect]: async (_, serial) => {
+  [CHANNELS.adbDisconnect]: async (_, rawSerial) => {
+    const serial = normalizeDisconnectSerial(rawSerial)
     stopScrcpy(serial)
-    return disconnectDevice(serial)
+    await adbClient.ensureServer()
+    await cleanupDevice(serial)
+    return adbClient.disconnectTransport(serial)
   },
   [CHANNELS.adbGetDeviceInfo]: (_, serial) => adbClient.getDeviceInfo(serial),
   [CHANNELS.adbGetCachedInstalledApps]: (_, serial) => getCachedInstalledApps(serial),

@@ -1,4 +1,4 @@
-import { adb } from '../services/desktopApi'
+const adb = window.electronAPI.adb
 import { orderApps, pruneMru } from './appOrdering'
 
 /**
@@ -116,5 +116,5 @@ export function useInstalledApps(serial, getRecency = () => []) {
     stopLoad()
   }
 
-  return { apps, loading, iconComplete, setupRequired, applyRecency, load, dispose }
+  return { apps, loading, iconComplete, setupRequired, applyRecency, reset, load, dispose }
 }

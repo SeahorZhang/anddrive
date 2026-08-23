@@ -2,11 +2,12 @@
 import BaseButton from '../BaseButton.vue'
 import { useInstalledApps } from '../../composables/useInstalledApps'
 import { useAppLauncher } from '../../composables/useAppLauncher'
-import { adb } from '../../services/desktopApi'
 
 const props = defineProps({
   serial: String,
 })
+
+const adb = window.electronAPI.adb
 
 const recencyPackages = ref([])
 const installedApps = useInstalledApps(
@@ -45,12 +46,14 @@ async function runMaintenance(action, label, after) {
   }
 }
 
-function uninstallHelper() {
-  void runMaintenance('uninstall', '卸载 Helper', async () => {
+async function uninstallHelper() {
+  try {
     await adb.uninstallHelper(props.serial)
-    installedApps.reset()
-    notice.value = { type: 'ok', text: 'Helper 已卸载，点击安装按钮或重新加载可恢复' }
-  })
+  } catch (e) {
+    console.log(11, e)
+  }
+  // installedApps.reset()
+  // notice.value = { type: 'ok', text: 'Helper 已卸载，点击安装按钮或重新加载可恢复' }
 }
 
 function installHelper() {

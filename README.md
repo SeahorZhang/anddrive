@@ -56,7 +56,7 @@ pnpm build
 
 ```text
 Vue renderer (src/)
-  → src/services/desktopApi.js
+  → window.electronAPI（preload 桥）
   → electron/preload.js
   → electron/main.js（IPC 组装与单设备 teardown）
   → electron/adb/*      ADB 命令、设备解析、mDNS 发现

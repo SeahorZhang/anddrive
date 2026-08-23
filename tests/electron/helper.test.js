@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { normalizeListOutput } from '../../electron/helper/helperList.js'
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('electron', () => ({}))
+
+const { normalizeListOutput } = await import('../../electron/helper/helper.js')
 
 const listJson = (apps) => JSON.stringify({ apps })
 

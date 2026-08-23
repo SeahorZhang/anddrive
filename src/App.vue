@@ -3,7 +3,7 @@ import AddDeviceDialog from './components/AddDeviceDialog.vue'
 import AddDevice from './components/AddDevice.vue'
 import PageHome from './components/home/index.vue'
 import PageHeader from './components/PageHeader.vue'
-import { adb } from './services/desktopApi'
+const adb = window.electronAPI.adb
 
 const { getActiveSession, disconnect: disconnectDevice } = adb
 
