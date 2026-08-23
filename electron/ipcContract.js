@@ -7,10 +7,12 @@
  */
 export const CHANNELS = {
   adbPair: 'adb:pair',
+  adbConnect: 'adb:connect',
   adbStartDiscovery: 'adb:startDiscovery',
   adbGetDiscoveredDevices: 'adb:getDiscoveredDevices',
   adbStopDiscovery: 'adb:stopDiscovery',
   adbGetActiveSession: 'adb:getActiveSession',
+  adbGetDevices: 'adb:getDevices',
   adbDisconnect: 'adb:disconnect',
   adbGetDeviceInfo: 'adb:getDeviceInfo',
   adbGetCachedInstalledApps: 'adb:getCachedInstalledApps',
@@ -18,10 +20,7 @@ export const CHANNELS = {
   adbInstallHelper: 'adb:installHelper',
   adbUninstallHelper: 'adb:uninstallHelper',
   adbLoadInstalledApps: 'adb:loadInstalledApps',
-  adbCancelInstalledAppsLoad: 'adb:cancelInstalledAppsLoad',
-
-  /** Main → renderer push channel; payload is an AppLoadEvent (shared/types.js). */
-  installedAppEvent: 'adb:installed-app',
+  adbGetAppIcons: 'adb:getAppIcons',
 
   /** Payload is a ScrcpyRequest (shared/types.js). */
   scrcpyStart: 'start_scrcpy',

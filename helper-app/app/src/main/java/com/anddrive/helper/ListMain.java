@@ -1,4 +1,4 @@
-package com.andrive.helper;
+package com.anddrive.helper;
 
 import android.content.Context;
 import android.content.Intent;
@@ -22,32 +22,44 @@ import java.util.Map;
 /**
  * app_process one-shot entry point.
  *
- * Runs as shell (uid 2000): `CLASSPATH=<base.apk> app_process /system/bin com.andrive.helper.ListMain`
+ * Runs as shell (uid 2000): `CLASSPATH=<base.apk> app_process /system/bin com.anddrive.helper.ListMain`
  * The APK is only a code container — no component is started and no permission
  * is granted to the package. The result is a single JSON line on stdout:
  * `{"apps":[{"packageName","label","iconPng"?}]}`.
  */
 public final class ListMain {
 
-    private static final String SELF_PACKAGE = "com.andrive.helper";
-    private static final int ICON_SIZE_PX = 256;
+    private static final String SELF_PACKAGE = "com.anddrive.helper";
+    private static final int ICON_SIZE_PX = 128;
     private static final int ICON_QUALITY = 80;
 
     private ListMain() { }
 
     public static void main(String[] args) {
         try {
-            if (Looper.myLooper() == null) Looper.prepareMainLooper();
+            trace("start uid=" + android.os.Process.myUid());
             Context context = systemContext();
             PackageManager pm = context.getPackageManager();
+            trace("context ok");
+
+            // `--icons pkg1,pkg2,...` returns icons for exactly those packages;
+            // no args lists all launchable third-party apps with labels only.
+            if (args.length >= 2 && "--icons".equals(args[0])) {
+                System.out.println(iconMode(pm, args[1].split(",")));
+                System.out.flush();
+                System.exit(0);
+            }
 
             Intent launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
             List<ResolveInfo> activities = pm.queryIntentActivities(launcher, 0);
+            trace("activities=" + activities.size());
 
             Map<String, JSONObject> unique = new LinkedHashMap<>();
             for (ResolveInfo info : activities) {
-                ApplicationInfo appInfo = info.activityInfo != null ? info.activityInfo.applicationInfo : null;
-                if (appInfo == null || (appInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0) continue;
+                ApplicationInfo appInfo =
+                        info.activityInfo != null ? info.activityInfo.applicationInfo : null;
+                if (appInfo == null || (appInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0)
+                    continue;
                 String pkg = appInfo.packageName;
                 // The helper itself has a desktop-icon stub activity; hide it
                 // from AndDrive's own list.
@@ -56,10 +68,9 @@ public final class ListMain {
                 JSONObject obj = new JSONObject();
                 obj.put("packageName", pkg);
                 obj.put("label", safeLabel(pm, info, pkg));
-                String iconBase64 = safeIconBase64(pm, info);
-                if (iconBase64 != null) obj.put("iconPng", iconBase64);
                 unique.put(pkg, obj);
             }
+            trace("apps=" + unique.size());
 
             JSONArray apps = new JSONArray(unique.values());
             JSONObject result = new JSONObject();
@@ -69,14 +80,56 @@ public final class ListMain {
             System.exit(0);
         } catch (Throwable t) {
             t.printStackTrace();
+            System.out.flush();
+            System.err.flush();
             System.exit(1);
         }
     }
 
+    /** Icons (base64 PNG) for the requested packages; failures yield no entry. */
+    private static JSONObject iconMode(PackageManager pm, String[] packages) throws Exception {
+        JSONArray apps = new JSONArray();
+        int done = 0;
+        for (String pkg : packages) {
+            if (pkg == null || pkg.isEmpty()) continue;
+            try {
+                ApplicationInfo info = pm.getApplicationInfo(pkg, 0);
+                JSONObject obj = new JSONObject();
+                obj.put("packageName", pkg);
+                String iconBase64 = safeIconBase64(info.loadIcon(pm));
+                if (iconBase64 != null) obj.put("iconPng", iconBase64);
+                apps.put(obj);
+            } catch (Throwable ignored) {
+                // Unknown/removed package: skip silently.
+            }
+            if (++done % 5 == 0) trace("icons=" + done);
+        }
+        trace("icons done=" + done);
+        return new JSONObject().put("apps", apps);
+    }
+
+    /** Flushed step marker on stdout; the last one alive pinpoints an abort. */
+    private static void trace(String message) {
+        System.out.println("@@" + message);
+        System.out.flush();
+    }
+
+    /** Flushed step marker on stdout; the last one alive pinpoints an abort. */
+
     private static Context systemContext() throws Exception {
         Class<?> atClass = Class.forName("android.app.ActivityThread");
-        Object at = atClass.getDeclaredMethod("systemMain").invoke(null);
-        return (Context) atClass.getMethod("getSystemContext").invoke(at);
+        try {
+            Object at = atClass.getDeclaredMethod("systemMain").invoke(null);
+            return (Context) atClass.getMethod("getSystemContext").invoke(at);
+        } catch (Throwable primary) {
+            // Some builds abort inside systemMain(); fall back to an already
+            // running ActivityThread when one exists.
+            Object current = atClass.getMethod("currentActivityThread").invoke(null);
+            if (current != null) {
+                return (Context) atClass.getMethod("getSystemContext").invoke(current);
+            }
+            throw primary;
+        }
     }
 
     private static String safeLabel(PackageManager pm, ResolveInfo info, String fallback) {
@@ -87,10 +140,9 @@ public final class ListMain {
         return fallback;
     }
 
-    /** @return PNG bytes of the icon scaled to a square of {@code sizePx}, or null on failure. */
-    private static String safeIconBase64(PackageManager pm, ResolveInfo info) {
+    /** @return PNG bytes of the icon scaled to {@code ICON_SIZE_PX}, or null on failure. */
+    private static String safeIconBase64(Drawable drawable) {
         try {
-            Drawable drawable = info.loadIcon(pm);
             Bitmap bitmap = toSquareBitmap(drawable, ICON_SIZE_PX);
             ByteArrayOutputStream png = new ByteArrayOutputStream();
             bitmap.compress(Bitmap.CompressFormat.PNG, ICON_QUALITY, png);

@@ -23,15 +23,16 @@ describe('normalizeListOutput', () => {
     ])
   })
 
-  it('tolerates CRLF-wrapped output and surrounding whitespace', () => {
-    expect(
-      normalizeListOutput(`\r\n${listJson([{ packageName: 'com.a', label: 'A' }])}\n`),
-    ).toEqual([{ packageName: 'com.a', label: 'A', iconUrl: null }])
+  it('tolerates noise around the JSON object (linker/ART warnings)', () => {
+    const noisy = `WARNING: linker: foo\n${listJson([{ packageName: 'com.a', label: 'A' }])}\n[art] bar`
+    expect(normalizeListOutput(noisy)).toEqual([
+      { packageName: 'com.a', label: 'A', iconUrl: null },
+    ])
   })
 
-  it('rejects non-JSON and malformed envelopes', () => {
-    for (const bad of ['not json', '{}', '{"apps":{}}', '{"apps":"x"}']) {
-      expect(() => normalizeListOutput(bad)).toThrow('Invalid helper output')
+  it('rejects non-JSON and malformed envelopes with a raw-output preview', () => {
+    for (const bad of ['', 'no braces at all', '{}', '{"apps":{}}', '{"apps":"x"}']) {
+      expect(() => normalizeListOutput(bad)).toThrow(/Invalid helper output/)
     }
   })
 })

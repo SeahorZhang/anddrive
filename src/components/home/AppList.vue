@@ -1,7 +1,5 @@
 <script setup>
 import BaseButton from '../BaseButton.vue'
-import { useInstalledApps } from '../../composables/useInstalledApps'
-import { useAppLauncher } from '../../composables/useAppLauncher'
 
 const props = defineProps({
   serial: String,
@@ -9,86 +7,102 @@ const props = defineProps({
 
 const adb = window.electronAPI.adb
 
-const recencyPackages = ref([])
-const installedApps = useInstalledApps(
-  () => props.serial,
-  () => recencyPackages.value,
-)
-const launcher = useAppLauncher(() => props.serial, installedApps, recencyPackages)
-const { apps, loading, setupRequired } = installedApps
-const { pendingIconLaunches, launchingPackages, launchErrors, requestLaunch } = launcher
+/** 每批请求的图标数量 */
+const ICON_BATCH_SIZE = 20
+/** 同时进行的图标批次数 */
+const ICON_BATCH_CONCURRENCY = 3
+/** 图标缓存有效期：7 天内不重新拉取 */
+const ICON_REFRESH_MS = 7 * 24 * 60 * 60 * 1000
 
+/** 图标缺失或已过期才需要重新获取 */
+function needsIcon(app) {
+  return !app.iconUrl || Date.now() - (app.iconUpdatedAt || 0) >= ICON_REFRESH_MS
+}
+
+const apps = ref([])
+const loading = ref(false)
 const searchText = ref('')
-const maintenanceBusy = ref(null) // 'uninstall' | 'install' | 'cache' | null
-const notice = ref(null) // { type: 'ok' | 'error', text: string }
 
 const displayApps = computed(() => {
-  if (!searchText.value) return apps.value
-  const keyword = searchText.value.toLowerCase()
+  const keyword = searchText.value.trim().toLowerCase()
+  if (!keyword) return apps.value
   return apps.value.filter(
     (app) =>
       app.label.toLowerCase().includes(keyword) || app.packageName.toLowerCase().includes(keyword),
   )
 })
 
-async function runMaintenance(action, label, after) {
-  if (!props.serial || maintenanceBusy.value) return false
-  maintenanceBusy.value = action
-  notice.value = null
+/** 加载已安装 app 列表（helper 未装时会自动先安装），再按批补图标 */
+async function getAppList() {
+  if (!props.serial) return
+  loading.value = true
   try {
-    await after()
-    return true
+    // 第一阶段：包名 + 名称（快，无图标）
+    apps.value = await adb.loadInstalledApps(props.serial)
   } catch (error) {
-    notice.value = { type: 'error', text: error?.message || `${label}失败` }
-    return false
-  } finally {
-    maintenanceBusy.value = null
+    console.log('获取app列表失败', error?.message)
+    loading.value = false
+    return
   }
+  loading.value = false
+
+  // 第二阶段：缓存缺失/过期的图标，按每组 20 个、3 路并发补齐
+  const pending = apps.value.filter(needsIcon).map((app) => app.packageName)
+  if (pending.length === 0) return
+
+  let cursor = 0
+  async function worker() {
+    while (cursor < pending.length) {
+      const group = pending.slice(cursor, cursor + ICON_BATCH_SIZE)
+      cursor += ICON_BATCH_SIZE
+      try {
+        patchIcons(await adb.getAppIcons(props.serial, group))
+      } catch (error) {
+        console.log('图标批次失败', error?.message)
+      }
+    }
+  }
+  await Promise.all(
+    Array.from(
+      { length: Math.min(ICON_BATCH_CONCURRENCY, Math.ceil(pending.length / ICON_BATCH_SIZE)) },
+      worker,
+    ),
+  )
+}
+
+/** 把一批 {packageName, iconUrl} 合并进当前列表 */
+function patchIcons(fetched) {
+  const byPackage = new Map(apps.value.map((app) => [app.packageName, app]))
+  for (const app of fetched || []) {
+    const existing = byPackage.get(app.packageName)
+    if (!existing || !app.iconUrl) continue
+    existing.iconUrl = app.iconUrl
+  }
+  apps.value = [...byPackage.values()]
+}
+
+async function installHelper() {
+  const stdout = await adb.installHelper(props.serial)
+  if (!stdout.includes('Success')) return console.log('安装失败')
+
+  // 获取app列表
+  await getAppList()
 }
 
 async function uninstallHelper() {
-  try {
-    await adb.uninstallHelper(props.serial)
-  } catch (e) {
-    console.log(11, e)
-  }
-  // installedApps.reset()
-  // notice.value = { type: 'ok', text: 'Helper 已卸载，点击安装按钮或重新加载可恢复' }
+  const { code, stderr, stdout } = await adb.uninstallHelper(props.serial)
+  console.log(1, code, stderr, stdout)
+  // 这台 ROM 卸载成功也返回 code 1 + Failure，所以不做失败分支；仅清空本地列表。
+  // 注意：任何一次 getAppList() 都会自动重装 Helper。
+  apps.value = []
 }
 
-function installHelper() {
-  void runMaintenance('install', '安装 Helper', async () => {
-    await adb.installHelper(props.serial)
-    await installedApps.load()
-    notice.value = { type: 'ok', text: 'Helper 已安装，列表已刷新' }
-  })
+async function clearCache() {
+  await adb.deleteAppCache(props.serial)
+  await getAppList()
 }
 
-function clearCache() {
-  void runMaintenance('cache', '清除缓存', async () => {
-    await adb.deleteAppCache(props.serial)
-    await installedApps.load()
-    notice.value = { type: 'ok', text: '缓存已清除，已从设备重新加载列表' }
-  })
-}
-
-function load() {
-  launcher.reset()
-  void installedApps.load()
-}
-
-if (props.serial) load()
-watch(
-  () => props.serial,
-  () => {
-    searchText.value = ''
-    load()
-  },
-)
-onUnmounted(() => {
-  launcher.reset()
-  installedApps.dispose()
-})
+getAppList()
 </script>
 
 <template>
@@ -104,37 +118,24 @@ onUnmounted(() => {
         <BaseButton
           icon="lucide:download"
           icon-only
-          :loading="maintenanceBusy === 'install'"
-          :disabled="!!maintenanceBusy && maintenanceBusy !== 'install'"
+          :disabled="loading"
           title="安装 Helper 到手机"
           @click="installHelper"
         />
         <BaseButton
           icon="lucide:trash-2"
           icon-only
-          :loading="maintenanceBusy === 'uninstall'"
-          :disabled="!!maintenanceBusy && maintenanceBusy !== 'uninstall'"
+          :disabled="loading"
           title="从手机卸载 Helper"
           @click="uninstallHelper"
         />
         <BaseButton
           icon="lucide:eraser"
           icon-only
-          :loading="maintenanceBusy === 'cache'"
-          :disabled="!!maintenanceBusy && maintenanceBusy !== 'cache'"
+          :disabled="loading"
           title="清除应用缓存列表并重新加载"
           @click="clearCache"
         />
-      </div>
-
-      <div
-        v-if="notice"
-        class="mb-3 rounded-lg px-3 py-2 text-[11px]"
-        :class="
-          notice.type === 'error' ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-600'
-        "
-      >
-        {{ notice.text }}
       </div>
 
       <div v-if="loading && apps.length === 0" class="flex items-center justify-center py-8">
@@ -145,12 +146,7 @@ onUnmounted(() => {
         <div
           v-for="app in displayApps"
           :key="app.packageName"
-          class="relative flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-black/8 bg-gray-50 p-2 transition-all hover:border-black/12 hover:bg-gray-100"
-          :class="{
-            'cursor-wait opacity-60':
-              pendingIconLaunches.has(app.packageName) || launchingPackages.has(app.packageName),
-          }"
-          @click="requestLaunch(app)"
+          class="flex flex-col items-center gap-1 rounded-lg border border-black/8 bg-gray-50 p-2 transition-all hover:border-black/12 hover:bg-gray-100"
         >
           <img
             v-if="app.iconUrl"
@@ -178,36 +174,7 @@ onUnmounted(() => {
           <span class="pointer-events-none w-full truncate text-center text-[10px] text-black/60">{{
             app.label
           }}</span>
-          <span
-            v-if="
-              pendingIconLaunches.has(app.packageName) || launchingPackages.has(app.packageName)
-            "
-            class="pointer-events-none absolute top-1 right-1 h-2 w-2 animate-pulse rounded-full bg-blue-500"
-          />
-          <span
-            v-else-if="launchErrors.has(app.packageName)"
-            class="pointer-events-none absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500"
-            :title="launchErrors.get(app.packageName)"
-          />
         </div>
-      </div>
-
-      <div
-        v-if="!loading && displayApps.length === 0 && setupRequired"
-        class="flex flex-col items-center gap-3 py-12"
-      >
-        <div class="text-base font-semibold text-black/80">安装 AndroMeld Helper</div>
-        <p class="max-w-[280px] text-center text-xs leading-5 text-black/50">
-          此功能需要先在 Android 设备上安装辅助 APK。
-        </p>
-        <BaseButton
-          variant="primary"
-          size="md"
-          :loading="maintenanceBusy === 'install'"
-          @click="installHelper"
-        >
-          安装辅助 APK
-        </BaseButton>
       </div>
 
       <div

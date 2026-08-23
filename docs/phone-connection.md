@@ -8,7 +8,7 @@ Vue renderer
   → Electron main（组装层）
   → electron/adb/* · electron/helper/*
   → ADB exec-out（shell uid 2000）
-  → app_process: com.andrive.helper.ListMain（一次性执行）
+  → app_process: com.anddrive.helper.ListMain（一次性执行）
 ```
 
 ## 前置条件
@@ -36,7 +36,7 @@ Vue renderer
 
 1. 检查并安装 `resources/helper-app.apk`（如需要）。
 2. 通过 `pm path` 解析设备上的 base.apk 路径。
-3. 以 shell 身份一次性执行 `app_process ... com.andrive.helper.ListMain`，stdout 返回应用列表 JSON（标签与图标内联），进程随即退出。
+3. 以 shell 身份一次性执行 `app_process ... com.anddrive.helper.ListMain`，stdout 返回应用列表 JSON（标签与图标内联），进程随即退出。
 4. 先显示有效缓存，再以设备返回的权威列表替换。
 5. 不授予 Helper 权限、不占用任何端口；桌面上仅有一个点击即关的图标占位。
 

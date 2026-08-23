@@ -24,17 +24,17 @@ APK 输出于 `helper-app/app/build/outputs/apk/debug/app-debug.apk`，`pnpm bui
 ## 运行方式
 
 1. 主进程使用 ADB 将 `resources/helper-app.apk` 安装到设备（仅当未安装时）。
-2. 通过 `adb shell pm path com.andrive.helper` 解析设备上的 base.apk 路径。
+2. 通过 `adb shell pm path com.anddrive.helper` 解析设备上的 base.apk 路径。
 3. 以 shell 身份执行一次：
 
    ```text
-   adb -s <serial> exec-out CLASSPATH=<base.apk> app_process /system/bin com.andrive.helper.ListMain
+   adb -s <serial> exec-out CLASSPATH=<base.apk> app_process /system/bin com.anddrive.helper.ListMain
    ```
 
 4. stdout 输出一行 JSON，进程自动退出：
 
    ```json
-   {"apps":[{"packageName":"com.example.app","label":"示例应用","iconPng":"<base64>"}]}
+   { "apps": [{ "packageName": "com.example.app", "label": "示例应用", "iconPng": "<base64>" }] }
    ```
 
 系统应用会被过滤；标签来自 `PackageManager`（`ResolveInfo.loadLabel`），图标渲染为 256×256 PNG 并以 base64 内联。单个应用的标签或图标失败只降级该条目，不影响整体列表。

@@ -1,11 +1,9 @@
 import { execFile } from 'node:child_process'
-import fs from 'node:fs'
 import { adbExec, adbExecSafe, ensureServer } from '../adb/adbClient.js'
-import { normalizeDisconnectSerial } from '../adb/errors.js'
-import { writeAppCache } from '../cache/appCache.js'
+import { readAppCache, writeAppCache } from '../cache/appCache.js'
 import { adbPath, helperApkPath } from '../paths.js'
 
-export const HELPER_PACKAGE = 'com.andrive.helper'
+export const HELPER_PACKAGE = 'com.anddrive.helper'
 
 /**
  * Message prefix marking failures where the helper cannot be installed or run
@@ -13,7 +11,7 @@ export const HELPER_PACKAGE = 'com.andrive.helper'
  */
 export const HELPER_SETUP_ERROR_PREFIX = 'HELPER_SETUP:'
 
-const HELPER_ENTRY_CLASS = 'com.andrive.helper.ListMain'
+const HELPER_ENTRY_CLASS = 'com.anddrive.helper.ListMain'
 const LIST_TIMEOUT_MS = 120000
 const LIST_MAX_BUFFER_BYTES = 256 * 1024 * 1024
 
@@ -42,13 +40,7 @@ export async function deviceApkPath(serial) {
 
 export async function installHelper(serial) {
   const apkPath = helperApkPath()
-  if (!fs.existsSync(apkPath)) {
-    throw new Error('Helper APK not found: ' + apkPath)
-  }
-  // `adb install` exiting 0 is the authoritative success signal — the package
-  // manager has committed the APK. No post-install polling is needed.
-  await adbExec('-s', serial, 'install', '-r', apkPath)
-  return true
+  return adbExec('-s', serial, 'install', '-r', apkPath)
 }
 
 /**
@@ -58,24 +50,9 @@ export async function installHelper(serial) {
  * @param {string} serial
  */
 export async function uninstallHelper(serial) {
-  // await adbExecSafe('-s', serial, 'uninstall', HELPER_PACKAGE)
-  // return true
-
-     execFile(adbPath(), [
-          '-s',
-          serial,
-          'uninstall',
-          HELPER_PACKAGE,
-        ], (err, stdout, stderr) => {
-          console.log(11,err, )
-          console.log(22, stdout, )
-          console.log(33, stderr)
-      // resolve({
-      //   code: err ? (err.code ?? 1) : 0,
-      //   stdout: stdout?.trim() || '',
-      //   stderr: stderr?.trim() || '',
-      // })
-    })
+  // adbExecSafe never rejects: on this ROM a *successful* uninstall still
+  // exits 1 and prints "Failure [...]". Output is logged, not trusted.
+  return await adbExecSafe('-s', serial, 'uninstall', HELPER_PACKAGE)
 }
 
 /**
@@ -84,7 +61,7 @@ export async function uninstallHelper(serial) {
  * classpath: no component starts and no permission is granted to the package.
  * @param {string} serial
  */
-export function runHelperList(serial) {
+export function runHelperList(serial, extraArgs = []) {
   return deviceApkPath(serial).then((apkPath) => {
     if (!apkPath) {
       throw new Error(HELPER_SETUP_ERROR_PREFIX + '设备上未找到 Helper')
@@ -100,11 +77,12 @@ export function runHelperList(serial) {
           'app_process',
           '/system/bin',
           HELPER_ENTRY_CLASS,
+          ...extraArgs,
         ],
         { timeout: LIST_TIMEOUT_MS, maxBuffer: LIST_MAX_BUFFER_BYTES, windowsHide: true },
         (error, stdout, stderr) => {
-          if (error) reject(new Error(String(stderr || error.message)))
-          else resolve(stdout)
+          if (error && !stdout && !stderr) reject(new Error(String(error.message)))
+          else resolve({ stdout: String(stdout || ''), stderr: String(stderr || '') })
         },
       )
     })
@@ -119,14 +97,27 @@ export function runHelperList(serial) {
  * Parse ListMain stdout into renderer-shaped apps.
  * @param {string} text raw JSON line: {"apps":[{"packageName","label","iconPng"?}]}
  */
-export function normalizeListOutput(text) {
+export function normalizeListOutput(stdout, stderr = '') {
+  const raw = String(stdout ?? '')
+  // Some ROMs print linker/ART noise around the JSON line; extract the object
+  // between the outermost braces instead of parsing the whole stdout.
+  const start = raw.indexOf('{')
+  const end = raw.lastIndexOf('}')
+  const detail = [stderr.trim().split('\n').slice(-3).join(' | '), raw.slice(0, 200)]
+    .filter(Boolean)
+    .join(' ␤ ')
+  if (start === -1 || end <= start) {
+    throw new Error(`Invalid helper output: ${detail || '(empty)'}`)
+  }
   let parsed
   try {
-    parsed = JSON.parse(String(text).trim())
+    parsed = JSON.parse(raw.slice(start, end + 1))
   } catch {
-    throw new Error('Invalid helper output')
+    throw new Error(`Invalid helper output: ${detail}`)
   }
-  if (!parsed || !Array.isArray(parsed.apps)) throw new Error('Invalid helper output')
+  if (!parsed || !Array.isArray(parsed.apps)) {
+    throw new Error(`Invalid helper output: no apps array`)
+  }
   return parsed.apps.map((/** @type {any} */ app) => ({
     packageName: typeof app?.packageName === 'string' ? app.packageName : '',
     label: typeof app?.label === 'string' && app.label ? app.label : '',
@@ -156,82 +147,63 @@ function uniqueApps(apps) {
 }
 
 // ---------------------------------------------------------------------------
-// App-list load orchestration
+// App-list loading
 // ---------------------------------------------------------------------------
 
-/** loadId → serial; a cancelled or finished load is removed from this map. */
-const activeLoads = new Map()
+/**
+ * Load the installed-app list (labels and icons inline) for one device.
+ * The app_process run is one-shot, so this resolves with the complete list.
+ * @param {string} serial
+ */
+export async function loadInstalledApps(serial) {
+  await ensureServer()
+  if (!(await isHelperInstalled(serial))) await installHelper(serial)
+  const { stdout } = await runHelperList(serial)
+  const apps = uniqueApps(normalizeListOutput(stdout))
 
-function isActive(loadId) {
-  return activeLoads.has(loadId)
+  // Phase 1 carries no icons; overlay the ones from the local cache so the
+  // renderer can paint a complete-looking list before batch fetching starts.
+  const now = Date.now()
+  const cache = await readAppCache(serial)
+  const cachedByPackage = new Map((cache?.apps || []).map((app) => [app.packageName, app]))
+  const merged = apps.map((app) => {
+    const cachedIcon = cachedByPackage.get(app.packageName)
+    return {
+      ...app,
+      iconUrl: cachedIcon?.iconUrl || null,
+      iconUpdatedAt: cachedIcon?.iconUpdatedAt || null,
+    }
+  })
+  await writeAppCache(serial, snapshot(now, merged))
+  return merged
 }
 
-export function cancelInstalledAppsLoad(loadId) {
-  activeLoads.delete(loadId)
-}
-
-function cancelAppLoadsForSerial(serial) {
-  for (const [loadId, loadSerial] of activeLoads) {
-    if (loadSerial === serial) activeLoads.delete(loadId)
-  }
+/** Shared snapshot shape for the app cache. */
+function snapshot(now, apps) {
+  return { authoritativeAt: now, writtenAt: now, apps: [...apps] }
 }
 
 /**
- * Cancel in-flight Helper work for one device. Nothing persists on the device
- * between loads — the app_process run is one-shot — so only bookkeeping ends.
+ * Fetch icons (base64 PNG data URLs) for one batch of packages — the renderer
+ * calls this repeatedly, ~20 packages at a time.
  * @param {string} serial
+ * @param {string[]} packages
  */
-export async function cleanupDevice(serial) {
-  cancelAppLoadsForSerial(normalizeDisconnectSerial(serial))
-}
+export async function getAppIcons(serial, packages) {
+  const { stdout } = await runHelperList(serial, ['--icons', packages.join(',')])
+  const fetched = normalizeListOutput(stdout).filter((app) => app.iconUrl)
 
-/**
- * Load the installed-app list for one device and stream progress to the renderer.
- * `send` is an injected channel writer; this module never touches ipc directly.
- *
- * @param {string} serial
- * @param {number} loadId
- * @param {(payload: import('../../shared/types.js').AppLoadEvent) => void} send
- */
-export async function loadInstalledApps(serial, loadId, send) {
-  activeLoads.set(loadId, serial)
-  const emit = (phase, apps) => {
-    if (!isActive(loadId)) return
-    send(apps === undefined ? { loadId, phase } : { loadId, phase, apps })
+  // Persist each batch so the next cold start paints icons immediately.
+  const now = Date.now()
+  const cache = await readAppCache(serial)
+  const byPackage = new Map((cache?.apps || []).map((app) => [app.packageName, { ...app }]))
+  for (const app of fetched) {
+    byPackage.set(app.packageName, {
+      ...(byPackage.get(app.packageName) || app),
+      iconUrl: app.iconUrl,
+      iconUpdatedAt: now,
+    })
   }
-
-  try {
-    let apps
-    try {
-      await ensureServer()
-      if (!(await isHelperInstalled(serial))) await installHelper(serial)
-      if (!isActive(loadId)) return
-
-      // One-shot shell-uid execution; labels and icons arrive inline.
-      apps = uniqueApps(normalizeListOutput(await runHelperList(serial)))
-    } catch (error) {
-      // Setup failures become an actionable renderer prompt instead of a
-      // thrown IPC error.
-      if (!String(error?.message || '').startsWith(HELPER_SETUP_ERROR_PREFIX)) throw error
-      const message = String(error.message).slice(HELPER_SETUP_ERROR_PREFIX.length)
-      if (isActive(loadId)) send({ loadId, phase: 'error', code: 'helper-setup', message })
-      return
-    }
-    if (!isActive(loadId)) return
-
-    const now = Date.now()
-    const snapshot = {
-      authoritativeAt: now,
-      writtenAt: now,
-      apps: apps.map((app) => ({
-        ...app,
-        iconUpdatedAt: app.iconUrl ? now : null,
-      })),
-    }
-    await writeAppCache(serial, snapshot)
-    emit('authoritative', apps)
-    emit('complete')
-  } finally {
-    activeLoads.delete(loadId)
-  }
+  await writeAppCache(serial, snapshot(cache?.authoritativeAt || now, [...byPackage.values()]))
+  return fetched
 }

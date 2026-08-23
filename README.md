@@ -64,7 +64,7 @@ Vue renderer (src/)
   → electron/helper/*   Helper 安装、app_process 一次性执行、应用加载
   → electron/cache/     按设备隔离的应用缓存
   → electron/scrcpy/    镜像进程管理
-  → Android app_process: com.andrive.helper.ListMain（shell uid 2000，stdout JSON）
+  → Android app_process: com.anddrive.helper.ListMain（shell uid 2000，stdout JSON）
 ```
 
 缓存位于 Electron userData 目录，并按设备 serial 隔离。应用列表先显示有效缓存，再用设备上的权威列表（标签与图标内联）替换。Helper APK 仅作代码容器：不授予权限、不监听端口，桌面图标为点击即关的占位 Activity。

@@ -6,13 +6,7 @@ import * as adbClient from './adb/adbClient.js'
 import * as discovery from './adb/discoveryService.js'
 import { normalizeDisconnectSerial } from './adb/errors.js'
 import { deleteAppCache, getCachedInstalledApps } from './cache/appCache.js'
-import {
-  cancelInstalledAppsLoad,
-  cleanupDevice,
-  installHelper,
-  loadInstalledApps,
-  uninstallHelper,
-} from './helper/helper.js'
+import { getAppIcons, installHelper, loadInstalledApps, uninstallHelper } from './helper/helper.js'
 import { startScrcpy, stopScrcpy } from './scrcpy/scrcpyService.js'
 import { buildScrcpyRequest } from './scrcpyRequest.js'
 import { resolveSession } from '../shared/deviceSession.js'
@@ -57,6 +51,7 @@ function createWindow() {
 // IPC handlers: thin composition over the split services.
 for (const [channel, handler] of Object.entries({
   [CHANNELS.adbPair]: (_, h, p, c) => adbClient.pair(h, p, c),
+  [CHANNELS.adbConnect]: (_, address) => adbClient.connectDevice(address),
   [CHANNELS.adbStartDiscovery]: () => {
     discovery.startDiscovery()
     return true
@@ -67,11 +62,11 @@ for (const [channel, handler] of Object.entries({
     return true
   },
   [CHANNELS.adbGetActiveSession]: async () => resolveSession(await adbClient.listDevices()),
+  [CHANNELS.adbGetDevices]: () => adbClient.listDevices(),
   [CHANNELS.adbDisconnect]: async (_, rawSerial) => {
     const serial = normalizeDisconnectSerial(rawSerial)
     stopScrcpy(serial)
     await adbClient.ensureServer()
-    await cleanupDevice(serial)
     return adbClient.disconnectTransport(serial)
   },
   [CHANNELS.adbGetDeviceInfo]: (_, serial) => adbClient.getDeviceInfo(serial),
@@ -79,14 +74,8 @@ for (const [channel, handler] of Object.entries({
   [CHANNELS.adbDeleteAppCache]: (_, serial) => deleteAppCache(normalizeDisconnectSerial(serial)),
   [CHANNELS.adbInstallHelper]: (_, serial) => installHelper(normalizeDisconnectSerial(serial)),
   [CHANNELS.adbUninstallHelper]: (_, serial) => uninstallHelper(normalizeDisconnectSerial(serial)),
-  [CHANNELS.adbLoadInstalledApps]: (event, serial, loadId) =>
-    loadInstalledApps(serial, loadId, (payload) =>
-      event.sender.send(CHANNELS.installedAppEvent, payload),
-    ),
-  [CHANNELS.adbCancelInstalledAppsLoad]: (_, loadId) => {
-    cancelInstalledAppsLoad(loadId)
-    return true
-  },
+  [CHANNELS.adbLoadInstalledApps]: (_, serial) => loadInstalledApps(serial),
+  [CHANNELS.adbGetAppIcons]: (_, serial, packages) => getAppIcons(serial, packages),
   [CHANNELS.scrcpyStart]: (_, options) => {
     const request = buildScrcpyRequest(options)
     return startScrcpy(request.args, request.iconDataUrl)

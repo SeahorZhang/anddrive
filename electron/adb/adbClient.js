@@ -63,6 +63,19 @@ export function pair(host, port, code) {
   return ensureServer().then(() => adbExec('pair', `${host}:${port}`, code))
 }
 
+/**
+ * Connect to a wireless device by address (`ip:port`).
+ * adb exits 0 even when the target is unreachable ("cannot connect to ..."),
+ * so success is judged from the output text, not the exit code.
+ * @param {string} address
+ */
+export async function connectDevice(address) {
+  await ensureServer()
+  const output = await adbExec('connect', address)
+  if (!/connected to /i.test(output)) throw new Error(output || '连接失败')
+  return output.trim()
+}
+
 /** @returns {Promise<import('../../shared/types.js').AdbDevice[]>} */
 export async function listDevices() {
   await ensureServer()

@@ -8,25 +8,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   startScrcpy: (options) => invoke(CHANNELS.scrcpyStart, options),
   adb: {
     pair: (h, p, c) => invoke(CHANNELS.adbPair, h, p, c),
+    connect: (address) => invoke(CHANNELS.adbConnect, address),
     startDiscovery: () => invoke(CHANNELS.adbStartDiscovery),
     getDiscoveredDevices: () => invoke(CHANNELS.adbGetDiscoveredDevices),
     stopDiscovery: () => invoke(CHANNELS.adbStopDiscovery),
     getActiveSession: () => invoke(CHANNELS.adbGetActiveSession),
+    getDevices: () => invoke(CHANNELS.adbGetDevices),
     disconnect: (serial) => invoke(CHANNELS.adbDisconnect, serial),
     getDeviceInfo: (serial) => invoke(CHANNELS.adbGetDeviceInfo, serial),
     getCachedInstalledApps: (serial) => invoke(CHANNELS.adbGetCachedInstalledApps, serial),
     deleteAppCache: (serial) => invoke(CHANNELS.adbDeleteAppCache, serial),
     installHelper: (serial) => invoke(CHANNELS.adbInstallHelper, serial),
-    uninstallHelper: (serial) => {
-      console.log(22, serial)
-      return invoke(CHANNELS.adbUninstallHelper, serial)
-    },
-    loadInstalledApps: (serial, loadId) => invoke(CHANNELS.adbLoadInstalledApps, serial, loadId),
-    cancelInstalledAppsLoad: (loadId) => invoke(CHANNELS.adbCancelInstalledAppsLoad, loadId),
-    onInstalledApp: (callback) => {
-      const handler = (_, data) => callback(data)
-      ipcRenderer.on(CHANNELS.installedAppEvent, handler)
-      return () => ipcRenderer.removeListener(CHANNELS.installedAppEvent, handler)
-    },
+    uninstallHelper: (serial) => invoke(CHANNELS.adbUninstallHelper, serial),
+    loadInstalledApps: (serial) => invoke(CHANNELS.adbLoadInstalledApps, serial),
+    getAppIcons: (serial, packages) => invoke(CHANNELS.adbGetAppIcons, serial, packages),
   },
 })
