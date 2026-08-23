@@ -11,12 +11,13 @@ import { orderApps, pruneMru } from './appOrdering'
  * replacements keep their ordering.
  */
 export function useInstalledApps(serial, getRecency = () => []) {
-  const { getCachedInstalledApps, loadInstalledApps, cancelInstalledAppsLoad, onInstalledApp } =
-    adb
+  const { getCachedInstalledApps, loadInstalledApps, cancelInstalledAppsLoad, onInstalledApp } = adb
 
   const apps = ref([])
   const loading = ref(false)
   const iconComplete = ref(false)
+  /** Non-null when the device needs the helper installed before apps can load. */
+  const setupRequired = ref(null)
 
   let nextLoadId = 0
   let currentLoadId = 0
@@ -64,6 +65,7 @@ export function useInstalledApps(serial, getRecency = () => []) {
     apps.value = []
     loading.value = false
     iconComplete.value = false
+    setupRequired.value = null
   }
 
   async function load() {
@@ -84,6 +86,9 @@ export function useInstalledApps(serial, getRecency = () => []) {
         patchIcons(event.apps)
       } else if (event.phase === 'complete') {
         iconComplete.value = true
+        loading.value = false
+      } else if (event.phase === 'error' && event.code === 'helper-setup') {
+        setupRequired.value = { message: event.message || '' }
         loading.value = false
       }
     })
@@ -111,5 +116,5 @@ export function useInstalledApps(serial, getRecency = () => []) {
     stopLoad()
   }
 
-  return { apps, loading, iconComplete, applyRecency, load, dispose }
+  return { apps, loading, iconComplete, setupRequired, applyRecency, load, dispose }
 }

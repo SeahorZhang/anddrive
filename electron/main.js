@@ -5,12 +5,9 @@ import { CHANNELS } from './ipcContract.js'
 import * as adbClient from './adb/adbClient.js'
 import * as discovery from './adb/discoveryService.js'
 import { normalizeDisconnectSerial } from './adb/errors.js'
-import { getCachedInstalledApps } from './cache/appCache.js'
-import {
-  cleanupDevice,
-  cancelInstalledAppsLoad,
-  loadInstalledApps,
-} from './helper/appLoader.js'
+import { deleteAppCache, getCachedInstalledApps } from './cache/appCache.js'
+import { cleanupDevice, cancelInstalledAppsLoad, loadInstalledApps } from './helper/appLoader.js'
+import { installHelper, uninstallHelper } from './helper/helperApk.js'
 import { startScrcpy, stopScrcpy } from './scrcpy/scrcpyService.js'
 import { buildScrcpyRequest } from './scrcpyRequest.js'
 import { resolveSession } from '../shared/deviceSession.js'
@@ -83,6 +80,9 @@ for (const [channel, handler] of Object.entries({
   },
   [CHANNELS.adbGetDeviceInfo]: (_, serial) => adbClient.getDeviceInfo(serial),
   [CHANNELS.adbGetCachedInstalledApps]: (_, serial) => getCachedInstalledApps(serial),
+  [CHANNELS.adbDeleteAppCache]: (_, serial) => deleteAppCache(normalizeDisconnectSerial(serial)),
+  [CHANNELS.adbInstallHelper]: (_, serial) => installHelper(normalizeDisconnectSerial(serial)),
+  [CHANNELS.adbUninstallHelper]: (_, serial) => uninstallHelper(normalizeDisconnectSerial(serial)),
   [CHANNELS.adbLoadInstalledApps]: (event, serial, loadId) =>
     loadInstalledApps(serial, loadId, (payload) =>
       event.sender.send(CHANNELS.installedAppEvent, payload),

@@ -6,8 +6,9 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && electron-builder",
-    "build:mac:arm64": "vite build && electron-builder --mac --arm64",
+    "build": "node scripts/verify-resources.mjs && vite build && electron-builder",
+    "build:mac:arm64": "node scripts/verify-resources.mjs && vite build && electron-builder --mac --arm64",
+    "verify-resources": "node scripts/verify-resources.mjs",
     "build-helper": "bash scripts/build-helper.sh",
     "download-adb": "bash scripts/download-adb.sh",
     "preview": "vite preview",

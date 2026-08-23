@@ -29,6 +29,24 @@ export function adbExec(...args) {
 }
 
 /**
+ * Like adbExec but never rejects: resolves with `{ code, stdout, stderr }` so
+ * callers can inspect exit codes and device output. adb exits non-zero while
+ * still printing a meaningful message (e.g. uninstalling a missing package).
+ * @param {...string} args
+ */
+export function adbExecSafe(...args) {
+  return new Promise((resolve) => {
+    execFile(adbPath(), args, (err, stdout, stderr) => {
+      resolve({
+        code: err ? (err.code ?? 1) : 0,
+        stdout: stdout?.trim() || '',
+        stderr: stderr?.trim() || '',
+      })
+    })
+  })
+}
+
+/**
  * @param {string} serial
  * @param {...string} args
  */

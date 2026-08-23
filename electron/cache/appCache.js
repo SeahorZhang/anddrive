@@ -58,6 +58,13 @@ export async function getCachedInstalledApps(serial) {
   }
 }
 
+/** Delete the cached snapshot of one device. Idempotent. */
+export async function deleteAppCache(serial) {
+  if (typeof serial !== 'string' || !serial || serial.length > 1024) return false
+  await removeFile(cachePath(serial))
+  return true
+}
+
 async function pruneCaches(protectedPath) {
   try {
     const root = cacheRoot()

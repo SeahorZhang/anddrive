@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     disconnect: (serial) => invoke(CHANNELS.adbDisconnect, serial),
     getDeviceInfo: (serial) => invoke(CHANNELS.adbGetDeviceInfo, serial),
     getCachedInstalledApps: (serial) => invoke(CHANNELS.adbGetCachedInstalledApps, serial),
+    deleteAppCache: (serial) => invoke(CHANNELS.adbDeleteAppCache, serial),
+    installHelper: (serial) => invoke(CHANNELS.adbInstallHelper, serial),
+    uninstallHelper: (serial) => invoke(CHANNELS.adbUninstallHelper, serial),
     loadInstalledApps: (serial, loadId) => invoke(CHANNELS.adbLoadInstalledApps, serial, loadId),
     cancelInstalledAppsLoad: (loadId) => invoke(CHANNELS.adbCancelInstalledAppsLoad, loadId),
     onInstalledApp: (callback) => {

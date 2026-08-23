@@ -1,4 +1,4 @@
-# AndDrive 重构计划（2026-08-23 复盘更新）
+# AndDrive 重构计划（2026-08-23 复盘更新 · 全部阶段已完成）
 
 ## Context
 
@@ -10,14 +10,14 @@ AndDrive 当前是 Electron 43 + Vue 3 + Vite 的 Android 无线调试桌面工�
 
 **阶段状态总览**：
 
-| 阶段 | 状态 |
-| --- | --- |
-| Phase 1 质量安全网 | ✅ 已完成 |
-| Phase 2 缺陷修复与清理 | ✅ 已完成 |
-| Phase 3 IPC bridge 与单设备会话 | ✅ 已完成 |
-| Phase 4 拆分 Electron 服务 | ✅ 已完成 |
-| Phase 5 拆分 AppList | ✅ 已完成 |
-| Phase 6 macOS-only 构建收敛 | ◐ 第 1 项已完成 |
+| 阶段                            | 状态            |
+| ------------------------------- | --------------- |
+| Phase 1 质量安全网              | ✅ 已完成       |
+| Phase 2 缺陷修复与清理          | ✅ 已完成       |
+| Phase 3 IPC bridge 与单设备会话 | ✅ 已完成       |
+| Phase 4 拆分 Electron 服务      | ✅ 已完成       |
+| Phase 5 拆分 AppList            | ✅ 已完成       |
+| Phase 6 macOS-only 构建收敛 | ✅ 已完成 |
 
 ### 已完成基线（含计划外进展）
 
@@ -28,10 +28,11 @@ AndDrive 当前是 Electron 43 + Vue 3 + Vite 的 Android 无线调试桌面工�
 - **Renderer API 收口（计划外）**：删除 `useAdb` composable 及其兜底 stub，新增 `src/services/desktopApi.js` 作为唯一桥接，业务组件统一 import 该模块。
 - **Electron 服务拆分（Phase 4）**：`electron/adb.js` 单体已按职责拆分为 `adb/`、`helper/`、`cache/`、`scrcpy/` 四组模块；新增 `electron/paths.js` 统一资源 resolver，消除 ADB/scrcpy 双份硬编码路径；scrcpy 进程按 serial 关联，支持定向停止。
 - **AppList 拆分（Phase 5）**：数据加载与启动流分别收敛到 `useInstalledApps` / `useAppLauncher`；MRU 重排合并为纯函数 `appOrdering.js` 并有单元测试；`AppList.vue` 从 316 行降到 125 行，只保留搜索与组合。
+- **构建流程收敛（Phase 6）**：`build-helper.sh` 改为 `helper-app/gradlew` 优先；新增 `scripts/verify-resources.mjs` 并前置到 `build`；移除 `vite.config.js` 读取配置即删除产物的副作用；README 补全前置条件、命令说明与 Phase 4 后的架构图。
 
 ### 当前剩余问题
 
-- `scripts/build-helper.sh` 仍优先 Homebrew 固定 Gradle 路径而非 `helper-app/gradlew`；`vite.config.js` 读取配置时即删除 `dist-electron`。
+计划内工作已全部完成。剩余事项仅两类：Deferred 的下一轮 CI，以及 Final verification 中需在 macOS 真机复核的设备 smoke 流程。
 
 ## Recommended approach
 
@@ -90,19 +91,18 @@ electron/
 
 **验收结果**：搜索、缓存先显、权威结果替换、图标晚到后启动、图标失败、launch error、MRU、serial 切换与卸载清理行为保持不变；`AppList.vue` 不拼 scrcpy 参数、不维护 IPC listener 细节。
 
-## Phase 6 — 收敛 macOS-only 构建与资源流程（部分完成）
+## Phase 6 — 收敛 macOS-only 构建与资源流程 ✅
 
-**已完成**：第 1 条——Win/Linux/mac-x64 构建脚本、targets、平台分支代码与跨平台二进制已删除，README 已声明 Apple Silicon only。
+**落地内容**：
 
-**剩余工作**：
+1. **平台收敛（早期已完成）**：Win/Linux/mac-x64 构建脚本、targets、平台分支代码与跨平台二进制全部移除，README 声明 Apple Silicon only。
+2. **统一资源 resolver**：`electron/paths.js` 独占 ADB/scrcpy/helper-apk 路径解析（Phase 4 落地），运行时不再有第二处硬编码。
+3. **`build-helper.sh` gradlew 优先**：删除 `/opt/homebrew/opt/gradle@8` 固定路径分支；无 `gradlew` 时回退 PATH 中的 `gradle`；保留 ANDROID_HOME 探测。
+4. **资源前置检查**：新增 `scripts/verify-resources.mjs`（`pnpm run verify-resources` 可独立执行）；`build` 与 `build:mac:arm64` 前置校验 `resources/adb/mac/adb`、`resources/scrcpy/{scrcpy,scrcpy-server}`、`helper-app.apk` 存在且非空，缺失时列出清单并快速失败。`after-pack.js` 保留为打包后最终校验。
+5. **Vite 副作用移除**：删除 `vite.config.js` 顶层 `fs.rmSync('dist-electron')`，读取配置不再破坏既有产物。
+6. **README 补全**：前置条件明确 Apple Silicon 与 SDK 场景；命令段说明 verify-resources 行为与 `download-adb` 首次准备；架构图更新为 Phase 4 后的模块布局。
 
-2. 统一资源 resolver：ADB/scrcpy/helper APK 路径集中一处，消除 `adb.js` 与 `scrcpy.js` 的重复硬编码。
-3. `build-helper.sh` 改为始终优先 `helper-app/gradlew`，删除 Homebrew 固定路径分支（**现状与原计划矛盾，脚本仍以 `/opt/homebrew/opt/gradle@8` 为首选**）；保留现有 ANDROID_HOME 探测。
-4. 增加显式 `verify-resources` 前置检查：`resources/adb/mac/adb`、`resources/scrcpy/{scrcpy,scrcpy-server}`、`helper-app.apk` 缺失时快速失败；`after-pack.js` 保留为最终包校验。
-5. 移除 `vite.config.js` 顶层删除 `dist-electron` 的副作用，改用显式清理步骤或构建工具生命周期。
-6. README 补全：macOS 前置条件、无线调试流程、单设备规则、检查/测试/Helper/打包命令（详细连接说明已在 `docs/phone-connection.md`，README 引用即可，避免重复维护）。
-
-**验收**：干净工作区按文档可完成准备、构建和打包；缺少资源时快速且明确失败；Vite 配置被读取不会删除既有产物；包内二进制通过 after-pack 检查。
+**验收结果**：lint/format:check/typecheck/test 全绿且无副作用；缺资源时构建快速失败并给出修复指引；Vite 配置读取不删除产物；包内资源由 after-pack 最终把关。
 
 ## Deferred — 下一轮 CI
 
@@ -129,7 +129,7 @@ Phase 6 与 3/4/5 无依赖，可随时并行
 8. ✅ IPC contract 与 scrcpy 参数下沉、单设备 session 与 App 状态机；
 9. ✅ Electron service 拆分；
 10. ✅ AppList composables/UI 拆分；
-11. 资源 resolver、verify-resources 与 gradlew 收敛。
+11. ✅ 资源 resolver、verify-resources 与 gradlew 收敛。
 
 ## Final verification
 

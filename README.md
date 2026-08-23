@@ -10,18 +10,17 @@ AndDrive 是一个 macOS 桌面工具，通过 Android 无线调试连接单台 
 2. 在 AndDrive 扫描二维码完成 ADB 配对。
 3. AndDrive 自动发现并连接设备，安装/启动 Helper App，读取应用列表和图标。
 4. 点击应用启动 scrcpy 镜像窗口。
-5. 点击“断开连接”会结束当前无线 ADB 传输、清理 Helper forward 和 scrcpy；Android 中保存的配对记录不会被删除。
+5. 点击“断开连接”会结束当前无线 ADB 传输并停止 scrcpy；Android 中保存的配对记录不会被删除。
 
 AndDrive 遵循**单设备优先**规则：当前只维护一台活动设备，不提供设备切换器或多设备列表。
 
 ## 前置条件
 
-- macOS
+- macOS（Apple Silicon）
 - Node.js 22.18+（或满足 `package.json` engines 的更新版本）
 - pnpm
 - Android 11+ 设备，开启无线调试并与 Mac 位于同一网络
-- Android SDK（构建 Helper App 时需要）
-- 项目资源中的 macOS ADB、scrcpy 和 `resources/helper-app.apk`
+- Android SDK（构建 Helper App 时需要；仅打包已有 APK 时不需要）
 
 详细连接步骤见 [`docs/phone-connection.md`](docs/phone-connection.md)，Helper 协议见 [`helper-app/README.md`](helper-app/README.md)。
 
@@ -49,19 +48,26 @@ pnpm build
 
 `pnpm lint`、`pnpm format:check` 和测试命令只检查，不应修改工作区。需要自动修复 lint 时使用 `pnpm lint:fix`。
 
-`pnpm build-helper` 使用 `helper-app/gradlew` 构建 APK，并复制到 `resources/helper-app.apk`。构建桌面包前确认 ADB、scrcpy 及 Helper APK 资源存在。
+`pnpm build-helper` 使用 `helper-app/gradlew` 构建 APK，并复制到 `resources/helper-app.apk`。
+
+`pnpm build` 会先运行资源校验（`pnpm run verify-resources`），确认 `resources/adb/mac/adb`、`resources/scrcpy/*` 和 `helper-app.apk` 存在且非空，缺资源时快速失败。首次准备资源可运行 `pnpm run download-adb`。
 
 ## 架构
 
 ```text
-Vue renderer
+Vue renderer (src/)
+  → src/services/desktopApi.js
   → electron/preload.js
-  → electron/main.js (IPC 与单设备 teardown)
-  → electron/adb.js (ADB、mDNS、Helper forward、应用加载)
-  → Android HelperService (本地 HTTP 协议)
+  → electron/main.js（IPC 组装与单设备 teardown）
+  → electron/adb/*      ADB 命令、设备解析、mDNS 发现
+  → electron/adb/*      ADB 命令、设备解析、mDNS 发现
+  → electron/helper/*   Helper 安装、app_process 一次性执行、应用加载
+  → electron/cache/     按设备隔离的应用缓存
+  → electron/scrcpy/    镜像进程管理
+  → Android app_process: com.andrive.helper.ListMain（shell uid 2000，stdout JSON）
 ```
 
-缓存位于 Electron userData 目录，并按设备 serial 隔离。应用列表先显示有效缓存，再用设备上的权威列表和渐进图标更新。
+缓存位于 Electron userData 目录，并按设备 serial 隔离。应用列表先显示有效缓存，再用设备上的权威列表（标签与图标内联）替换。Helper APK 仅作代码容器：不授予权限、不监听端口，桌面图标为点击即关的占位 Activity。
 
 ## 连接与断开
 

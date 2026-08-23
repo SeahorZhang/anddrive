@@ -14,6 +14,9 @@ export const CHANNELS = {
   adbDisconnect: 'adb:disconnect',
   adbGetDeviceInfo: 'adb:getDeviceInfo',
   adbGetCachedInstalledApps: 'adb:getCachedInstalledApps',
+  adbDeleteAppCache: 'adb:deleteAppCache',
+  adbInstallHelper: 'adb:installHelper',
+  adbUninstallHelper: 'adb:uninstallHelper',
   adbLoadInstalledApps: 'adb:loadInstalledApps',
   adbCancelInstalledAppsLoad: 'adb:cancelInstalledAppsLoad',
 

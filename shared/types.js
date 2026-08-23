@@ -49,6 +49,7 @@
  * @property {number} loadId
  * @property {AppLoadPhase} phase
  * @property {InstalledApp[]=} apps
+ * @property {string=} code machine-readable error kind, e.g. 'helper-setup'
  * @property {string=} message
  */
 

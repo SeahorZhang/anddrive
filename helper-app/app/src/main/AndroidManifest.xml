@@ -1,29 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
-
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
-        tools:ignore="QueryAllPackagesPermission" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <application
         android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
         android:label="AndDrive Helper">
 
+        <!-- Desktop icon stub; the app itself never runs in normal flows. -->
         <activity
             android:name=".MainActivity"
-            android:exported="true"
-            android:launchMode="singleTask"
             android:excludeFromRecents="true"
-            android:taskAffinity=""
-            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
         </activity>
-
-        <service
-            android:name=".HelperService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse" />
     </application>
 </manifest>

@@ -1,18 +1,25 @@
 <script setup>
+import BaseButton from '../BaseButton.vue'
 import { useInstalledApps } from '../../composables/useInstalledApps'
 import { useAppLauncher } from '../../composables/useAppLauncher'
+import { adb } from '../../services/desktopApi'
 
 const props = defineProps({
   serial: String,
 })
 
 const recencyPackages = ref([])
-const installedApps = useInstalledApps(() => props.serial, () => recencyPackages.value)
+const installedApps = useInstalledApps(
+  () => props.serial,
+  () => recencyPackages.value,
+)
 const launcher = useAppLauncher(() => props.serial, installedApps, recencyPackages)
-const { apps, loading } = installedApps
+const { apps, loading, setupRequired } = installedApps
 const { pendingIconLaunches, launchingPackages, launchErrors, requestLaunch } = launcher
 
 const searchText = ref('')
+const maintenanceBusy = ref(null) // 'uninstall' | 'install' | 'cache' | null
+const notice = ref(null) // { type: 'ok' | 'error', text: string }
 
 const displayApps = computed(() => {
   if (!searchText.value) return apps.value
@@ -22,6 +29,45 @@ const displayApps = computed(() => {
       app.label.toLowerCase().includes(keyword) || app.packageName.toLowerCase().includes(keyword),
   )
 })
+
+async function runMaintenance(action, label, after) {
+  if (!props.serial || maintenanceBusy.value) return false
+  maintenanceBusy.value = action
+  notice.value = null
+  try {
+    await after()
+    return true
+  } catch (error) {
+    notice.value = { type: 'error', text: error?.message || `${label}失败` }
+    return false
+  } finally {
+    maintenanceBusy.value = null
+  }
+}
+
+function uninstallHelper() {
+  void runMaintenance('uninstall', '卸载 Helper', async () => {
+    await adb.uninstallHelper(props.serial)
+    installedApps.reset()
+    notice.value = { type: 'ok', text: 'Helper 已卸载，点击安装按钮或重新加载可恢复' }
+  })
+}
+
+function installHelper() {
+  void runMaintenance('install', '安装 Helper', async () => {
+    await adb.installHelper(props.serial)
+    await installedApps.load()
+    notice.value = { type: 'ok', text: 'Helper 已安装，列表已刷新' }
+  })
+}
+
+function clearCache() {
+  void runMaintenance('cache', '清除缓存', async () => {
+    await adb.deleteAppCache(props.serial)
+    await installedApps.load()
+    notice.value = { type: 'ok', text: '缓存已清除，已从设备重新加载列表' }
+  })
+}
 
 function load() {
   launcher.reset()
@@ -45,13 +91,47 @@ onUnmounted(() => {
 <template>
   <ScrollAreaRoot class="h-0 flex-1">
     <ScrollAreaViewport class="h-full w-full">
-      <div class="relative mb-3">
+      <div class="mb-3 flex items-center gap-1.5">
         <input
           v-model="searchText"
           type="text"
           placeholder="搜索..."
-          class="w-full rounded-lg border border-black/10 bg-gray-100 px-3 py-1.5 text-[11px] text-black/80 placeholder-black/30 transition-colors outline-none focus:border-blue-500/50"
+          class="min-w-0 flex-1 rounded-lg border border-black/10 bg-gray-100 px-3 py-1.5 text-[11px] text-black/80 placeholder-black/30 transition-colors outline-none focus:border-blue-500/50"
         />
+        <BaseButton
+          icon="lucide:download"
+          icon-only
+          :loading="maintenanceBusy === 'install'"
+          :disabled="!!maintenanceBusy && maintenanceBusy !== 'install'"
+          title="安装 Helper 到手机"
+          @click="installHelper"
+        />
+        <BaseButton
+          icon="lucide:trash-2"
+          icon-only
+          :loading="maintenanceBusy === 'uninstall'"
+          :disabled="!!maintenanceBusy && maintenanceBusy !== 'uninstall'"
+          title="从手机卸载 Helper"
+          @click="uninstallHelper"
+        />
+        <BaseButton
+          icon="lucide:eraser"
+          icon-only
+          :loading="maintenanceBusy === 'cache'"
+          :disabled="!!maintenanceBusy && maintenanceBusy !== 'cache'"
+          title="清除应用缓存列表并重新加载"
+          @click="clearCache"
+        />
+      </div>
+
+      <div
+        v-if="notice"
+        class="mb-3 rounded-lg px-3 py-2 text-[11px]"
+        :class="
+          notice.type === 'error' ? 'bg-red-500/10 text-red-500' : 'bg-green-500/10 text-green-600'
+        "
+      >
+        {{ notice.text }}
       </div>
 
       <div v-if="loading && apps.length === 0" class="flex items-center justify-center py-8">
@@ -110,7 +190,25 @@ onUnmounted(() => {
       </div>
 
       <div
-        v-if="!loading && displayApps.length === 0"
+        v-if="!loading && displayApps.length === 0 && setupRequired"
+        class="flex flex-col items-center gap-3 py-12"
+      >
+        <div class="text-base font-semibold text-black/80">安装 AndroMeld Helper</div>
+        <p class="max-w-[280px] text-center text-xs leading-5 text-black/50">
+          此功能需要先在 Android 设备上安装辅助 APK。
+        </p>
+        <BaseButton
+          variant="primary"
+          size="md"
+          :loading="maintenanceBusy === 'install'"
+          @click="installHelper"
+        >
+          安装辅助 APK
+        </BaseButton>
+      </div>
+
+      <div
+        v-else-if="!loading && displayApps.length === 0"
         class="flex items-center justify-center py-8"
       >
         <div class="text-sm text-black/40">

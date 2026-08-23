@@ -32,9 +32,7 @@ cd "$HELPER_APP_DIR"
 
 # 构建APK
 echo "正在构建APK..."
-if [ -x "/opt/homebrew/opt/gradle@8/bin/gradle" ]; then
-    /opt/homebrew/opt/gradle@8/bin/gradle assembleDebug
-elif [ -x "./gradlew" ]; then
+if [ -x "./gradlew" ]; then
     ./gradlew assembleDebug
 else
     gradle assembleDebug

@@ -7,8 +7,8 @@ Vue renderer
   → preload IPC bridge
   → Electron main（组装层）
   → electron/adb/* · electron/helper/*
-  → ADB forward
-  → Android HelperService
+  → ADB exec-out（shell uid 2000）
+  → app_process: com.andrive.helper.ListMain（一次性执行）
 ```
 
 ## 前置条件
@@ -35,11 +35,10 @@ Vue renderer
 连接后主进程会：
 
 1. 检查并安装 `resources/helper-app.apk`（如需要）。
-2. 启动 `com.andrive.helper/.HelperService`。
-3. 执行 `adb -s <serial> forward tcp:18923 tcp:18923`。
-4. 通过本机 HTTP 请求 `/ping`、`/apps` 和 `/icons-bin` 获取数据。
-5. 先显示有效缓存，再以设备返回的权威列表替换，并渐进更新图标。
-6. 加载结束或取消时移除 forward。
+2. 通过 `pm path` 解析设备上的 base.apk 路径。
+3. 以 shell 身份一次性执行 `app_process ... com.andrive.helper.ListMain`，stdout 返回应用列表 JSON（标签与图标内联），进程随即退出。
+4. 先显示有效缓存，再以设备返回的权威列表替换。
+5. 不授予 Helper 权限、不占用任何端口；桌面上仅有一个点击即关的图标占位。
 
 Helper 协议和构建方式见 [`../helper-app/README.md`](../helper-app/README.md)。
 
@@ -51,11 +50,10 @@ Helper 协议和构建方式见 [`../helper-app/README.md`](../helper-app/README
 
 确认断开后，主进程按以下顺序清理：
 
-1. 取消该设备的应用加载，阻止旧的列表/图标事件污染页面。
-2. 等待现有 Helper forward 的清理并移除 `tcp:18923`。
-3. 停止关联的 scrcpy 进程。
-4. 执行 `adb disconnect <serial>`。
-5. 成功后回到“添加设备”页面。
+1. 取消该设备的应用加载，阻止旧的列表事件污染页面。
+2. 停止关联的 scrcpy 进程。
+3. 执行 `adb disconnect <serial>`。
+4. 成功后回到“添加设备”页面。
 
 这只结束当前无线 ADB transport，不会删除 Android 的配对记录。若目标已经因为网络中断而不再连接，断开仍视为成功。真正的 ADB、权限或 daemon 错误会留在当前设备页，并允许重试。
 
@@ -79,7 +77,7 @@ Helper 协议和构建方式见 [`../helper-app/README.md`](../helper-app/README
 pnpm build-helper
 ```
 
-查看 Helper 的 `/ping` 能力协商是否成功。首次连接可能需要等待安装和前台服务启动。
+首次连接可能需要等待安装提交；若手机弹出「USB 安装」确认框，请在手机上允许。
 
 ### scrcpy 无法启动
 
