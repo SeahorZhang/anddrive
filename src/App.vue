@@ -3,7 +3,7 @@
 // import AddDevice from './components/AddDevice.vue'
 import PageHome from './components/home/index.vue'
 // import PageHeader from './components/PageHeader.vue'
-const adb = window.electronAPI.adb
+import { connectApi } from '@/api'
 
 // /** @type {import('vue').Ref<'idle' | 'restoring' | 'connected' | 'disconnecting' | 'error'>} */
 // const state = ref('restoring')
@@ -77,29 +77,28 @@ const adb = window.electronAPI.adb
 
 // getAllDevice()
 
-const device = {
-  serial: 'adb-af3d7abd-Zvci5V._adb-tls-connect._tcp',
-  address: '192.168.100.91:39957',
-  deviceName: 'Xiaomi 17 Pro Max',
-}
+// {"given_name":"Xiaomi 17 Pro Max","name":"2509FPN0BC","serial":"af3d7abd","address":"192.168.100.91:36627"}
 const pageType = ref('loading') // loading | home | addDevice
 const deviceDialogVisible = ref(false)
+const device = ref(null)
 
-function adbConnect(serial, address) {
-  return adb
-    .connect(address)
-    .then((res) => {
-      console.log('连接手机成功', res)
-      // return getAllDevice()
+const connect = async () => {
+  device.value = localStorage.getItem('device') ? JSON.parse(localStorage.getItem('device')) : null
+  console.log(22, device.value)
+  if (device.value) {
+    try {
+      await connectApi(device.value.address)
+      deviceDialogVisible.value = false
       pageType.value = 'home'
-    })
-    .catch((err) => {
-      console.log('连接手机失败', err?.message || err)
+    } catch (e) {
+      console.error('连接设备失败：', e)
       pageType.value = 'addDevice'
-    })
+    }
+  } else {
+    pageType.value = 'addDevice'
+  }
 }
-
-adbConnect(device.serial, device.address)
+connect()
 </script>
 
 <template>
@@ -110,7 +109,7 @@ adbConnect(device.serial, device.address)
   <PageHome v-else-if="pageType === 'home'" :device="device" />
 
   <AddDevice v-else-if="pageType === 'addDevice'" v-model="deviceDialogVisible" />
-  <AddDeviceDialog v-model="deviceDialogVisible" @paired="restoreSession" />
+  <AddDeviceDialog v-model="deviceDialogVisible" @paired="connect" />
 
   <!-- 
 
@@ -161,6 +160,6 @@ adbConnect(device.serial, device.address)
       </div>
 
     </template>
-  </div>
- -->
+</div>
+-->
 </template>

@@ -24,33 +24,28 @@ const ipOf = (svc) => {
  *
  * @param {(device: {name: string, address: string, ip: string, port: number, service: string}) => void} [onDevice]
  */
-export function startPairingDiscovery(onDevice) {
+export function findDevice() {
   stopPairingDiscovery();
 
   if (!bonjour) {
     bonjour = new Bonjour();
   }
-
   pairingEndpoints = new Map();
 
-  pairingBrowser = bonjour.find({ type: "adb-tls-pairing" }, (svc) => {
-    const ip = ipOf(svc);
-    if (!ip) return;
-
-    const device = {
-      name: svc.name,
-      address: `${ip}:${svc.port}`,
-      ip,
-      port: svc.port,
-      service: "adb-tls-pairing",
-    };
-
-    pairingEndpoints.set(device.address, device);
-
-    onDevice?.(device);
+  return new Promise((resolve) => {
+    bonjour.find({ type: "adb-tls-pairing" }, (svc) => {
+      const ip = ipOf(svc);
+      if (!ip) return;
+      const { txt = {}, port } = svc;
+      resolve({
+        given_name: txt.given_name,
+        name: txt.name,
+        serial: txt.serial,
+        address: `${ip}:${port}`,
+      });
+      stopPairingDiscovery();
+    });
   });
-
-  return pairingBrowser;
 }
 
 /**
@@ -78,22 +73,26 @@ export function stopPairingDiscovery() {
  *
  * @param {(device: {name: string, address: string, ip: string, port: number, service: string}) => void} [onDevice]
  */
-export function startConnectDiscovery(onDevice) {
+export function resolveConnectAddress(onDevice) {
   stopConnectDiscovery();
 
   if (!bonjour) {
     bonjour = new Bonjour();
   }
 
-  connectBrowser = bonjour.find({ type: "adb-tls-connect" }, (svc) => {
-    const ip = ipOf(svc);
-    if (!ip) return;
+  return new Promise((resolve) => {
+    bonjour.find({ type: "adb-tls-connect" }, (svc) => {
+      const ip = ipOf(svc);
+      if (!ip) return;
+      const { txt = {}, port } = svc;
+      resolve({
+        given_name: txt.given_name,
+        name: txt.name,
+        serial: txt.serial,
+        address: `${ip}:${port}`,
+      });
 
-    onDevice({
-      name: svc.name,
-      ip,
-      port: svc.port,
-      address: `${ip}:${svc.port}`,
+      stopConnectDiscovery();
     });
   });
 }
@@ -120,28 +119,29 @@ export function getConnectEndpoints() {
   return Array.from(connectEndpoints.values());
 }
 
-/**
- * Resolve the current connect address (`ip:port`) advertised by one wireless
- * device, matched by the guid embedded in its mDNS-form serial.
- * @param {string} serial e.g. "adb-af3d7abd-Zvci5V._adb-tls-connect._tcp"
- * @param {{ timeoutMs?: number }} [options]
- * @returns {Promise<string>} fresh address, or '' when not found in time
- */
-export async function resolveConnectAddress(serial, { timeoutMs = 6000 } = {}) {
-  startConnectDiscovery();
-  const guid = (serial.match(/adb-([^-]+)/) || [])[1] || "";
-  const deadline = Date.now() + timeoutMs;
-  try {
-    while (Date.now() < deadline) {
-      const hit = getConnectEndpoints().find((e) => !guid || e.name.includes(guid));
-      if (hit) return hit.address;
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    }
-  } finally {
-    stopConnectDiscovery();
-  }
-  return "";
-}
+// /**
+//  * Resolve the current connect address (`ip:port`) advertised by one wireless
+//  * device, matched by the guid embedded in its mDNS-form serial.
+//  * @param {string} serial e.g. "adb-af3d7abd-Zvci5V._adb-tls-connect._tcp"
+//  * @param {{ timeoutMs?: number }} [options]
+//  * @returns {Promise<string>} fresh address, or '' when not found in time
+//  */
+// export async function resolveConnectAddress(serial, { timeoutMs = 6000 } = {}) {
+//   startConnectDiscovery();
+//   console.log(12, serial);
+//   // const guid = (serial.match(/adb-([^-]+)/) || [])[1] || "";
+//   // const deadline = Date.now() + timeoutMs;
+//   // try {
+//   //   while (Date.now() < deadline) {
+//   //     const hit = getConnectEndpoints().find((e) => !guid || e.name.includes(guid));
+//   //     if (hit) return hit.address;
+//   //     await new Promise((resolve) => setTimeout(resolve, 400));
+//   //   }
+//   // } finally {
+//   //   stopConnectDiscovery();
+//   // }
+//   // return "";
+// }
 
 /**
  * 停止所有 Discovery
