@@ -3,39 +3,39 @@ import { Motion, AnimatePresence } from 'motion-v'
 import { usePairing } from '@/composables/usePairing'
 
 const modelValue = defineModel({ default: false })
-const emit = defineEmits(['paired'])
+// const emit = defineEmits(['paired'])
 const { qrDataUrl, status, statusMessage, start, stop } = usePairing()
-let successTimer = null
+// let successTimer = null
 
-function clearSuccessTimer() {
-  if (successTimer) {
-    clearTimeout(successTimer)
-    successTimer = null
-  }
-}
+// function clearSuccessTimer() {
+//   if (successTimer) {
+//     clearTimeout(successTimer)
+//     successTimer = null
+//   }
+// }
 
 watch(modelValue, (visible) => {
-  clearSuccessTimer()
+  // clearSuccessTimer()
   if (visible) start()
   else stop()
 })
 
-watch(status, (value) => {
-  if (value !== 'success') return
-  clearSuccessTimer()
-  successTimer = setTimeout(() => {
-    successTimer = null
-    if (modelValue.value && status.value === 'success') {
-      modelValue.value = false
-      emit('paired')
-    }
-  }, 800)
-})
+// watch(status, (value) => {
+//   if (value !== 'success') return
+//   clearSuccessTimer()
+//   successTimer = setTimeout(() => {
+//     successTimer = null
+//     if (modelValue.value && status.value === 'success') {
+//       modelValue.value = false
+//       emit('paired')
+//     }
+//   }, 800)
+// })
 
-onUnmounted(() => {
-  clearSuccessTimer()
-  stop()
-})
+// onUnmounted(() => {
+//   clearSuccessTimer()
+//   stop()
+// })
 </script>
 
 <template>

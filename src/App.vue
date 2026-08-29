@@ -5,14 +5,11 @@ import PageHome from './components/home/index.vue'
 // import PageHeader from './components/PageHeader.vue'
 const adb = window.electronAPI.adb
 
-const { connect } = adb
-
 // /** @type {import('vue').Ref<'idle' | 'restoring' | 'connected' | 'disconnecting' | 'error'>} */
 // const state = ref('restoring')
 // const serial = ref('')
 // const errorMessage = ref('')
 // const disconnectError = ref('')
-// const deviceDialogVisible = ref(false)
 // /** @type {import('vue').Ref<{ serial: string, state: string }[]>} */
 // const devices = ref([])
 
@@ -86,9 +83,11 @@ const device = {
   deviceName: 'Xiaomi 17 Pro Max',
 }
 const pageType = ref('loading') // loading | home | addDevice
+const deviceDialogVisible = ref(false)
 
 function adbConnect(serial, address) {
-  return connect(address)
+  return adb
+    .connect(address)
     .then((res) => {
       console.log('连接手机成功', res)
       // return getAllDevice()
@@ -109,6 +108,9 @@ adbConnect(device.serial, device.address)
   <div v-if="pageType === 'loading'" class="">loading</div>
 
   <PageHome v-else-if="pageType === 'home'" :device="device" />
+
+  <AddDevice v-else-if="pageType === 'addDevice'" v-model="deviceDialogVisible" />
+  <AddDeviceDialog v-model="deviceDialogVisible" @paired="restoreSession" />
 
   <!-- 
 
@@ -158,8 +160,7 @@ adbConnect(device.serial, device.address)
         </div>
       </div>
 
-      <AddDevice v-model="deviceDialogVisible" />
     </template>
   </div>
-  <AddDeviceDialog v-model="deviceDialogVisible" @paired="restoreSession" /> -->
+ -->
 </template>
