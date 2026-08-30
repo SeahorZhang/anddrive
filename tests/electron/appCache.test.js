@@ -3,16 +3,17 @@ import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { CACHE_MAX_AGE_MS, CACHE_VERSION } from '../../electron/cache/appCacheSchema.js'
 
 const state = vi.hoisted(() => ({ userData: '' }))
 vi.mock('electron', () => ({
   app: {
     getPath: () => state.userData,
   },
+  ipcMain: { handle: vi.fn() },
 }))
+vi.mock('bonjour-service', () => ({ default: class {} }))
 
-const { readAppCache, writeAppCache } = await import('../../electron/cache/appCache.js')
+const { readAppCache, writeAppCache, CACHE_MAX_AGE_MS, CACHE_VERSION } = await import('../../electron/adb.js')
 
 const serial = '192.168.1.20:5555'
 const cacheFile = () =>

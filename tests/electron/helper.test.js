@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('electron', () => ({}))
+vi.mock('electron', () => ({
+  app: { getPath: () => '' },
+  ipcMain: { handle: vi.fn() },
+}))
+vi.mock('bonjour-service', () => ({ default: class {} }))
 
-const { normalizeListOutput } = await import('../../electron/helper/helper.js')
+const { normalizeListOutput } = await import('../../electron/adb.js')
 
 const listJson = (apps) => JSON.stringify({ apps })
 

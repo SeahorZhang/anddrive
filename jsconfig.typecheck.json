@@ -10,8 +10,6 @@
     "types": ["node"]
   },
   "include": [
-    "shared/types.js",
-    "electron/cache/appCacheSchema.js",
-    "electron/adb/errors.js"
+    "shared/types.js"
   ]
 }

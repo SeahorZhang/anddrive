@@ -1,12 +1,19 @@
-import { describe, expect, it } from 'vitest'
-import {
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('electron', () => ({
+  app: { getPath: () => '' },
+  ipcMain: { handle: vi.fn() },
+}))
+vi.mock('bonjour-service', () => ({ default: class {} }))
+
+const {
   CACHE_MAX_AGE_MS,
   CACHE_VERSION,
   sanitizeApp,
   sanitizeIcon,
   sanitizeSnapshot,
   serializeSnapshot,
-} from '../../electron/cache/appCacheSchema.js'
+} = await import('../../electron/adb.js')
 
 const NOW = 2_000_000_000_000
 const iconUrl = `data:image/png;base64,${Buffer.from('png').toString('base64')}`
