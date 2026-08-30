@@ -1,12 +1,12 @@
 # AndDrive Helper App
 
-Helper App 安装在 Android 设备上，本质是一个**代码容器**：桌面端通过 `app_process` 以 shell（uid 2000）身份一次性执行其中的入口类，stdout 返回应用列表 JSON 后进程即退出。不授予任何权限、不监听端口；桌面上会显示一个图标（点击即关的空 Activity 占位），方便用户在手机上确认和卸载。
+Helper App 安装在 Android 设备上，本质是一个**纯代码容器**：没有任何组件（无 Activity / Service / 权限 / 桌面图标）。桌面端通过 `app_process` 以 shell（uid 2000）身份一次性执行 `ListMain`，stdout 返回应用列表 JSON 后进程即退出。
 
-当前实现只有 `ListMain.java` 一个类；旧的 `HelperService`/HTTP 协议与更早的常驻 `app_process` 服务器均已删除。
+当前实现只有 `ListMain.java` 一个类。
 
 ## 构建
 
-前置条件：Android SDK、Java/Gradle 环境和可用的 SDK platform。项目固定使用 Gradle wrapper；主项目脚本会检查 `ANDROID_HOME`，并将 debug APK 复制到桌面应用需要的资源位置。
+前置条件：Android SDK、Java（JDK 17+）和可用的 SDK platform。项目使用 Gradle wrapper；主项目脚本会检查 `ANDROID_HOME`，并将 debug APK 复制到桌面应用需要的资源位置。
 
 ```sh
 pnpm build-helper
@@ -34,16 +34,32 @@ APK 输出于 `helper-app/app/build/outputs/apk/debug/app-debug.apk`，`pnpm bui
 4. stdout 输出一行 JSON，进程自动退出：
 
    ```json
-   { "apps": [{ "packageName": "com.example.app", "label": "示例应用", "iconPng": "<base64>" }] }
+   { "apps": [{ "packageName": "com.example.app", "label": "示例应用" }] }
    ```
 
-系统应用会被过滤；标签来自 `PackageManager`（`ResolveInfo.loadLabel`），图标渲染为 256×256 PNG 并以 base64 内联。单个应用的标签或图标失败只降级该条目，不影响整体列表。
+系统应用会被过滤；标签来自 `PackageManager`（`ResolveInfo.loadLabel`）。单个应用标签失败只降级该条目，不影响整体列表。
+
+### 图标模式
+
+列表默认不带图标；桌面端按需补取时追加 `--icons` 参数，只返回指定包名的图标：
+
+```text
+adb -s <serial> exec-out CLASSPATH=<base.apk> app_process /system/bin com.anddrive.helper.ListMain --icons com.a.b,com.c.d
+```
+
+```json
+{ "apps": [{ "packageName": "com.a.b", "iconPng": "<base64>" }] }
+```
+
+图标渲染为 128×128 PNG 并以 base64 内联（`data:image/png;base64,...` 由主进程拼接）。缺失/失败的包名直接跳过该条目。
 
 ## 维护说明
 
-入口逻辑位于 `app/src/main/java/com/anddrive/helper/ListMain.java`，输出契约的解析在主进程 `electron/helper/helperList.js`（有单元测试）。修改输出结构时两边同步更新，并运行：
+入口逻辑位于 `app/src/main/java/com/anddrive/helper/ListMain.java`，输出契约的解析在主进程 `electron/helper/helper.js`（`normalizeListOutput`）。修改输出结构时两边同步更新，并运行：
 
 ```sh
 pnpm lint && pnpm typecheck && pnpm test
 pnpm build-helper
 ```
+
+注意：`ActivityThread.systemMain()` 内部会构造 Handler，要求线程已准备 Looper；`ListMain.systemContext()` 中先调用 `Looper.prepareMainLooper()` 再触发，否则会抛 `Can't create handler inside thread ... that has not called Looper.prepare()`。

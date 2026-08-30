@@ -1,34 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Pure code container for app_process: no components, no permissions. -->
     <application
         android:allowBackup="false"
-        android:icon="@drawable/ic_launcher"
-        android:label="AndDrive Helper">
-
-        <!-- Desktop icon stub; the app itself never runs in normal flows. -->
-        <activity
-            android:name=".MainActivity"
-            android:excludeFromRecents="true"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
-        <!-- Optional one-time-enabled service that taps the QR-pairing entry -->
-        <service
-            android:name=".QrAutoClickService"
-            android:exported="false"
-            android:label="AndDrive 扫码直达"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_config" />
-        </service>
-    </application>
+        android:label="AndDrive Helper" />
 </manifest>

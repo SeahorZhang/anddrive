@@ -15,6 +15,6 @@ defineProps({
         {{ device.given_name || device.name || '未知设备' }}
       </span>
     </div>
-    <AppList :serial="device.serial" />
+    <AppList :address="device.address" />
   </div>
 </template>

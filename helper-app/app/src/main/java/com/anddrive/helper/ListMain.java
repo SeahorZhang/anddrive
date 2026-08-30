@@ -25,7 +25,7 @@ import java.util.Map;
  * Runs as shell (uid 2000): `CLASSPATH=<base.apk> app_process /system/bin com.anddrive.helper.ListMain`
  * The APK is only a code container — no component is started and no permission
  * is granted to the package. The result is a single JSON line on stdout:
- * `{"apps":[{"packageName","label","iconPng"?}]}`.
+ * `{"apps":[{"packageName","label","iconPng"?}]}` — iconPng appears only in `--icons` mode.
  */
 public final class ListMain {
 
@@ -37,10 +37,8 @@ public final class ListMain {
 
     public static void main(String[] args) {
         try {
-            trace("start uid=" + android.os.Process.myUid());
             Context context = systemContext();
             PackageManager pm = context.getPackageManager();
-            trace("context ok");
 
             // `--icons pkg1,pkg2,...` returns icons for exactly those packages;
             // no args lists all launchable third-party apps with labels only.
@@ -52,7 +50,6 @@ public final class ListMain {
 
             Intent launcher = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
             List<ResolveInfo> activities = pm.queryIntentActivities(launcher, 0);
-            trace("activities=" + activities.size());
 
             Map<String, JSONObject> unique = new LinkedHashMap<>();
             for (ResolveInfo info : activities) {
@@ -61,8 +58,7 @@ public final class ListMain {
                 if (appInfo == null || (appInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0)
                     continue;
                 String pkg = appInfo.packageName;
-                // The helper itself has a desktop-icon stub activity; hide it
-                // from AndDrive's own list.
+                // Guard against the helper ever listing itself.
                 if (SELF_PACKAGE.equals(pkg) || unique.containsKey(pkg)) continue;
 
                 JSONObject obj = new JSONObject();
@@ -70,7 +66,6 @@ public final class ListMain {
                 obj.put("label", safeLabel(pm, info, pkg));
                 unique.put(pkg, obj);
             }
-            trace("apps=" + unique.size());
 
             JSONArray apps = new JSONArray(unique.values());
             JSONObject result = new JSONObject();
@@ -80,45 +75,21 @@ public final class ListMain {
             System.exit(0);
         } catch (Throwable t) {
             t.printStackTrace();
-            System.out.flush();
             System.err.flush();
             System.exit(1);
         }
     }
 
-    /** Icons (base64 PNG) for the requested packages; failures yield no entry. */
-    private static JSONObject iconMode(PackageManager pm, String[] packages) throws Exception {
-        JSONArray apps = new JSONArray();
-        int done = 0;
-        for (String pkg : packages) {
-            if (pkg == null || pkg.isEmpty()) continue;
-            try {
-                ApplicationInfo info = pm.getApplicationInfo(pkg, 0);
-                JSONObject obj = new JSONObject();
-                obj.put("packageName", pkg);
-                String iconBase64 = safeIconBase64(info.loadIcon(pm));
-                if (iconBase64 != null) obj.put("iconPng", iconBase64);
-                apps.put(obj);
-            } catch (Throwable ignored) {
-                // Unknown/removed package: skip silently.
-            }
-            if (++done % 5 == 0) trace("icons=" + done);
-        }
-        trace("icons done=" + done);
-        return new JSONObject().put("apps", apps);
-    }
-
-    /** Flushed step marker on stdout; the last one alive pinpoints an abort. */
-    private static void trace(String message) {
-        System.out.println("@@" + message);
-        System.out.flush();
-    }
-
-    /** Flushed step marker on stdout; the last one alive pinpoints an abort. */
-
+    /**
+     * A system Context for shell (uid 2000) code with no running ActivityThread.
+     * {@code ActivityThread.systemMain()} builds a Handler in its constructor,
+     * which needs a main Looper or it throws
+     * "Can't create handler inside thread ... that has not called Looper.prepare()".
+     */
     private static Context systemContext() throws Exception {
         Class<?> atClass = Class.forName("android.app.ActivityThread");
         try {
+            if (Looper.myLooper() == null) Looper.prepareMainLooper();
             Object at = atClass.getDeclaredMethod("systemMain").invoke(null);
             return (Context) atClass.getMethod("getSystemContext").invoke(at);
         } catch (Throwable primary) {
@@ -140,7 +111,26 @@ public final class ListMain {
         return fallback;
     }
 
-    /** @return PNG bytes of the icon scaled to {@code ICON_SIZE_PX}, or null on failure. */
+    /** Icons (base64 PNG) for the requested packages; failures yield no entry. */
+    private static JSONObject iconMode(PackageManager pm, String[] packages) throws Exception {
+        JSONArray apps = new JSONArray();
+        for (String pkg : packages) {
+            if (pkg == null || pkg.isEmpty()) continue;
+            try {
+                ApplicationInfo info = pm.getApplicationInfo(pkg, 0);
+                JSONObject obj = new JSONObject();
+                obj.put("packageName", pkg);
+                String iconBase64 = safeIconBase64(info.loadIcon(pm));
+                if (iconBase64 != null) obj.put("iconPng", iconBase64);
+                apps.put(obj);
+            } catch (Throwable ignored) {
+                // Unknown/removed package: skip silently.
+            }
+        }
+        return new JSONObject().put("apps", apps);
+    }
+
+    /** @return base64 PNG of the icon scaled to {@code ICON_SIZE_PX}, or null on failure. */
     private static String safeIconBase64(Drawable drawable) {
         try {
             Bitmap bitmap = toSquareBitmap(drawable, ICON_SIZE_PX);

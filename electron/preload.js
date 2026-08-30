@@ -11,6 +11,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     pair: (device, password) => invoke(CHANNELS.adbPair, device, password),
     findDevice: () => invoke("adb:findDevice"),
     resolveConnectAddress: (serial) => invoke("adb:resolveConnectAddress", serial),
+    installHelpera: (address) => invoke("adb:installHelper", address),
+    loadInstalledApps: (address) => invoke("adb:loadInstalledApps", address),
+    getAppIcons: (serial, packages) => invoke(CHANNELS.adbGetAppIcons, serial, packages),
+
     // connectDevice: (device) => invoke("adb:connectDevice", device),
     // getDiscoveredDevices: () => invoke(CHANNELS.adbGetDiscoveredDevices),
     // stopPairingDiscovery: () => {
@@ -39,10 +43,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     // saveDevice: (device) => invoke(CHANNELS.adbSaveDevice, device),
     // resolveConnectAddress: (serial) => invoke(CHANNELS.adbResolveConnectAddress, serial),
     // getCachedInstalledApps: (serial) => invoke(CHANNELS.adbGetCachedInstalledApps, serial),
-    // deleteAppCache: (serial) => invoke(CHANNELS.adbDeleteAppCache, serial),
+    deleteAppCache: (serial) => invoke(CHANNELS.adbDeleteAppCache, serial),
     // installHelper: (serial) => invoke(CHANNELS.adbInstallHelper, serial),
-    // uninstallHelper: (serial) => invoke(CHANNELS.adbUninstallHelper, serial),
-    // loadInstalledApps: (serial) => invoke(CHANNELS.adbLoadInstalledApps, serial),
-    // getAppIcons: (serial, packages) => invoke(CHANNELS.adbGetAppIcons, serial, packages),
+    uninstallHelper: (serial) => invoke(CHANNELS.adbUninstallHelper, serial),
   },
 });
