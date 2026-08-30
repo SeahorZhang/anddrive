@@ -12,8 +12,7 @@ vi.mock('electron', () => ({
   },
 }))
 
-const { getCachedInstalledApps, readAppCache, writeAppCache } =
-  await import('../../electron/cache/appCache.js')
+const { readAppCache, writeAppCache } = await import('../../electron/cache/appCache.js')
 
 const serial = '192.168.1.20:5555'
 const cacheFile = () =>
@@ -45,13 +44,9 @@ afterEach(async () => {
 })
 
 describe('app cache persistence', () => {
-  it('round trips a versionless domain snapshot and exposes cached apps', async () => {
+  it('round trips a versionless domain snapshot', async () => {
     expect(await writeAppCache(serial, snapshot())).toBe(true)
     expect(await readAppCache(serial)).toMatchObject({ version: CACHE_VERSION })
-    expect(await getCachedInstalledApps(serial)).toEqual({
-      authoritativeAt: expect.any(Number),
-      apps: [{ packageName: 'com.example.app', label: 'Example', iconUrl: null }],
-    })
   })
 
   it.each([

@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  isAlreadyDisconnectedError,
-  isMissingForwardError,
-  normalizeDisconnectSerial,
-} from '../../electron/adb/errors.js'
+import { isAlreadyDisconnectedError, normalizeDisconnectSerial } from '../../electron/adb/errors.js'
 
 describe('disconnect validation and result classification', () => {
   it.each(['device:5555', '192.168.1.20:5555', '[::1]:5555'])('accepts serial %s', (serial) => {
@@ -28,10 +24,5 @@ describe('disconnect validation and result classification', () => {
   it('does not hide unrelated ADB errors', () => {
     expect(isAlreadyDisconnectedError(new Error('cannot connect to daemon'))).toBe(false)
     expect(isAlreadyDisconnectedError(new Error('permission denied'))).toBe(false)
-  })
-
-  it('recognizes missing forwards but not arbitrary failures', () => {
-    expect(isMissingForwardError(new Error("listener 'tcp:18923' not found"))).toBe(true)
-    expect(isMissingForwardError(new Error('transport error'))).toBe(false)
   })
 })

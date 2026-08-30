@@ -4,9 +4,6 @@ let bonjour = null;
 let pairingBrowser = null;
 let connectBrowser = null;
 
-let pairingEndpoints = new Map();
-let connectEndpoints = new Map();
-
 const ipOf = (svc) => {
   return svc.addresses?.find((a) => !a.includes(":") && a !== "127.0.0.1");
 };
@@ -22,7 +19,7 @@ const ipOf = (svc) => {
  *      ↓
  * 手机扫码 / 配对
  *
- * @param {(device: {name: string, address: string, ip: string, port: number, service: string}) => void} [onDevice]
+ * @returns {Promise<{given_name?: string, name?: string, serial?: string, address: string}>}
  */
 export function findDevice() {
   stopPairingDiscovery();
@@ -30,7 +27,6 @@ export function findDevice() {
   if (!bonjour) {
     bonjour = new Bonjour();
   }
-  pairingEndpoints = new Map();
 
   return new Promise((resolve) => {
     bonjour.find({ type: "adb-tls-pairing" }, (svc) => {
@@ -56,8 +52,6 @@ export function stopPairingDiscovery() {
     pairingBrowser.stop?.();
     pairingBrowser = null;
   }
-
-  pairingEndpoints.clear();
 }
 
 /**
@@ -71,9 +65,9 @@ export function stopPairingDiscovery() {
  *      ↓
  * adb connect
  *
- * @param {(device: {name: string, address: string, ip: string, port: number, service: string}) => void} [onDevice]
+ * @returns {Promise<{given_name?: string, name?: string, serial?: string, address: string}>}
  */
-export function resolveConnectAddress(onDevice) {
+export function resolveConnectAddress() {
   stopConnectDiscovery();
 
   if (!bonjour) {
@@ -91,7 +85,6 @@ export function resolveConnectAddress(onDevice) {
         serial: txt.serial,
         address: `${ip}:${port}`,
       });
-
       stopConnectDiscovery();
     });
   });
@@ -105,56 +98,4 @@ export function stopConnectDiscovery() {
     connectBrowser.stop?.();
     connectBrowser = null;
   }
-
-  connectEndpoints.clear();
-}
-
-/** @returns {Array<{name: string, address: string, ip: string, port: number, service: string}>} */
-export function getDiscoveredDevices() {
-  return Array.from(pairingEndpoints.values());
-}
-
-/** @returns {Array<{name: string, address: string, ip: string, port: number, service: string}>} */
-export function getConnectEndpoints() {
-  return Array.from(connectEndpoints.values());
-}
-
-// /**
-//  * Resolve the current connect address (`ip:port`) advertised by one wireless
-//  * device, matched by the guid embedded in its mDNS-form serial.
-//  * @param {string} serial e.g. "adb-af3d7abd-Zvci5V._adb-tls-connect._tcp"
-//  * @param {{ timeoutMs?: number }} [options]
-//  * @returns {Promise<string>} fresh address, or '' when not found in time
-//  */
-// export async function resolveConnectAddress(serial, { timeoutMs = 6000 } = {}) {
-//   startConnectDiscovery();
-//   console.log(12, serial);
-//   // const guid = (serial.match(/adb-([^-]+)/) || [])[1] || "";
-//   // const deadline = Date.now() + timeoutMs;
-//   // try {
-//   //   while (Date.now() < deadline) {
-//   //     const hit = getConnectEndpoints().find((e) => !guid || e.name.includes(guid));
-//   //     if (hit) return hit.address;
-//   //     await new Promise((resolve) => setTimeout(resolve, 400));
-//   //   }
-//   // } finally {
-//   //   stopConnectDiscovery();
-//   // }
-//   // return "";
-// }
-
-/**
- * 停止所有 Discovery
- */
-export function stopDiscovery() {
-  stopPairingDiscovery();
-  stopConnectDiscovery();
-
-  if (bonjour) {
-    bonjour.destroy?.();
-    bonjour = null;
-  }
-
-  pairingEndpoints.clear();
-  connectEndpoints.clear();
 }

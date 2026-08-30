@@ -7,28 +7,9 @@
  */
 export const CHANNELS = {
   adbPair: 'adb:pair',
-  adbConnect: 'adb:connect',
-  adbStartPairingDiscovery: 'adb:startPairingDiscovery',
-  adbOnPairingDevice: 'adb:onPairingDevice',
-  adbGetDiscoveredDevices: 'adb:getDiscoveredDevices',
-  adbStopPairingDiscovery: 'adb:stopPairingDiscovery',
-  adbStartConnectDiscovery: 'adb:startConnectDiscovery',
-  adbOnConnectDevice: 'adb:onConnectDevice',
-  adbGetConnectEndpoints: 'adb:getConnectEndpoints',
-  adbStopConnectDiscovery: 'adb:stopConnectDiscovery',
-  adbStopDiscovery: 'adb:stopDiscovery',
-  adbGetActiveSession: 'adb:getActiveSession',
-  adbGetDevices: 'adb:getDevices',
   adbDisconnect: 'adb:disconnect',
-  adbGetDeviceInfo: 'adb:getDeviceInfo',
-  adbGetSavedDevices: 'adb:getSavedDevices',
-  adbSaveDevice: 'adb:saveDevice',
-  adbResolveConnectAddress: 'adb:resolveConnectAddress',
-  adbGetCachedInstalledApps: 'adb:getCachedInstalledApps',
   adbDeleteAppCache: 'adb:deleteAppCache',
-  adbInstallHelper: 'adb:installHelper',
   adbUninstallHelper: 'adb:uninstallHelper',
-  adbLoadInstalledApps: 'adb:loadInstalledApps',
   adbGetAppIcons: 'adb:getAppIcons',
 
   /** Payload is a ScrcpyRequest (shared/types.js). */

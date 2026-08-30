@@ -7,7 +7,7 @@ const randCode = () => String(Date.now() % 1000000).padStart(6, "0");
 
 const modelValue = defineModel({ default: false })
 const qrDataUrl = ref("");
-const status = ref("idle"); // idle-闲置 | waiting-等待 | pairing-配对中 | connecting-连接中 | success-成功 | error-错误
+const status = ref("idle"); // idle-闲置 | waiting-等待 | error-错误
 const statusMessage = ref("");
 let password = "";
 const emit = defineEmits(['paired'])
@@ -15,7 +15,6 @@ const emit = defineEmits(['paired'])
 const start = async () => {
   password = randCode();
   const ssid = `d${randCode()}`;
-  `WIFI:T:ADB;S:${ssid};P:${password};;`
   qrDataUrl.value = `data:image/svg+xml;base64,${btoa(renderSVG(`WIFI:T:ADB;S:${ssid};P:${password};;`, { ecc: "M", pixelSize: 8 }))}`;
 
   status.value = "waiting";
@@ -67,8 +66,6 @@ watch(modelValue, (bl) => {
       <div class="px-8 pb-8 text-center text-sm">
         <span :class="{
           'text-gray-500': status === 'waiting',
-          'text-blue-500': status === 'pairing',
-          'text-green-500': status === 'success',
           'text-red-500': status === 'error',
         }">{{ statusMessage }}</span>
       </div>

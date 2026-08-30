@@ -2,7 +2,7 @@ const {
   connect,
   findDevice,
   pair,
-  startConnectDiscovery,
+  disconnect,
   resolveConnectAddress,
   installHelpera,
   loadInstalledApps,
@@ -10,6 +10,8 @@ const {
   uninstallHelper,
   deleteAppCache,
 } = window.electronAPI.adb;
+
+const { startScrcpy } = window.electronAPI;
 
 export const connectApi = (address) => connect(address);
 
@@ -19,11 +21,11 @@ export const findDeviceApi = () => findDevice();
 // 开始配对设备
 export const pairApi = (device, password) => pair(device, password);
 
+// 断开设备
+export const disconnectApi = (serial) => disconnect(serial);
+
 // 解析设备当前可用的连接地址（配对端口不能用于 adb connect）
 export const resolveConnectAddressApi = (serial) => resolveConnectAddress(serial);
-
-// 开始连接设备
-export const startConnectDiscoveryApi = (device) => startConnectDiscovery(device);
 
 // 安装app
 export const installHelperApi = (address) => installHelpera(address);
@@ -39,3 +41,6 @@ export const uninstallHelperApi = (address) => uninstallHelper(address);
 
 // 清除应用列表缓存
 export const deleteAppCacheApi = (address) => deleteAppCache(address);
+
+// 通过 scrcpy 启动应用镜像窗口
+export const startScrcpyApi = (options) => startScrcpy(options);

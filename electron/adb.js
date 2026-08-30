@@ -1,37 +1,12 @@
 import { ipcMain } from "electron";
-import { execFile } from "node:child_process";
-import { adbPath, helperApkPath } from "./paths.js";
+import { helperApkPath } from "./paths.js";
+import { adbExec, disconnectTransport } from "./adb/adbClient.js";
 import { findDevice, resolveConnectAddress } from "./adb/discoveryService.js";
+import { normalizeDisconnectSerial } from "./adb/errors.js";
 import { CHANNELS } from "./ipcContract.js";
 import { loadInstalledApps, getAppIcons, uninstallHelper } from "./helper/helper.js";
 import { deleteAppCache } from "./cache/appCache.js";
-
-export const HELPER_PACKAGE = "com.anddrive.helper";
-
-/** @param {...string} args */
-export function adbExec(...args) {
-  return new Promise((resolve, reject) => {
-    execFile(adbPath(), args, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr || err.message));
-      else resolve(stdout.trim());
-    });
-  });
-}
-
-let serverStarted = false;
-
-export async function ensureServer() {
-  if (serverStarted) return;
-  await new Promise((resolve, reject) => {
-    execFile(adbPath(), ["start-server"], (err) => {
-      if (err) reject(err);
-      else {
-        serverStarted = true;
-        resolve();
-      }
-    });
-  });
-}
+import { startScrcpy, stopScrcpy } from "./scrcpy/scrcpyService.js";
 
 // 连接设备
 ipcMain.handle("adb:connect", async (_, address) => {
@@ -48,8 +23,14 @@ ipcMain.handle("adb:resolveConnectAddress", (_, serial) => resolveConnectAddress
 
 // 配对设备
 ipcMain.handle(CHANNELS.adbPair, async (event, device, password) => {
-  // await ensureServer();
   return adbExec("pair", device.address, password);
+});
+
+// 断开设备：先停掉该设备的 scrcpy 镜像，再断开无线 ADB 传输
+ipcMain.handle(CHANNELS.adbDisconnect, async (_, rawSerial) => {
+  const serial = normalizeDisconnectSerial(rawSerial);
+  stopScrcpy(serial);
+  return disconnectTransport(serial);
 });
 
 // 安装app
@@ -84,4 +65,16 @@ ipcMain.handle("adb:deleteAppCache", async (event, address) => {
   return deleteAppCache(address);
 });
 
-
+// 通过 scrcpy 启动应用镜像窗口（渲染层只传 { serial, packageName, label }，一条命令启动）
+ipcMain.handle(CHANNELS.scrcpyStart, (_, options) => {
+  return startScrcpy([
+    "-s", options.serial,
+    "--new-display=1920x1080/320",
+    `--start-app=${options.packageName}`,
+    "--video-codec=h265",
+    "-b", "24M",
+    "--window-x=auto",
+    "--window-y=auto",
+    `--window-title=${options.label}`,
+  ]);
+});

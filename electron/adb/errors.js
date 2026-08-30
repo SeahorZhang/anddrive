@@ -19,11 +19,3 @@ export function isAlreadyDisconnectedError(error) {
   )
 }
 
-/** @param {unknown} error */
-export function isMissingForwardError(error) {
-  const message = error instanceof Error ? error.message : String(error || '')
-  return (
-    isAlreadyDisconnectedError(error) ||
-    /\blistener\s+['"]?tcp:\d+['"]?\s+not found\b/i.test(message)
-  )
-}

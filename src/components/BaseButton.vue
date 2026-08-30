@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
 
-const { variant, icon, disabled, loading, size, active, iconOnly } = defineProps({
+const { variant, icon, disabled, loading, size, iconOnly } = defineProps({
   variant: {
     type: String,
-    default: 'default', //'primary' | 'secondary' | 'danger' | 'ghost'
+    default: 'default', //'primary' | 'secondary' | 'danger'
   },
   icon: String,
   disabled: Boolean,
@@ -13,7 +13,6 @@ const { variant, icon, disabled, loading, size, active, iconOnly } = defineProps
     type: String,
     default: 'sm', //'sm' | 'md'
   },
-  active: Boolean,
   iconOnly: Boolean,
 })
 
@@ -34,10 +33,7 @@ defineEmits(['click'])
       variant === 'secondary' &&
         'border border-black/8 font-medium text-black/50 hover:bg-gray-50 hover:text-black/70',
       variant === 'danger' && 'bg-red-500 font-medium text-white hover:bg-red-600',
-      variant === 'ghost' && 'text-black/40 hover:bg-black/5 hover:text-black/60',
-      variant === 'default' && active && 'border border-blue-500/30 bg-blue-500/10 text-blue-500',
       variant === 'default' &&
-        !active &&
         'border border-transparent text-black/40 hover:bg-black/5 hover:text-black/60',
       variant === 'default' && !iconOnly && 'rounded-md px-2.5 py-1 text-[12px]',
     ]"

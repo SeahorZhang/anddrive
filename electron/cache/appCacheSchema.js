@@ -1,6 +1,5 @@
 export const CACHE_VERSION = 2
 export const CACHE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000
-export const ICON_REFRESH_MS = 30 * 24 * 60 * 60 * 1000
 export const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024
 
 const MAX_APPS = 5000

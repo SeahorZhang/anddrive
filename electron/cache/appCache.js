@@ -4,7 +4,6 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import {
   CACHE_MAX_AGE_MS,
-  ICON_REFRESH_MS,
   MAX_SNAPSHOT_BYTES,
   sanitizeSnapshot,
   serializeSnapshot,
@@ -42,19 +41,6 @@ export async function readAppCache(serial) {
       await removeFile(filePath)
     }
     return null
-  }
-}
-
-export async function getCachedInstalledApps(serial) {
-  const snapshot = await readAppCache(serial)
-  if (!snapshot) return null
-  return {
-    authoritativeAt: snapshot.authoritativeAt,
-    apps: snapshot.apps.map(({ packageName, label, iconUrl }) => ({
-      packageName,
-      label,
-      iconUrl,
-    })),
   }
 }
 
@@ -121,5 +107,3 @@ export async function writeAppCache(serial, snapshot) {
     return false
   }
 }
-
-export { ICON_REFRESH_MS }

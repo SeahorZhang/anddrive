@@ -1,6 +1,6 @@
 <script setup>
 import BaseButton from '../BaseButton.vue'
-import { installHelperApi, loadInstalledAppsApi, getAppIconsApi, uninstallHelperApi, deleteAppCacheApi } from '@/api'
+import { installHelperApi, loadInstalledAppsApi, getAppIconsApi, uninstallHelperApi, deleteAppCacheApi, startScrcpyApi } from '@/api'
 
 const props = defineProps({
   address: String,
@@ -21,6 +21,13 @@ function needsIcon(app) {
 const apps = ref([])
 const loading = ref(false)
 const searchText = ref('')
+
+/** 按名称过滤后的应用列表，空搜索时返回全部 */
+const filteredApps = computed(() => {
+  const q = searchText.value.trim().toLowerCase()
+  if (!q) return apps.value
+  return apps.value.filter((app) => app.label.toLowerCase().includes(q))
+})
 
 /** 把一批 {packageName, iconUrl, iconUpdatedAt} 合并进当前列表 */
 function patchIcons(fetched) {
@@ -97,26 +104,39 @@ async function getAppList() {
 
 getAppList()
 
+async function launchApp(app) {
+  try {
+    await startScrcpyApi({
+      serial: props.address,
+      packageName: app.packageName,
+      label: app.label,
+    })
+  } catch (error) {
+    console.error('launchApp failed:', error)
+  }
+}
+
 </script>
 
 <template>
+  <div class="mb-3 flex items-center gap-1.5">
+    <input v-model="searchText" type="text" placeholder="搜索..."
+      class="min-w-0 flex-1 rounded-lg border border-black/10 bg-gray-100 px-3 py-1.5 text-[11px] text-black/80 placeholder-black/30 transition-colors outline-none focus:border-blue-500/50" />
+    <BaseButton icon="lucide:download" icon-only :disabled="loading" title="安装 Helper 到手机" @click="installHelper" />
+    <BaseButton icon="lucide:trash-2" icon-only :disabled="loading" title="从手机卸载 Helper" @click="uninstallHelper" />
+    <BaseButton icon="lucide:eraser" icon-only :disabled="loading" title="清除应用缓存列表并重新加载" @click="clearCache" />
+  </div>
+
   <ScrollAreaRoot class="h-0 flex-1">
     <ScrollAreaViewport class="h-full w-full">
-      <div class="mb-3 flex items-center gap-1.5">
-        <input v-model="searchText" type="text" placeholder="搜索..."
-          class="min-w-0 flex-1 rounded-lg border border-black/10 bg-gray-100 px-3 py-1.5 text-[11px] text-black/80 placeholder-black/30 transition-colors outline-none focus:border-blue-500/50" />
-        <BaseButton icon="lucide:download" icon-only :disabled="loading" title="安装 Helper 到手机" @click="installHelper" />
-        <BaseButton icon="lucide:trash-2" icon-only :disabled="loading" title="从手机卸载 Helper" @click="uninstallHelper" />
-        <BaseButton icon="lucide:eraser" icon-only :disabled="loading" title="清除应用缓存列表并重新加载" @click="clearCache" />
-      </div>
-
       <div v-if="loading && apps.length === 0" class="flex items-center justify-center py-8">
         <div class="text-sm text-black/40">加载中...</div>
       </div>
 
-      <div v-if="apps.length > 0" class="grid grid-cols-5 gap-2">
-        <div v-for="app in apps" :key="app.packageName"
-          class="flex flex-col items-center gap-1 rounded-lg border border-black/8 bg-gray-50 p-2 transition-all hover:border-black/12 hover:bg-gray-100">
+      <div v-if="filteredApps.length > 0" class="grid grid-cols-5 gap-2">
+        <div v-for="app in filteredApps" :key="app.packageName" @click="launchApp(app)"
+          class="flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-black/8 bg-gray-50 p-2 transition-all hover:border-black/12 hover:bg-gray-100"
+          title="点击启动">
           <img v-if="app.iconUrl" :src="app.iconUrl" class="pointer-events-none h-8 w-8 rounded-lg" />
           <div v-else class="pointer-events-none flex h-8 w-8 items-center justify-center rounded-lg bg-gray-200">
             <svg class="h-4 w-4 text-black/20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -130,9 +150,9 @@ getAppList()
         </div>
       </div>
 
-      <div v-else-if="!loading && apps.length === 0" class="flex items-center justify-center py-8">
+      <div v-else-if="!loading" class="flex items-center justify-center py-8">
         <div class="text-sm text-black/40">
-          {{ searchText ? '未找到匹配的app' : '暂无app' }}
+          {{ apps.length === 0 ? '暂无app' : '未找到匹配的app' }}
         </div>
       </div>
     </ScrollAreaViewport>

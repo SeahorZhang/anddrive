@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { adbPath } from "../paths.js";
 import { isAlreadyDisconnectedError } from "./errors.js";
-import { parseAdbDevices, parseDeviceInfo } from "./deviceParser.js";
 
 let serverStarted = false;
 
@@ -47,41 +46,6 @@ export function adbExecSafe(...args) {
 }
 
 /**
- * @param {string} serial
- * @param {...string} args
- */
-export function adbShell(serial, ...args) {
-  return adbExec("-s", serial, "shell", ...args);
-}
-
-/**
- * @param {string} host
- * @param {string | number} port
- * @param {string} code
- */
-export function pair(host, port, code) {
-  return ensureServer().then(() => adbExec("pair", `${host}:${port}`, code));
-}
-
-/**
- * Connect to a wireless device by address (`ip:port`).
- * adb exits 0 even when the target is unreachable ("cannot connect to ..."),
- * so success is judged from the output text, not the exit code.
- * @param {string} address
- */
-export async function connectDevice(address) {
-  const output = await adbExec("connect", address);
-  if (!/connected to /i.test(output)) throw new Error(output || "连接失败");
-  return output.trim();
-}
-
-/** @returns {Promise<import('../../shared/types.js').AdbDevice[]>} */
-export async function listDevices() {
-  await ensureServer();
-  return parseAdbDevices(await adbExec("devices"));
-}
-
-/**
  * Disconnect a wireless ADB transport. Missing transports are idempotent.
  * @param {string} serial
  */
@@ -94,17 +58,4 @@ export async function disconnectTransport(serial) {
     throw error;
   }
   return true;
-}
-
-/** @param {string} serial */
-export async function getDeviceInfo(serial) {
-  await ensureServer();
-
-  const [model, brand, marketname] = await Promise.all([
-    adbShell(serial, "getprop", "ro.product.model").catch(() => ""),
-    adbShell(serial, "getprop", "ro.product.brand").catch(() => ""),
-    adbShell(serial, "getprop", "ro.product.marketname").catch(() => ""),
-  ]);
-
-  return parseDeviceInfo({ serial, model, brand, marketname });
 }
