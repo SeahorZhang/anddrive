@@ -31,5 +31,6 @@ declare module 'vue' {
     TooltipProvider: typeof import('reka-ui')['TooltipProvider']
     TooltipRoot: typeof import('reka-ui')['TooltipRoot']
     TooltipTrigger: typeof import('reka-ui')['TooltipTrigger']
+    UpdateNotesDialog: typeof import('./src/components/UpdateNotesDialog.vue')['default']
   }
 }

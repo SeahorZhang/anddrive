@@ -6,11 +6,19 @@
 ## 一、现状快照（能力边界）
 
 - **连接**：macOS 应用通过 mDNS 发现 `adb-tls-pairing`，扫码（`WIFI:T:ADB;...`）完成配对，再解析 `adb-tls-connect` 地址 `adb connect`。单设备优先，不提供设备切换器。
-- **数据**：Helper APK 仅作代码容器，主进程以 shell（uid 2000）一次性执行 `app_process ... ListMain`，stdout 返回可启动的第三方应用 `{packageName,label}`；图标走 `--icons` 模式，128×128 PNG base64，渲染层按 20 个/批顺序补齐。
+- **数据**：Helper APK 仅作代码容器，主进程以 shell（uid 2000）一次性执行 `app_process ... ListMain`，stdout 返回可启动的第三方应用 `{packageName,label}`；图标走 `--icons` 模式，128×128 PNG base64，渲染层按 20 个/批顺序补齐。加载前会比对设备内 Helper 的 `versionCode`，旧版自动 `adb install -r` 升级。
 - **缓存**：`electron/adb.js` 按 serial SHA-256 存 JSON 快照，90 天过期、20 设备 LRU、图标 7 天刷新，写入用临时文件 + rename。
 - **启动**：`startScrcpy` 固定参数（`--new-display=1920x1080/320`、`--start-app=<pkg>`、h265、`-b 24M`、窗口自动摆位），进程按 serial 记入 Map，但只能整体 kill。
+- **退出**：`shutdown()` 停止所有 scrcpy、停止并销毁 mDNS 发现、清理本进程残留临时文件、`adb kill-server`。
 - **界面**：macOS 毛玻璃风格首页、应用网格、搜索、扫码弹窗、断开确认。
+- **更新**：启动后经 `electron-updater` 自动检查并下载；下载完成在右上角显示「更新重启」，重启后弹窗展示更新内容。
 - **明显缺口**：多设备、设备信息、应用详情与操作、镜像生命周期管理、设置页、深色模式、国际化、自动更新、测试覆盖面窄。
+
+## 已完成
+
+- **自动更新（应用内）**（2026-09）：接入 `electron-updater`，启动后自动检查并下载。下载完成在标题栏右上角显示「更新重启」，点击后保存本次更新内容并重启安装，重启后弹窗展示更新内容。`electron/updater.js` 负责状态推送与待展示内容持久化，`electron/main.js` 在更新安装时跳过优雅退出延迟。`electron-builder.json` 增加 GitHub publish 与 `zip` 目标。注意：macOS 实际安装依赖代码签名与公证（见 7.2），发布需用 `GH_TOKEN` 上传 Release 及 `latest-mac.yml`。
+- **Helper 版本管理与自动升级**（2026-09）：`electron/adb.js` 新增 `ensureHelper` / `parseDeviceHelperVersion` / `shouldUpgradeHelper` / `bundledHelperVersion`；`scripts/build-helper.sh` 构建时从 `app/build.gradle` 解析版本并写出 `resources/helper-app.version.json`，已纳入 `scripts/verify-resources.mjs` 与 `electron-builder.json` 打包；新增 `tests/electron/helperVersion.test.js`。
+- **退出生命周期清理**（2026-09）：`electron/adb.js` 新增 `shutdown()`（停 scrcpy、停 mDNS 发现并销毁 bonjour、清理本进程 `.tmp` 缓存、`adb kill-server`）；`electron/main.js` 的 `before-quit` 改为等待清理完成后再退出，带重入保护。
 
 ## 二、发散方向
 
@@ -49,7 +57,7 @@
 
 ### 4. Helper 设备端
 
-1. **版本管理与自动升级**：比较设备内 APK 版本，旧版自动重装（当前只判断「是否存在」）。
+1. ✅ **版本管理与自动升级**（已完成）：比较设备内 APK 的 `versionCode`，旧版自动 `adb install -r`；版本不可读时不动设备。升级 Helper 需同步提升 `app/build.gradle` 的 `versionCode`。
 2. **通用命令入口**：`CommandMain <subcommand>` 复用一次 app_process，扩展设备信息/电池/截屏/音量等，避免每个能力单独冷启动。
 3. **冷启动优化（探索）**：评估 ADB 隧道 + 常驻进程复用的收益与安全权衡。
 4. **无 Helper 降级**：仅用 `pm list packages` + `cmd package` 提供包名列表（无图标/标签）作为兜底。
@@ -61,7 +69,7 @@
 2. **图标加载流式化**：当前顺序逐批，可恢复受控并发 + 可视区优先。
 3. **IPC 大 payload**：图标 base64 跨进程复制成本高，探索传文件路径或 `MessagePort`。
 4. **后台 / 增量刷新**：进入首页先渲染缓存，再静默刷新差异。
-5. **生命周期**：退出时停 ADB server、清理临时文件、优雅结束所有 scrcpy。
+5. ✅ **生命周期**（已完成）：退出时停 ADB server、清理临时文件、优雅结束所有 scrcpy，并释放 mDNS 发现。
 6. **诊断日志面板**：内置日志 + 一键导出诊断包（当前只有 console）。
 7. **测试扩充**：`tests/electron/*` 目前覆盖 cache/错误/解析；补 IPC handler、scrcpy 参数拼装、`ListMain` 参数解析、排序/搜索纯函数。
 8. **E2E 冒烟**：Playwright + Electron 跑「启动 → 空态 → 打开扫码弹窗」。
@@ -80,7 +88,7 @@
 
 ### 7. 分发、安全与生态
 
-1. **自动更新**：`electron-updater` + GitHub Releases。
+1. ✅ **自动更新**（已完成）：`electron-updater` + GitHub Releases。启动自动检查下载，下载完成右上角「更新重启」，点击保存更新内容并重启，重启后弹窗展示。`electron/updater.js`、`electron/main.js`、`electron-builder.json`（publish + `zip`）。**落地前提**：macOS 需先完成签名与公证，否则 Squirrel.Mac 无法安装。
 2. **签名与公证**：解决 Gatekeeper 拦截（梳理 `scripts/after-pack.js` 现状）。
 3. **分发渠道**：Homebrew Cask；评估 universal 构建（当前仅 arm64）。
 4. **安全**：校验下载的 adb/scrcpy 哈希；补全 IPC 入参校验；Helper APK 完整性校验。
@@ -107,7 +115,7 @@ Toast 通知 · 单个镜像关闭 · 应用右键操作（停止/卸载/复制�
 
 ### Phase 3 — 平台化
 
-多设备支持 + 心跳重连 · Helper 自动升级与通用命令入口 · 自动更新 / 签名公证 / CI · 国际化 · E2E 与测试补齐。
+多设备支持 + 心跳重连 · Helper 通用命令入口（自动升级已完成）· 签名公证 / CI（应用内自动更新已完成）· 国际化 · E2E 与测试补齐。
 
 ## 四、验证方式
 

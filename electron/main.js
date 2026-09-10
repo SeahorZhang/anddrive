@@ -2,6 +2,7 @@ import { app, BrowserWindow } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { shutdown } from './adb.js'
+import { initUpdater, isUpdateInstalling } from './updater.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 process.env.APP_ROOT = path.join(__dirname, '..')
@@ -47,11 +48,16 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(createWindow)
+app.whenReady().then(() => {
+  createWindow()
+  initUpdater(() => win)
+})
 
 let shuttingDown = false
 app.on('before-quit', (event) => {
-  if (shuttingDown) return
+  // During an update install the updater quits the app itself; teardown already
+  // ran, so let the quit proceed immediately.
+  if (shuttingDown || isUpdateInstalling()) return
   event.preventDefault()
   shuttingDown = true
   shutdown()

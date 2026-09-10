@@ -52,6 +52,16 @@ pnpm build
 
 `pnpm build` 会先运行资源校验（`pnpm run verify-resources`），确认 `resources/adb/mac/adb`、`resources/scrcpy/*`、`helper-app.apk` 与 `helper-app.version.json` 存在且非空，缺资源时快速失败。首次准备资源可运行 `pnpm run download-adb`。
 
+## 自动更新与发布
+
+应用通过 `electron-updater` 从 GitHub Releases 检查更新：启动后自动检查并下载，下载完成在窗口右上角出现「更新重启」，点击后保存更新内容并重启安装，重启后弹窗展示本次更新内容。更新源配置在 `electron-builder.json` 的 `publish`（`SeahorZhang/anddrive`）。
+
+发布新版本：
+
+1. 提升 `package.json` 的 `version`（必须递增，`electron-updater` 按语义化版本比较）。
+2. 使用带 `GH_TOKEN` 的环境执行 `electron-builder --publish always`，上传 macOS 产物与 `latest-mac.yml`。
+3. macOS 的自动安装依赖代码签名与公证；未签名时 Squirrel.Mac 无法完成替换，需先完成签名配置。
+
 ## 架构
 
 ```text

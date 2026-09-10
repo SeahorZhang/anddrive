@@ -11,7 +11,8 @@ const {
   deleteAppCache,
 } = window.electronAPI.adb
 
-const { startScrcpy } = window.electronAPI
+const { startScrcpy, onUpdateStatus, getUpdateStatus, installUpdate, getUpdateNotes } =
+  window.electronAPI
 
 export const connectApi = (address) => connect(address)
 
@@ -44,3 +45,15 @@ export const deleteAppCacheApi = (address) => deleteAppCache(address)
 
 // 通过 scrcpy 启动应用镜像窗口
 export const startScrcpyApi = (options) => startScrcpy(options)
+
+// 订阅自动更新状态（主进程推送）
+export const onUpdateStatusApi = (handler) => onUpdateStatus(handler)
+
+// 读取当前自动更新状态
+export const getUpdateStatusApi = () => getUpdateStatus()
+
+// 保存更新内容并重启安装
+export const installUpdateApi = () => installUpdate()
+
+// 读取（并消费）上次重启后待展示的更新内容
+export const getUpdateNotesApi = () => getUpdateNotes()
