@@ -114,3 +114,4 @@ git push --follow-tags
 | 客户端查不到更新 | Release 是 draft/prerelease，或缺 `.zip` 资源 |
 | 手机 Helper 不升级 | `helper-app/app/build.gradle` 的 `versionCode` 未提升，或新 APK 未提交 |
 | 更新点击后无反应 | 非打包（dev）环境，或没有可用更新；查看日志 `~/Library/Logs/AndDrive/update.log` |
+| 扫码后一直无反应 | macOS 未授予「本地网络」权限；在系统设置 → 隐私与安全性 → 本地网络中允许 AndDrive |
