@@ -28,7 +28,7 @@ cd helper-app
 ./gradlew assembleDebug
 ```
 
-APK 输出于 `helper-app/app/build/outputs/apk/debug/app-debug.apk`，`pnpm build-helper` 会复制为 `resources/helper-app.apk`。不要提交 `local.properties`、`build/` 或 Gradle reports。
+APK 输出于 `helper-app/app/build/outputs/apk/debug/app-debug.apk`，`pnpm build-helper` 会复制为 `resources/helper-app.apk`，并从 `app/build.gradle` 解析版本写入 `resources/helper-app.version.json`。桌面端据此比较设备上已安装 Helper 的 `versionCode`，旧版自动重装（见 `electron/adb.js` 的 `ensureHelper`）。升级 Helper 时请同步提升 `app/build.gradle` 的 `versionCode`，否则设备不会触发升级。不要提交 `local.properties`、`build/` 或 Gradle reports。
 
 ## 运行方式
 

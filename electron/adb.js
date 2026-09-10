@@ -197,6 +197,16 @@ function stopConnectDiscovery() {
   }
 }
 
+/** 停止所有 mDNS 发现并释放 bonjour 实例（退出时调用）。 */
+function stopDiscovery() {
+  stopPairingDiscovery()
+  stopConnectDiscovery()
+  if (bonjour) {
+    bonjour.destroy?.()
+    bonjour = null
+  }
+}
+
 // ---------------------------------------------------------------------------
 // scrcpy 镜像窗口
 // ---------------------------------------------------------------------------
@@ -495,6 +505,88 @@ async function installHelper(serial) {
   return '安装成功'
 }
 
+const HELPER_VERSION_FILE = 'helper-app.version.json'
+const helperVersionPath = () => path.join(resourcesBase(), HELPER_VERSION_FILE)
+
+/**
+ * Read the bundled helper's version metadata written by build-helper.sh next to
+ * the APK. Returns null when the metadata is missing or malformed, in which
+ * case version comparison is skipped and the installed helper is left as-is.
+ * @returns {Promise<{ versionCode: number, versionName: string | null } | null>}
+ */
+async function bundledHelperVersion() {
+  try {
+    const parsed = JSON.parse(await fs.readFile(helperVersionPath(), 'utf8'))
+    const versionCode = Number(parsed?.versionCode)
+    if (!Number.isInteger(versionCode) || versionCode < 0) return null
+    return {
+      versionCode,
+      versionName: typeof parsed.versionName === 'string' ? parsed.versionName : null,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Parse `dumpsys package com.anddrive.helper` output for the installed version.
+ * @param {string} output
+ * @returns {{ versionCode: number, versionName: string | null } | null}
+ */
+export function parseDeviceHelperVersion(output) {
+  const text = String(output ?? '')
+  const code = text.match(/versionCode=(\d+)/)
+  if (!code) return null
+  const name = text.match(/versionName=(\S+)/)
+  return { versionCode: Number(code[1]), versionName: name ? name[1] : null }
+}
+
+/** @param {string} serial */
+async function deviceHelperVersion(serial) {
+  try {
+    const output = await adbExec('-s', serial, 'shell', 'dumpsys', 'package', HELPER_PACKAGE)
+    return parseDeviceHelperVersion(output)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * A bundled helper should replace the installed one only when both versions are
+ * known and the bundled code is strictly newer, so a device running a newer
+ * helper (or one whose version cannot be read) is never downgraded.
+ * @param {{ versionCode: number } | null} bundled
+ * @param {{ versionCode: number } | null} installed
+ */
+export function shouldUpgradeHelper(bundled, installed) {
+  if (!Number.isInteger(bundled?.versionCode) || !Number.isInteger(installed?.versionCode)) {
+    return false
+  }
+  return bundled.versionCode > installed.versionCode
+}
+
+/**
+ * Make sure the device runs the current bundled helper: install when absent,
+ * upgrade when the installed version is older, otherwise leave it untouched.
+ * @param {string} serial
+ * @returns {Promise<'installed' | 'upgraded' | 'current' | 'unknown'>}
+ */
+async function ensureHelper(serial) {
+  if (!(await isHelperInstalled(serial))) {
+    await installHelper(serial)
+    return 'installed'
+  }
+  const [bundled, installed] = await Promise.all([
+    bundledHelperVersion(),
+    deviceHelperVersion(serial),
+  ])
+  if (shouldUpgradeHelper(bundled, installed)) {
+    await installHelper(serial)
+    return 'upgraded'
+  }
+  return bundled && installed ? 'current' : 'unknown'
+}
+
 /**
  * Remove the helper from the device with a plain `adb uninstall`.
  * Some ROMs print a spurious `Failure [...]` here while actually succeeding,
@@ -601,7 +693,7 @@ function uniqueApps(apps) {
  */
 async function loadInstalledApps(serial) {
   await ensureServer()
-  if (!(await isHelperInstalled(serial))) await installHelper(serial)
+  await ensureHelper(serial)
   const { stdout } = await runHelperList(serial)
   const apps = uniqueApps(normalizeListOutput(stdout))
 
@@ -653,6 +745,51 @@ async function getAppIcons(serial, packages) {
   }
   await writeAppCache(serial, snapshot(cache?.authoritativeAt || now, [...byPackage.values()]))
   return fetched
+}
+
+// ---------------------------------------------------------------------------
+// 生命周期
+// ---------------------------------------------------------------------------
+
+let adbServerStopped = false
+
+/** Best-effort `adb kill-server`; only when this session started the daemon. */
+async function stopAdbServer() {
+  if (!serverStarted || adbServerStopped) return
+  adbServerStopped = true
+  serverStarted = false
+  try {
+    await adbExec('kill-server')
+  } catch (error) {
+    console.warn('Failed to stop ADB server:', error)
+  }
+}
+
+/** Remove temp cache files written by this process that a crash may have left. */
+async function cleanupTempFiles() {
+  try {
+    const root = cacheRoot()
+    const entries = await fs.readdir(root)
+    await Promise.all(
+      entries
+        .filter((name) => name.endsWith('.tmp') && name.includes(`.${process.pid}.`))
+        .map((name) => removeFile(path.join(root, name))),
+    )
+  } catch (error) {
+    if (error?.code !== 'ENOENT') console.warn('Failed to clean temp app caches:', error)
+  }
+}
+
+/**
+ * Quit-time teardown: stop mirror windows, mDNS discovery, leftover temp files
+ * and the ADB daemon this session started. Every step is best-effort and never
+ * rejects, so the caller can always proceed to quit.
+ */
+export async function shutdown() {
+  stopScrcpy()
+  stopDiscovery()
+  await cleanupTempFiles()
+  await stopAdbServer()
 }
 
 // ---------------------------------------------------------------------------

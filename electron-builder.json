@@ -19,6 +19,10 @@
     {
       "from": "resources/helper-app.apk",
       "to": "helper-app.apk"
+    },
+    {
+      "from": "resources/helper-app.version.json",
+      "to": "helper-app.version.json"
     }
   ],
   "mac": {

@@ -50,7 +50,7 @@ pnpm build
 
 `pnpm build-helper` 使用 `helper-app/gradlew` 构建 APK，并复制到 `resources/helper-app.apk`。
 
-`pnpm build` 会先运行资源校验（`pnpm run verify-resources`），确认 `resources/adb/mac/adb`、`resources/scrcpy/*` 和 `helper-app.apk` 存在且非空，缺资源时快速失败。首次准备资源可运行 `pnpm run download-adb`。
+`pnpm build` 会先运行资源校验（`pnpm run verify-resources`），确认 `resources/adb/mac/adb`、`resources/scrcpy/*`、`helper-app.apk` 与 `helper-app.version.json` 存在且非空，缺资源时快速失败。首次准备资源可运行 `pnpm run download-adb`。
 
 ## 架构
 

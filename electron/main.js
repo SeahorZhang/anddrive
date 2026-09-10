@@ -1,7 +1,7 @@
 import { app, BrowserWindow } from 'electron'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { stopScrcpy } from './adb.js'
+import { shutdown } from './adb.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 process.env.APP_ROOT = path.join(__dirname, '..')
@@ -48,7 +48,16 @@ function createWindow() {
 }
 
 app.whenReady().then(createWindow)
-app.on('before-quit', () => stopScrcpy())
+
+let shuttingDown = false
+app.on('before-quit', (event) => {
+  if (shuttingDown) return
+  event.preventDefault()
+  shuttingDown = true
+  shutdown()
+    .catch((error) => console.warn('Shutdown cleanup failed:', error))
+    .finally(() => app.quit())
+})
 app.on('window-all-closed', () => {
   win = null
 })
