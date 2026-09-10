@@ -1,8 +1,17 @@
 # AndDrive Helper App
 
-Helper App 安装在 Android 设备上，本质是一个**纯代码容器**：没有任何组件（无 Activity / Service / 权限 / 桌面图标）。桌面端通过 `app_process` 以 shell（uid 2000）身份一次性执行 `ListMain`，stdout 返回应用列表 JSON 后进程即退出。
+Helper App 安装在 Android 设备上，主要作为**纯代码容器**：不申请权限、不监听端口。桌面端通过 `app_process` 以 shell（uid 2000）身份一次性执行 `ListMain`，stdout 返回应用列表 JSON 后进程即退出。
 
-当前实现只有 `ListMain.java` 一个类。
+此外提供一个桌面图标（`MainActivity`）：点击后直接跳转 Android 的“无线调试”页面，方便开启配对；页面打开后 Activity 立即结束。由于 Android 没有公开的无线调试深链 Intent，实现优先使用 Settings 的 QS 磁贴长按网关：
+
+```text
+com.android.settings/.qstile.QSTileLongPressGatewayActivity
+  + EXTRA_COMPONENT_NAME = com.android.settings/.development.qstile.AdbWirelessDebuggingDevelopmentTile
+```
+
+该入口不可用时再依次尝试 OEM 的隐藏入口，最后回退到“开发者选项”页面。
+
+当前实现包含 `ListMain.java` 与 `MainActivity.java` 两个类。
 
 ## 构建
 
@@ -19,7 +28,7 @@ cd helper-app
 ./gradlew assembleDebug
 ```
 
-APK 输出于 `helper-app/app/build/outputs/apk/debug/app-debug.apk`，`pnpm build-helper` 会复制为 `resources/helper-app.apk`。不要提交 `local.properties`、`build/` 或 Gradle reports。
+APK 输出于 `helper-app/app/build/outputs/apk/debug/app-debug.apk`，`pnpm build-helper` 会复制为 `resources/helper-app.apk`，并从 `app/build.gradle` 解析版本写入 `resources/helper-app.version.json`。桌面端据此比较设备上已安装 Helper 的 `versionCode`，旧版自动重装（见 `electron/adb.js` 的 `ensureHelper`）。升级 Helper 时请同步提升 `app/build.gradle` 的 `versionCode`，否则设备不会触发升级。不要提交 `local.properties`、`build/` 或 Gradle reports。
 
 ## 运行方式
 

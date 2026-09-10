@@ -6,7 +6,8 @@ vi.mock('electron', () => ({
 }))
 vi.mock('bonjour-service', () => ({ default: class {} }))
 
-const { isAlreadyDisconnectedError, normalizeDisconnectSerial } = await import('../../electron/adb.js')
+const { isAlreadyDisconnectedError, normalizeDisconnectSerial } =
+  await import('../../electron/adb.js')
 
 describe('disconnect validation and result classification', () => {
   it.each(['device:5555', '192.168.1.20:5555', '[::1]:5555'])('accepts serial %s', (serial) => {

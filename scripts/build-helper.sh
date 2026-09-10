@@ -49,5 +49,18 @@ fi
 echo "复制APK到resources目录..."
 cp "$APK_PATH" "$RESOURCES_DIR/$APK_NAME"
 
+# 记录APK版本，供桌面端判断设备上的Helper是否需要升级
+GRADLE_FILE="$HELPER_APP_DIR/app/build.gradle"
+VERSION_CODE="$(sed -n 's/^[[:space:]]*versionCode[[:space:]][[:space:]]*\([0-9][0-9]*\).*/\1/p' "$GRADLE_FILE" | head -n 1)"
+VERSION_NAME="$(sed -n 's/^[[:space:]]*versionName[[:space:]][[:space:]]*"\([^"]*\)".*/\1/p' "$GRADLE_FILE" | head -n 1)"
+if [ -z "$VERSION_CODE" ]; then
+    echo "错误: 无法从 $GRADLE_FILE 解析 versionCode"
+    exit 1
+fi
+
+VERSION_FILE="$RESOURCES_DIR/helper-app.version.json"
+printf '{\n  "versionCode": %s,\n  "versionName": "%s"\n}\n' "$VERSION_CODE" "$VERSION_NAME" > "$VERSION_FILE"
+echo "版本信息: versionCode=$VERSION_CODE versionName=$VERSION_NAME"
+
 echo "构建完成!"
 echo "APK位置: $RESOURCES_DIR/$APK_NAME"
