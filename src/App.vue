@@ -1,12 +1,18 @@
 <script setup>
+import { onMounted } from 'vue'
 import PageHome from './components/home/index.vue'
+import UpdateNotesDialog from './components/UpdateNotesDialog.vue'
 import { connectApi, disconnectApi } from '@/api'
+import { initUpdater, loadPendingUpdateNotes, updateNotesDialog } from '@/update'
 
 const pageType = ref('loading') // loading | home | addDevice
 const deviceDialogVisible = ref(false)
 const device = ref(null)
 const disconnecting = ref(false)
 const disconnectError = ref('')
+
+initUpdater()
+onMounted(loadPendingUpdateNotes)
 
 const connect = async () => {
   device.value = localStorage.getItem('device') ? JSON.parse(localStorage.getItem('device')) : null
@@ -44,13 +50,28 @@ async function disconnect() {
 </script>
 
 <template>
-  <PageHeader :pageType="pageType" :disconnecting="disconnecting" :disconnect-error="disconnectError"
-    @disconnect="disconnect" />
+  <PageHeader
+    :pageType="pageType"
+    :disconnecting="disconnecting"
+    :disconnect-error="disconnectError"
+    @disconnect="disconnect"
+  />
 
-  <div v-if="pageType === 'loading'" class="">loading</div>
+  <div v-if="pageType === 'loading'" class="flex flex-1 items-center justify-center">
+    <span
+      class="size-5 animate-spin rounded-full border-2 border-black/10 border-t-[#007aff]"
+      aria-label="加载中"
+    />
+  </div>
 
   <PageHome v-else-if="pageType === 'home'" :device="device" />
 
   <AddDevice v-else-if="pageType === 'addDevice'" v-model="deviceDialogVisible" />
   <AddDeviceDialog v-model="deviceDialogVisible" @paired="connect" />
+
+  <UpdateNotesDialog
+    v-model="updateNotesDialog.visible"
+    :version="updateNotesDialog.version"
+    :release-notes="updateNotesDialog.releaseNotes"
+  />
 </template>

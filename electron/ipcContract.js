@@ -14,4 +14,13 @@ export const CHANNELS = {
 
   /** Payload is a ScrcpyRequest (shared/types.js). */
   scrcpyStart: 'start_scrcpy',
+
+  /** Main → renderer push of the current auto-update status. */
+  updateStatus: 'update:status',
+  /** Renderer → main: current update status (on mount). */
+  updateGetStatus: 'update:getStatus',
+  /** Renderer → main: persist release notes and restart to install. */
+  updateInstall: 'update:install',
+  /** Renderer → main: consume release notes saved before the last restart. */
+  updateNotes: 'update:getNotes',
 }

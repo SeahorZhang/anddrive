@@ -4,6 +4,11 @@
   "asar": true,
   "productName": "AndDrive",
   "afterPack": "scripts/after-pack.js",
+  "publish": {
+    "provider": "github",
+    "owner": "SeahorZhang",
+    "repo": "anddrive"
+  },
   "electronLanguages": [
     "zh-CN",
     "en-US"
@@ -19,11 +24,16 @@
     {
       "from": "resources/helper-app.apk",
       "to": "helper-app.apk"
+    },
+    {
+      "from": "resources/helper-app.version.json",
+      "to": "helper-app.version.json"
     }
   ],
   "mac": {
     "target": [
-      "dmg"
+      "dmg",
+      "zip"
     ],
     "artifactName": "${productName}-Mac-${arch}-${version}-Installer.${ext}",
     "extraResources": [
