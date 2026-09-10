@@ -33,15 +33,15 @@ function handleClose() {
   <DialogRoot v-model:open="modelValue">
     <DialogPortal>
       <DialogOverlay
-        class="data-[state=open]:animate-in data-[state=open]:fade-in fixed inset-0 z-50 bg-black/30"
+        class="data-[state=open]:animate-in data-[state=open]:fade-in fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]"
         @click="handleClose"
       />
       <DialogContent
-        class="data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95 fixed top-1/2 left-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-xl border border-black/8 bg-white p-5 shadow-[0_4px_16px_rgba(0,0,0,0.12)] outline-none"
+        class="data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95 fixed top-1/2 left-1/2 z-50 w-80 -translate-x-1/2 -translate-y-1/2 rounded-[16px] border border-white/60 bg-white/90 p-5 shadow-[0_16px_48px_rgba(0,0,0,0.22)] backdrop-blur-2xl outline-none"
         @pointer-down-outside.prevent="handleClose"
         @escape-key-down.prevent="handleClose"
       >
-        <h3 class="mb-2 text-[13px] font-medium text-black/80">{{ title }}</h3>
+        <h3 class="mb-2 text-[13px] font-semibold text-[#1d1d1f]">{{ title }}</h3>
         <p class="mb-5 text-[11px] leading-relaxed whitespace-pre-line text-black/50">
           {{ message }}
         </p>

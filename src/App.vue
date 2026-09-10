@@ -44,10 +44,19 @@ async function disconnect() {
 </script>
 
 <template>
-  <PageHeader :pageType="pageType" :disconnecting="disconnecting" :disconnect-error="disconnectError"
-    @disconnect="disconnect" />
+  <PageHeader
+    :pageType="pageType"
+    :disconnecting="disconnecting"
+    :disconnect-error="disconnectError"
+    @disconnect="disconnect"
+  />
 
-  <div v-if="pageType === 'loading'" class="">loading</div>
+  <div v-if="pageType === 'loading'" class="flex flex-1 items-center justify-center">
+    <span
+      class="size-5 animate-spin rounded-full border-2 border-black/10 border-t-[#007aff]"
+      aria-label="加载中"
+    />
+  </div>
 
   <PageHome v-else-if="pageType === 'home'" :device="device" />
 

@@ -29,7 +29,7 @@ watch(
 <template>
   <TooltipProvider :delay-duration="300">
     <div class="relative">
-      <div style="-webkit-app-region: drag" class="h-12 w-full"></div>
+      <div style="-webkit-app-region: drag" class="h-11 w-full"></div>
 
       <div
         v-if="pageType === 'home'"
