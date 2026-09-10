@@ -8,8 +8,6 @@ const props = defineProps({
 
 /** 每批请求的图标数量 */
 const ICON_BATCH_SIZE = 20
-/** 同时进行的图标批次数 */
-const ICON_BATCH_CONCURRENCY = 3
 /** 图标缓存有效期：7 天内不重新拉取 */
 const ICON_REFRESH_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -78,28 +76,18 @@ async function getAppList() {
     loading.value = false
   }
 
-  // 第二阶段：只有图标缺失或过期的才拉取，每批 20 个、3 路并发补齐
+  // 第二阶段：只有图标缺失或过期的才拉取，严格按列表顺序从头到尾逐批补齐
   const pending = apps.value.filter(needsIcon).map((app) => app.packageName)
   if (pending.length === 0) return
 
-  let cursor = 0
-  async function worker() {
-    while (cursor < pending.length) {
-      const group = pending.slice(cursor, cursor + ICON_BATCH_SIZE)
-      cursor += ICON_BATCH_SIZE
-      try {
-        patchIcons(await getAppIconsApi(props.address, group))
-      } catch (error) {
-        console.log('图标批次失败', error?.message)
-      }
+  for (let cursor = 0; cursor < pending.length; cursor += ICON_BATCH_SIZE) {
+    const group = pending.slice(cursor, cursor + ICON_BATCH_SIZE)
+    try {
+      patchIcons(await getAppIconsApi(props.address, group))
+    } catch (error) {
+      console.log('图标批次失败', error?.message)
     }
   }
-  await Promise.all(
-    Array.from(
-      { length: Math.min(ICON_BATCH_CONCURRENCY, Math.ceil(pending.length / ICON_BATCH_SIZE)) },
-      worker,
-    ),
-  )
 }
 
 getAppList()
