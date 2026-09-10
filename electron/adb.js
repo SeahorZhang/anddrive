@@ -254,6 +254,9 @@ export const CACHE_VERSION = 2
 export const CACHE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000
 const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024
 const MAX_DEVICE_CACHES = 20
+// A temp file older than this is a leftover from a crashed write; fresh ones
+// belong to concurrent writes and must not be pruned.
+const STALE_TEMP_MAX_AGE_MS = 60 * 60 * 1000
 const MAX_APPS = 5000
 const MAX_ICON_BYTES = 512 * 1024
 const PNG_DATA_URL_PREFIX = 'data:image/png;base64,'
@@ -389,7 +392,14 @@ async function pruneCaches(protectedPath) {
       const filePath = path.join(root, entry.name)
       if (!entry.isFile()) continue
       if (entry.name.includes('.tmp')) {
-        await removeFile(filePath)
+        // Never prune a temp file that a concurrent write may still be renaming;
+        // only reap leftovers from crashed writes.
+        try {
+          const stats = await fs.stat(filePath)
+          if (Date.now() - stats.mtimeMs > STALE_TEMP_MAX_AGE_MS) await removeFile(filePath)
+        } catch (error) {
+          if (error?.code !== 'ENOENT') console.warn('Failed to prune temp app cache:', error)
+        }
         continue
       }
       if (!entry.name.endsWith('.json')) continue

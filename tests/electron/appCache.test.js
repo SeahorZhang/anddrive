@@ -77,4 +77,24 @@ describe('app cache persistence', () => {
     expect(await readAppCache(serial)).toBeNull()
     await expect(fs.access(cacheFile())).rejects.toMatchObject({ code: 'ENOENT' })
   })
+
+  it('keeps concurrent writes intact and only prunes stale temp files', async () => {
+    const root = path.dirname(cacheFile())
+    await fs.mkdir(root, { recursive: true })
+    const stale = path.join(root, 'stale.100.abcd.tmp')
+    const fresh = path.join(root, 'fresh.200.efgh.tmp')
+    await fs.writeFile(stale, 'stale')
+    await fs.writeFile(fresh, 'fresh')
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000)
+    await fs.utimes(stale, old, old)
+
+    const results = await Promise.all(
+      Array.from({ length: 20 }, () => writeAppCache(serial, snapshot())),
+    )
+
+    expect(results).toEqual(Array(20).fill(true))
+    await expect(fs.access(stale)).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(fs.access(fresh)).resolves.toBeUndefined()
+    expect(await readAppCache(serial)).not.toBeNull()
+  })
 })
