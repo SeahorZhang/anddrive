@@ -41,7 +41,8 @@ jobs:
 
       - name: Package macOS app
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: |
           node scripts/verify-resources.mjs
           pnpm exec vite build
