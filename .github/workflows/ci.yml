@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+
+      # oxlint 是当前可用的 linter；lint:eslint 受 typescript-eslint 不支持
+      # TypeScript 7.0 影响，加载解析器即失败，修复后再纳入 CI。
+      - run: pnpm lint:oxlint
+      - run: pnpm format:check
+      - run: pnpm typecheck
+      - run: pnpm test

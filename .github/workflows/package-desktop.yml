@@ -1,0 +1,58 @@
+name: Package Desktop
+
+on:
+  workflow_dispatch:
+
+jobs:
+  package:
+    # Apple Silicon runner：scrcpy 资源仅提供 arm64。
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager --install "platforms;android-34" "build-tools;33.0.1" "build-tools;34.0.0" "platform-tools"
+
+      - run: pnpm install --frozen-lockfile
+
+      # 完整流程：先从源码构建手机端 Helper APK，再打包桌面端。
+      - name: Build Helper APK
+        run: pnpm build-helper
+
+      - run: pnpm lint:oxlint
+      - run: pnpm typecheck
+      - run: pnpm test
+
+      - name: Package macOS app
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          node scripts/verify-resources.mjs
+          pnpm exec vite build
+          pnpm exec electron-builder --mac --arm64 --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anddrive-macos
+          path: |
+            release/*/*.dmg
+            release/*/*.zip
+            resources/helper-app.apk
+            resources/helper-app.version.json
+          if-no-files-found: error
