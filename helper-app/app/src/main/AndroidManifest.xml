@@ -1,8 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Pure code container for app_process: no components, no permissions. -->
+    <!-- Code container for app_process plus a launcher shortcut that jumps to
+         Android's wireless-debugging settings; no runtime permissions. -->
     <application
         android:allowBackup="false"
-        android:label="AndDrive Helper" />
+        android:label="AndDrive Helper">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
 </manifest>
