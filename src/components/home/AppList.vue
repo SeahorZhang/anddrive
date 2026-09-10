@@ -1,6 +1,14 @@
 <script setup>
+import { Icon } from '@iconify/vue'
 import BaseButton from '../BaseButton.vue'
-import { installHelperApi, loadInstalledAppsApi, getAppIconsApi, uninstallHelperApi, deleteAppCacheApi, startScrcpyApi } from '@/api'
+import {
+  installHelperApi,
+  loadInstalledAppsApi,
+  getAppIconsApi,
+  uninstallHelperApi,
+  deleteAppCacheApi,
+  startScrcpyApi,
+} from '@/api'
 
 const props = defineProps({
   address: String,
@@ -8,8 +16,6 @@ const props = defineProps({
 
 /** 每批请求的图标数量 */
 const ICON_BATCH_SIZE = 20
-/** 同时进行的图标批次数 */
-const ICON_BATCH_CONCURRENCY = 3
 /** 图标缓存有效期：7 天内不重新拉取 */
 const ICON_REFRESH_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -78,28 +84,18 @@ async function getAppList() {
     loading.value = false
   }
 
-  // 第二阶段：只有图标缺失或过期的才拉取，每批 20 个、3 路并发补齐
+  // 第二阶段：只有图标缺失或过期的才拉取，严格按列表顺序从头到尾逐批补齐
   const pending = apps.value.filter(needsIcon).map((app) => app.packageName)
   if (pending.length === 0) return
 
-  let cursor = 0
-  async function worker() {
-    while (cursor < pending.length) {
-      const group = pending.slice(cursor, cursor + ICON_BATCH_SIZE)
-      cursor += ICON_BATCH_SIZE
-      try {
-        patchIcons(await getAppIconsApi(props.address, group))
-      } catch (error) {
-        console.log('图标批次失败', error?.message)
-      }
+  for (let cursor = 0; cursor < pending.length; cursor += ICON_BATCH_SIZE) {
+    const group = pending.slice(cursor, cursor + ICON_BATCH_SIZE)
+    try {
+      patchIcons(await getAppIconsApi(props.address, group))
+    } catch (error) {
+      console.log('图标批次失败', error?.message)
     }
   }
-  await Promise.all(
-    Array.from(
-      { length: Math.min(ICON_BATCH_CONCURRENCY, Math.ceil(pending.length / ICON_BATCH_SIZE)) },
-      worker,
-    ),
-  )
 }
 
 getAppList()
@@ -115,49 +111,153 @@ async function launchApp(app) {
     console.error('launchApp failed:', error)
   }
 }
-
 </script>
 
 <template>
-  <div class="mb-3 flex items-center gap-1.5">
-    <input v-model="searchText" type="text" placeholder="搜索..."
-      class="min-w-0 flex-1 rounded-lg border border-black/10 bg-gray-100 px-3 py-1.5 text-[11px] text-black/80 placeholder-black/30 transition-colors outline-none focus:border-blue-500/50" />
-    <BaseButton icon="lucide:download" icon-only :disabled="loading" title="安装 Helper 到手机" @click="installHelper" />
-    <BaseButton icon="lucide:trash-2" icon-only :disabled="loading" title="从手机卸载 Helper" @click="uninstallHelper" />
-    <BaseButton icon="lucide:eraser" icon-only :disabled="loading" title="清除应用缓存列表并重新加载" @click="clearCache" />
-  </div>
-
-  <ScrollAreaRoot class="h-0 flex-1">
-    <ScrollAreaViewport class="h-full w-full">
-      <div v-if="loading && apps.length === 0" class="flex items-center justify-center py-8">
-        <div class="text-sm text-black/40">加载中...</div>
+  <div class="flex min-h-0 flex-1 flex-col">
+    <div class="mb-3 flex items-center gap-2">
+      <div class="relative flex h-8 min-w-0 flex-1 items-center">
+        <Icon
+          icon="lucide:search"
+          :width="14"
+          :height="14"
+          class="pointer-events-none absolute left-2.5 text-black/35"
+        />
+        <input
+          v-model="searchText"
+          type="text"
+          placeholder="搜索应用"
+          class="h-full w-full rounded-[8px] bg-black/[0.05] pr-8 pl-8 text-[12px] text-black/80 transition-colors outline-none placeholder:text-black/30 focus:bg-black/[0.07] focus:ring-2 focus:ring-[#007aff]/35"
+        />
+        <button
+          v-if="searchText"
+          class="absolute right-2 flex size-4 cursor-pointer items-center justify-center rounded-full bg-black/20 text-white transition-colors hover:bg-black/35"
+          @click="searchText = ''"
+        >
+          <Icon icon="lucide:x" :width="10" :height="10" />
+        </button>
       </div>
 
-      <div v-if="filteredApps.length > 0" class="grid grid-cols-5 gap-2">
-        <div v-for="app in filteredApps" :key="app.packageName" @click="launchApp(app)"
-          class="flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-black/8 bg-gray-50 p-2 transition-all hover:border-black/12 hover:bg-gray-100"
-          title="点击启动">
-          <img v-if="app.iconUrl" :src="app.iconUrl" class="pointer-events-none h-8 w-8 rounded-lg" />
-          <div v-else class="pointer-events-none flex h-8 w-8 items-center justify-center rounded-lg bg-gray-200">
-            <svg class="h-4 w-4 text-black/20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-            </svg>
+      <TooltipProvider :delay-duration="300">
+        <div class="flex items-center gap-0.5 rounded-[9px] bg-black/[0.05] p-0.5">
+          <TooltipRoot>
+            <TooltipTrigger as-child>
+              <BaseButton
+                icon="lucide:download"
+                icon-only
+                :disabled="loading"
+                @click="installHelper"
+              />
+            </TooltipTrigger>
+            <TooltipPortal>
+              <TooltipContent
+                :side-offset="8"
+                side="bottom"
+                class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg"
+              >
+                安装 Helper 到手机
+              </TooltipContent>
+            </TooltipPortal>
+          </TooltipRoot>
+          <TooltipRoot>
+            <TooltipTrigger as-child>
+              <BaseButton
+                icon="lucide:trash-2"
+                icon-only
+                :disabled="loading"
+                @click="uninstallHelper"
+              />
+            </TooltipTrigger>
+            <TooltipPortal>
+              <TooltipContent
+                :side-offset="8"
+                side="bottom"
+                class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg"
+              >
+                从手机卸载 Helper
+              </TooltipContent>
+            </TooltipPortal>
+          </TooltipRoot>
+          <TooltipRoot>
+            <TooltipTrigger as-child>
+              <BaseButton icon="lucide:eraser" icon-only :disabled="loading" @click="clearCache" />
+            </TooltipTrigger>
+            <TooltipPortal>
+              <TooltipContent
+                :side-offset="8"
+                side="bottom"
+                class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg"
+              >
+                清除缓存并重新加载
+              </TooltipContent>
+            </TooltipPortal>
+          </TooltipRoot>
+        </div>
+      </TooltipProvider>
+    </div>
+
+    <ScrollAreaRoot class="min-h-0 flex-1">
+      <ScrollAreaViewport
+        class="h-full w-full rounded-[14px] border border-white/70 bg-white/55 shadow-[0_1px_3px_rgba(0,0,0,0.05)]"
+      >
+        <div class="p-2.5">
+          <div
+            v-if="loading && apps.length === 0"
+            class="flex flex-col items-center justify-center gap-3 py-16 text-black/35"
+          >
+            <span
+              class="size-5 animate-spin rounded-full border-2 border-black/15 border-t-black/45"
+            />
+            <span class="text-[12px]">正在读取应用列表…</span>
           </div>
-          <span class="pointer-events-none w-full truncate text-center text-[10px] text-black/60">{{
-            app.label
-          }}</span>
-        </div>
-      </div>
 
-      <div v-else-if="!loading" class="flex items-center justify-center py-8">
-        <div class="text-sm text-black/40">
-          {{ apps.length === 0 ? '暂无app' : '未找到匹配的app' }}
+          <div
+            v-else-if="filteredApps.length > 0"
+            class="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-1"
+          >
+            <button
+              v-for="app in filteredApps"
+              :key="app.packageName"
+              type="button"
+              title="点击启动"
+              class="group flex cursor-pointer flex-col items-center gap-1.5 rounded-[12px] p-2 transition-colors outline-none hover:bg-black/[0.05] focus-visible:bg-black/[0.05] active:bg-black/[0.09]"
+              @click="launchApp(app)"
+            >
+              <img
+                v-if="app.iconUrl"
+                :src="app.iconUrl"
+                class="pointer-events-none size-11 rounded-[11px] shadow-[0_1px_3px_rgba(0,0,0,0.14)]"
+              />
+              <div
+                v-else
+                class="pointer-events-none flex size-11 items-center justify-center rounded-[11px] bg-black/[0.06] text-black/25"
+              >
+                <Icon icon="lucide:package" :width="20" :height="20" />
+              </div>
+              <span
+                class="pointer-events-none w-full truncate text-center text-[11px] leading-tight text-black/70"
+              >
+                {{ app.label }}
+              </span>
+            </button>
+          </div>
+
+          <div v-else class="flex flex-col items-center justify-center gap-3 py-16 text-black/35">
+            <Icon
+              :icon="apps.length === 0 ? 'lucide:package' : 'lucide:search'"
+              :width="28"
+              :height="28"
+              class="text-black/20"
+            />
+            <span class="text-[12px]">
+              {{ apps.length === 0 ? '手机中暂无应用' : '没有找到匹配的应用' }}
+            </span>
+          </div>
         </div>
-      </div>
-    </ScrollAreaViewport>
-    <ScrollAreaScrollbar orientation="vertical">
-      <ScrollAreaThumb />
-    </ScrollAreaScrollbar>
-  </ScrollAreaRoot>
+      </ScrollAreaViewport>
+      <ScrollAreaScrollbar orientation="vertical" class="flex w-2 touch-none p-0.5 select-none">
+        <ScrollAreaThumb class="relative flex-1 rounded-full bg-black/20 hover:bg-black/30" />
+      </ScrollAreaScrollbar>
+    </ScrollAreaRoot>
+  </div>
 </template>

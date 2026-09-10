@@ -1,6 +1,8 @@
 <script setup>
+import { Icon } from '@iconify/vue'
 import ConfirmDialog from './ConfirmDialog.vue'
 import BaseButton from './BaseButton.vue'
+import { updateState, requestUpdateInstall } from '@/update'
 
 const props = defineProps({
   pageType: String,
@@ -9,6 +11,14 @@ const props = defineProps({
 })
 const showConfirm = ref(false)
 const emit = defineEmits(['disconnect'])
+
+const updateReady = computed(() => updateState.state === 'downloaded')
+const updating = computed(() => updateState.state === 'installing')
+
+async function handleInstall() {
+  if (updating.value) return
+  await requestUpdateInstall()
+}
 
 function handleConfirm() {
   emit('disconnect')
@@ -29,14 +39,44 @@ watch(
 <template>
   <TooltipProvider :delay-duration="300">
     <div class="relative">
-      <div style="-webkit-app-region: drag" class="h-12 w-full"></div>
+      <div style="-webkit-app-region: drag" class="h-11 w-full"></div>
 
       <div
-        v-if="pageType === 'home'"
         style="-webkit-app-region: no-drag"
-        class="absolute top-1/2 right-4 z-10 flex -translate-y-1/2 items-center gap-1"
+        class="absolute top-1/2 right-4 z-10 flex -translate-y-1/2 items-center gap-2"
       >
-        <TooltipRoot>
+        <span
+          v-if="updateState.state === 'downloading'"
+          class="text-[11px] font-medium text-black/45 tabular-nums"
+        >
+          更新 {{ updateState.percent }}%
+        </span>
+        <span
+          v-else-if="updateState.state === 'error' && updateState.message"
+          :title="updateState.message"
+          class="max-w-[180px] truncate text-[11px] font-medium text-[#ff3b30]"
+        >
+          更新失败
+        </span>
+
+        <button
+          v-if="updateReady || updating"
+          type="button"
+          :disabled="updating"
+          :title="updateState.version ? `新版本 ${updateState.version}` : '更新并重启'"
+          class="inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-full bg-[#007aff] pr-3 pl-2.5 text-[12px] font-medium text-white shadow-[0_1px_3px_rgba(0,122,255,0.35)] transition-colors outline-none hover:bg-[#0071e3] focus-visible:ring-2 focus-visible:ring-[#007aff]/40 active:bg-[#0064d2] disabled:cursor-default disabled:opacity-70"
+          @click="handleInstall"
+        >
+          <Icon
+            :icon="updating ? 'lucide:refresh-cw' : 'lucide:download'"
+            :width="14"
+            :height="14"
+            :class="updating && 'animate-spin'"
+          />
+          {{ updating ? '正在重启…' : '更新重启' }}
+        </button>
+
+        <TooltipRoot v-if="pageType === 'home'">
           <TooltipTrigger as-child>
             <BaseButton
               icon="lucide:unplug"
