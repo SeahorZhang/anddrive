@@ -54,6 +54,8 @@ pnpm build
 
 ## 自动更新与发布
 
+> 完整发布步骤见 [`docs/release.md`](docs/release.md)。
+
 应用使用自建更新器（`electron/updater.js`），不依赖 `electron-updater`/Squirrel，也因此**不需要 Apple 开发者账号或代码签名**：启动后查询 GitHub Releases API，按版本号比对，若发现新版本则后台下载对应的 macOS `.zip`；下载完成在窗口右上角出现「更新重启」，点击后保存更新内容并退出，辅助脚本替换 `.app` 后重启，重启后弹窗展示本次更新内容。
 
 发布新版本（推荐走 GitHub Actions）：
