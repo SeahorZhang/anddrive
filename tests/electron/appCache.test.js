@@ -13,7 +13,8 @@ vi.mock('electron', () => ({
 }))
 vi.mock('bonjour-service', () => ({ default: class {} }))
 
-const { readAppCache, writeAppCache, CACHE_MAX_AGE_MS, CACHE_VERSION } = await import('../../electron/adb.js')
+const { readAppCache, writeAppCache, CACHE_MAX_AGE_MS, CACHE_VERSION } =
+  await import('../../electron/adb.js')
 
 const serial = '192.168.1.20:5555'
 const cacheFile = () =>

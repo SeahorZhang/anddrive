@@ -1,21 +1,21 @@
-import { contextBridge, ipcRenderer } from "electron";
-import { CHANNELS } from "./ipcContract.js";
+import { contextBridge, ipcRenderer } from 'electron'
+import { CHANNELS } from './ipcContract.js'
 
-const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
+const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args)
 
-contextBridge.exposeInMainWorld("electronAPI", {
+contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
   startScrcpy: (options) => invoke(CHANNELS.scrcpyStart, options),
   adb: {
-    connect: (address) => invoke("adb:connect", address),
+    connect: (address) => invoke('adb:connect', address),
     pair: (device, password) => invoke(CHANNELS.adbPair, device, password),
-    findDevice: () => invoke("adb:findDevice"),
-    resolveConnectAddress: (serial) => invoke("adb:resolveConnectAddress", serial),
-    installHelpera: (address) => invoke("adb:installHelper", address),
-    loadInstalledApps: (address) => invoke("adb:loadInstalledApps", address),
+    findDevice: () => invoke('adb:findDevice'),
+    resolveConnectAddress: (serial) => invoke('adb:resolveConnectAddress', serial),
+    installHelpera: (address) => invoke('adb:installHelper', address),
+    loadInstalledApps: (address) => invoke('adb:loadInstalledApps', address),
     getAppIcons: (serial, packages) => invoke(CHANNELS.adbGetAppIcons, serial, packages),
     disconnect: (serial) => invoke(CHANNELS.adbDisconnect, serial),
     deleteAppCache: (serial) => invoke(CHANNELS.adbDeleteAppCache, serial),
     uninstallHelper: (serial) => invoke(CHANNELS.adbUninstallHelper, serial),
   },
-});
+})

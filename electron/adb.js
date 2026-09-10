@@ -280,14 +280,20 @@ export function sanitizeIcon(iconUrl) {
 export function sanitizeApp(value) {
   if (!value || typeof value !== 'object') return null
   const entry = /** @type {Record<string, unknown>} */ (value)
-  if (typeof entry.packageName !== 'string' || !entry.packageName || entry.packageName.length > 512) {
+  if (
+    typeof entry.packageName !== 'string' ||
+    !entry.packageName ||
+    entry.packageName.length > 512
+  ) {
     return null
   }
   const label =
     typeof entry.label === 'string' && entry.label ? entry.label.slice(0, 1024) : entry.packageName
   const iconUrl = sanitizeIcon(entry.iconUrl)
   const iconUpdatedAt =
-    iconUrl && validTimestamp(entry.iconUpdatedAt) ? /** @type {number} */ (entry.iconUpdatedAt) : null
+    iconUrl && validTimestamp(entry.iconUpdatedAt)
+      ? /** @type {number} */ (entry.iconUpdatedAt)
+      : null
   return { packageName: entry.packageName, label, iconUrl, iconUpdatedAt }
 }
 
@@ -710,11 +716,13 @@ ipcMain.handle('adb:deleteAppCache', async (event, address) => {
 // 通过 scrcpy 启动应用镜像窗口（渲染层只传 { serial, packageName, label }，一条命令启动）
 ipcMain.handle(CHANNELS.scrcpyStart, (_, options) => {
   return startScrcpy([
-    '-s', options.serial,
+    '-s',
+    options.serial,
     '--new-display=1920x1080/320',
     `--start-app=${options.packageName}`,
     '--video-codec=h265',
-    '-b', '24M',
+    '-b',
+    '24M',
     '--window-x=auto',
     '--window-y=auto',
     `--window-title=${options.label}`,
