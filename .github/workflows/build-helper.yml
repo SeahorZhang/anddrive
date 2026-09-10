@@ -1,0 +1,40 @@
+name: Build Helper APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'helper-app/**'
+      - 'scripts/build-helper.sh'
+      - '.github/workflows/build-helper.yml'
+
+jobs:
+  helper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      - name: Run unit tests
+        run: helper-app/gradlew -p helper-app testDebugUnitTest
+
+      # 构建 APK，并复制到 resources/ 同时写出 helper-app.version.json
+      - name: Build release-ready APK
+        run: bash scripts/build-helper.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: anddrive-helper-apk
+          path: |
+            resources/helper-app.apk
+            resources/helper-app.version.json
+          if-no-files-found: error

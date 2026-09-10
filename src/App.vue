@@ -3,7 +3,7 @@ import { onMounted } from 'vue'
 import PageHome from './components/home/index.vue'
 import UpdateNotesDialog from './components/UpdateNotesDialog.vue'
 import { connectApi, disconnectApi } from '@/api'
-import { initUpdater, takeUpdateNotes } from '@/update'
+import { initUpdater, loadPendingUpdateNotes, updateNotesDialog } from '@/update'
 
 const pageType = ref('loading') // loading | home | addDevice
 const deviceDialogVisible = ref(false)
@@ -11,20 +11,8 @@ const device = ref(null)
 const disconnecting = ref(false)
 const disconnectError = ref('')
 
-const updateNotesVisible = ref(false)
-const updateVersion = ref('')
-const updateReleaseNotes = ref('')
-
 initUpdater()
-
-onMounted(async () => {
-  const notes = await takeUpdateNotes()
-  if (notes && (notes.releaseNotes || notes.version)) {
-    updateVersion.value = notes.version || ''
-    updateReleaseNotes.value = notes.releaseNotes || ''
-    updateNotesVisible.value = true
-  }
-})
+onMounted(loadPendingUpdateNotes)
 
 const connect = async () => {
   device.value = localStorage.getItem('device') ? JSON.parse(localStorage.getItem('device')) : null
@@ -82,8 +70,8 @@ async function disconnect() {
   <AddDeviceDialog v-model="deviceDialogVisible" @paired="connect" />
 
   <UpdateNotesDialog
-    v-model="updateNotesVisible"
-    :version="updateVersion"
-    :release-notes="updateReleaseNotes"
+    v-model="updateNotesDialog.visible"
+    :version="updateNotesDialog.version"
+    :release-notes="updateNotesDialog.releaseNotes"
   />
 </template>

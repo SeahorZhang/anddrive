@@ -45,6 +45,20 @@ watch(
         style="-webkit-app-region: no-drag"
         class="absolute top-1/2 right-4 z-10 flex -translate-y-1/2 items-center gap-2"
       >
+        <span
+          v-if="updateState.state === 'downloading'"
+          class="text-[11px] font-medium text-black/45 tabular-nums"
+        >
+          更新 {{ updateState.percent }}%
+        </span>
+        <span
+          v-else-if="updateState.state === 'error' && updateState.message"
+          :title="updateState.message"
+          class="max-w-[180px] truncate text-[11px] font-medium text-[#ff3b30]"
+        >
+          更新失败
+        </span>
+
         <button
           v-if="updateReady || updating"
           type="button"

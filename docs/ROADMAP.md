@@ -11,12 +11,12 @@
 - **启动**：`startScrcpy` 固定参数（`--new-display=1920x1080/320`、`--start-app=<pkg>`、h265、`-b 24M`、窗口自动摆位），进程按 serial 记入 Map，但只能整体 kill。
 - **退出**：`shutdown()` 停止所有 scrcpy、停止并销毁 mDNS 发现、清理本进程残留临时文件、`adb kill-server`。
 - **界面**：macOS 毛玻璃风格首页、应用网格、搜索、扫码弹窗、断开确认。
-- **更新**：启动后经 `electron-updater` 自动检查并下载；下载完成在右上角显示「更新重启」，重启后弹窗展示更新内容。
+- **更新**：自建更新器（不依赖 Squirrel/签名）；启动查询 GitHub Releases 并后台下载 `.zip`，下载完成右上角显示「更新重启」，重启后弹窗展示更新内容。
 - **明显缺口**：多设备、设备信息、应用详情与操作、镜像生命周期管理、设置页、深色模式、国际化、自动更新、测试覆盖面窄。
 
 ## 已完成
 
-- **自动更新（应用内）**（2026-09）：接入 `electron-updater`，启动后自动检查并下载。下载完成在标题栏右上角显示「更新重启」，点击后保存本次更新内容并重启安装，重启后弹窗展示更新内容。`electron/updater.js` 负责状态推送与待展示内容持久化，`electron/main.js` 在更新安装时跳过优雅退出延迟。`electron-builder.json` 增加 GitHub publish 与 `zip` 目标。注意：macOS 实际安装依赖代码签名与公证（见 7.2），发布需用 `GH_TOKEN` 上传 Release 及 `latest-mac.yml`。
+- **自动更新（应用内）**（2026-09）：自建更新器（`electron/updater.js`），不依赖 `electron-updater`/Squirrel，**无需 Apple 开发者账号与代码签名**。启动查询 GitHub Releases API 比对版本并后台下载 `.zip`；下载完成右上角显示「更新重启」，点击保存更新内容并退出，辅助脚本替换 `.app` 后重启，重启后弹窗展示更新内容。`electron/main.js` 在更新安装时跳过优雅退出延迟。`electron-builder.json` 保留 GitHub publish 与 `zip` 目标用于发布。本地测试用 `scripts/dev-update-server.mjs`（`pnpm dev:update`）+ `ANDDRIVE_UPDATE_API` / `ANDDRIVE_UPDATE_FORCE`。
 - **Helper 版本管理与自动升级**（2026-09）：`electron/adb.js` 新增 `ensureHelper` / `parseDeviceHelperVersion` / `shouldUpgradeHelper` / `bundledHelperVersion`；`scripts/build-helper.sh` 构建时从 `app/build.gradle` 解析版本并写出 `resources/helper-app.version.json`，已纳入 `scripts/verify-resources.mjs` 与 `electron-builder.json` 打包；新增 `tests/electron/helperVersion.test.js`。
 - **退出生命周期清理**（2026-09）：`electron/adb.js` 新增 `shutdown()`（停 scrcpy、停 mDNS 发现并销毁 bonjour、清理本进程 `.tmp` 缓存、`adb kill-server`）；`electron/main.js` 的 `before-quit` 改为等待清理完成后再退出，带重入保护。
 
@@ -88,8 +88,8 @@
 
 ### 7. 分发、安全与生态
 
-1. ✅ **自动更新**（已完成）：`electron-updater` + GitHub Releases。启动自动检查下载，下载完成右上角「更新重启」，点击保存更新内容并重启，重启后弹窗展示。`electron/updater.js`、`electron/main.js`、`electron-builder.json`（publish + `zip`）。**落地前提**：macOS 需先完成签名与公证，否则 Squirrel.Mac 无法安装。
-2. **签名与公证**：解决 Gatekeeper 拦截（梳理 `scripts/after-pack.js` 现状）。
+1. ✅ **自动更新**（已完成）：自建更新器 + GitHub Releases，不依赖 `electron-updater`/Squirrel，无需签名。启动检查下载，下载完成右上角「更新重启」，点击保存更新内容并重启，重启后弹窗展示。见 `electron/updater.js`、`electron/main.js`、`electron-builder.json`（publish + `zip`）。签名公证（7.2）变为可选增强，不再是自动更新的前提。
+2. **签名与公证（可选增强）**：解决首次手动下载安装时的 Gatekeeper 拦截（梳理 `scripts/after-pack.js` 现状）。自建更新器已不依赖签名，故此项非必需；购买 Apple 开发者账号后可用于更严格的校验与更顺滑的首次安装。
 3. **分发渠道**：Homebrew Cask；评估 universal 构建（当前仅 arm64）。
 4. **安全**：校验下载的 adb/scrcpy 哈希；补全 IPC 入参校验；Helper APK 完整性校验。
 5. **隐私**：若引入错误上报（Sentry 等），明确不上报设备/应用数据。

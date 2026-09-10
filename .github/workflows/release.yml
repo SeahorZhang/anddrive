@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布/重试的 tag（如 v0.1.1）'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # Apple Silicon runner：scrcpy 资源仅提供 arm64。
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm lint:oxlint
+      - run: pnpm typecheck
+      - run: pnpm test
+
+      # 资源（adb / scrcpy / Helper APK / 版本文件）已随仓库提交；
+      # tag 前请确保 package.json 的 version 与 tag 一致。
+      - name: Build macOS app
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          node scripts/verify-resources.mjs
+          pnpm exec vite build
+          pnpm exec electron-builder --mac --arm64 --publish never
+
+      # 自建更新器按 Release 的 tag_name 比较版本，并下载其中的 *.zip。
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: ${{ inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            release/*/*.zip
+            release/*/*.dmg

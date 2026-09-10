@@ -54,13 +54,72 @@ pnpm build
 
 ## 自动更新与发布
 
-应用通过 `electron-updater` 从 GitHub Releases 检查更新：启动后自动检查并下载，下载完成在窗口右上角出现「更新重启」，点击后保存更新内容并重启安装，重启后弹窗展示本次更新内容。更新源配置在 `electron-builder.json` 的 `publish`（`SeahorZhang/anddrive`）。
+应用使用自建更新器（`electron/updater.js`），不依赖 `electron-updater`/Squirrel，也因此**不需要 Apple 开发者账号或代码签名**：启动后查询 GitHub Releases API，按版本号比对，若发现新版本则后台下载对应的 macOS `.zip`；下载完成在窗口右上角出现「更新重启」，点击后保存更新内容并退出，辅助脚本替换 `.app` 后重启，重启后弹窗展示本次更新内容。
 
-发布新版本：
+发布新版本（推荐走 GitHub Actions）：
 
-1. 提升 `package.json` 的 `version`（必须递增，`electron-updater` 按语义化版本比较）。
-2. 使用带 `GH_TOKEN` 的环境执行 `electron-builder --publish always`，上传 macOS 产物与 `latest-mac.yml`。
-3. macOS 的自动安装依赖代码签名与公证；未签名时 Squirrel.Mac 无法完成替换，需先完成签名配置。
+1. 提升 `package.json` 的 `version`（必须递增，更新器按数字逐段比较 `major.minor.patch`），提交后打 tag：`git tag v0.1.1 && git push origin v0.1.1`。
+2. `.github/workflows/release.yml` 会在 macOS runner 上构建 `dmg` 与 `zip`，创建对应 Release 并上传产物（更新内容取 GitHub 自动生成的提交说明）；也可在 Actions 里手动触发并输入 tag 重发。
+3. 已安装的客户端下次启动即可检测到并自动下载。
+
+> 本地手动发布：`pnpm build` 后在 GitHub 建 Release，`tag` 用 `vX.Y.Z`，上传 `release/<version>/AndDrive-Mac-arm64-X.Y.Z-Installer.zip`，更新说明填进 Release 正文。
+
+> CI：`.github/workflows/ci.yml` 在 push / PR 时运行 `lint:oxlint`、`format:check`、`typecheck`、`test`（`lint:eslint` 因 typescript-eslint 暂不支持 TypeScript 7.0 未纳入）。
+
+> 其他 Actions：
+> - `.github/workflows/build-helper.yml`：构建手机端 Helper APK 并上传产物（改动 `helper-app/**` 时自动触发，也可手动运行）。
+> - `.github/workflows/package-desktop.yml`：手动触发，跑完整桌面端打包流程（先构建 Helper APK，再跑检查并打包 macOS 产物，最后上传 Artifacts）。
+
+> 说明：更新包通过 Electron 自身下载（不写 `com.apple.quarantine`），因此未签名也能完成替换与启动；但首次从浏览器手动下载安装仍可能被 Gatekeeper 拦截，需右键打开或执行 `xattr -dr com.apple.quarantine /Applications/AndDrive.app`。替换过程日志写入 `~/Library/Logs/AndDrive/update.log`。若日后购买 Apple 开发者账号完成签名与公证，可改为官方更新方案以获得更严格的校验。
+
+### 本地测试更新
+
+不用真的发版，用 `scripts/dev-update-server.mjs` 起一个「伪 Release」服务即可。它实现 `GET /latest.json`（release 结构）与 `GET /update.zip`。
+
+**1. 在 `pnpm dev` 里验证「检查 → 下载 → 右上角更新重启」**
+
+```sh
+# 终端 A：任选一个文件当更新包（只验证下载流程即可）
+pnpm dev:update --zip package.json --version 9.9.9 --notes "本地测试"
+
+# 终端 B：
+ANDDRIVE_UPDATE_FORCE=1 ANDDRIVE_UPDATE_API=http://127.0.0.1:8787/latest.json pnpm dev
+```
+
+`ANDDRIVE_UPDATE_FORCE=1` 让更新器在非打包环境也运行。dev 下点「更新重启」不会替换应用，而是直接弹出「更新内容」预览；真实替换与重启只在打包环境发生。
+
+**2. 验证重启后的「更新内容」弹窗**
+
+dev 的版本号取自 `package.json`，把待展示内容按当前版本写入即可：
+
+```sh
+cat > "$HOME/Library/Application Support/anddrive-dev/update-pending.json" <<'EOF'
+{ "version": "0.0.0", "releaseNotes": "本地测试更新内容" }
+EOF
+```
+
+重启 `pnpm dev`，启动后会弹出该内容（`version` 需等于 `package.json` 的 `version`）。
+
+**3. 端到端验证真实替换（需要打包）**
+
+```sh
+# 旧版本：假设 package.json version=0.1.0
+pnpm build
+cp -R release/0.1.0/mac-arm64/AndDrive.app /Applications/
+
+# 新版本：把 package.json version 改成 0.1.1 后
+pnpm build
+# 记下 release/<version>/ 下的 ...-Installer.zip 路径
+
+# 伪 Release 指向新包
+pnpm dev:update --zip "release/0.1.1/AndDrive-Mac-arm64-0.1.1-Installer.zip" --version 0.1.1 --notes "1.1 更新内容"
+
+# 用环境变量启动已安装的旧版本
+ANDDRIVE_UPDATE_API=http://127.0.0.1:8787/latest.json /Applications/AndDrive.app/Contents/MacOS/AndDrive
+```
+
+点击「更新重启」后应用会被替换为 0.1.1 并重启，重启后弹出更新内容；失败可查 `~/Library/Logs/AndDrive/update.log`。
+
 
 ## 架构
 
