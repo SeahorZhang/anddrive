@@ -12,7 +12,6 @@ const disconnectError = ref('')
 
 const connect = async () => {
   device.value = localStorage.getItem('device') ? JSON.parse(localStorage.getItem('device')) : null
-  console.log(22, device.value)
   if (device.value) {
     try {
       await connectApi(device.value.address)
@@ -55,20 +54,11 @@ function closeSettings() {
 </script>
 
 <template>
-  <PageHeader
-    :pageType="pageType"
-    :disconnecting="disconnecting"
-    :disconnect-error="disconnectError"
-    @disconnect="disconnect"
-    @open-settings="openSettings"
-    @close-settings="closeSettings"
-  />
+  <PageHeader :pageType="pageType" :disconnecting="disconnecting" :disconnect-error="disconnectError"
+    @disconnect="disconnect" @open-settings="openSettings" @close-settings="closeSettings" />
 
   <div v-if="pageType === 'loading'" class="flex flex-1 items-center justify-center">
-    <span
-      class="size-5 animate-spin rounded-full border-2 border-black/10 border-t-[#007aff]"
-      aria-label="加载中"
-    />
+    <span class="size-5 animate-spin rounded-full border-2 border-black/10 border-t-[#007aff]" aria-label="加载中" />
   </div>
 
   <PageHome v-else-if="pageType === 'home'" :device="device" />
