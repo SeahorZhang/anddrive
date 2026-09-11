@@ -9,6 +9,7 @@ export const CHANNELS = {
   adbPair: 'adb:pair',
   adbDisconnect: 'adb:disconnect',
   adbDeleteAppCache: 'adb:deleteAppCache',
+  adbGetCachedApps: 'adb:getCachedApps',
   adbUninstallHelper: 'adb:uninstallHelper',
   adbGetAppIcons: 'adb:getAppIcons',
 

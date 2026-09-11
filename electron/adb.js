@@ -382,6 +382,11 @@ async function deleteAppCache(serial) {
   return true
 }
 
+/** Cached app list for one device, or [] when absent. */
+async function getCachedApps(serial) {
+  return (await readAppCache(serial))?.apps || []
+}
+
 async function pruneCaches(protectedPath) {
   try {
     const root = cacheRoot()
@@ -724,6 +729,11 @@ ipcMain.handle('adb:uninstallHelper', async (event, address) => {
 // 清除该设备的应用列表缓存
 ipcMain.handle('adb:deleteAppCache', async (event, address) => {
   return deleteAppCache(address)
+})
+
+// 读取该设备的应用列表缓存，供界面秒开
+ipcMain.handle(CHANNELS.adbGetCachedApps, async (event, address) => {
+  return getCachedApps(address)
 })
 
 // 通过 scrcpy 启动应用镜像窗口（渲染层只传 { serial, packageName, label }，一条命令启动）

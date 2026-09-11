@@ -4,6 +4,7 @@ import BaseButton from '../BaseButton.vue'
 import {
   installHelperApi,
   loadInstalledAppsApi,
+  getCachedAppsApi,
   getAppIconsApi,
   uninstallHelperApi,
   deleteAppCacheApi,
@@ -74,8 +75,16 @@ async function clearCache() {
 
 async function getAppList() {
   if (!props.address) return
-  loading.value = true
 
+  // 先用缓存秒开，避免每次进来都显示 loading；失败则忽略，继续走设备刷新
+  try {
+    const cached = await getCachedAppsApi(props.address)
+    if (cached.length) apps.value = cached
+  } catch {
+    // ignore
+  }
+
+  loading.value = true
   try {
     // 第一阶段：包名 + 名称（快，无图标），带上缓存里的图标
     apps.value = await loadInstalledAppsApi(props.address)

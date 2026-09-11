@@ -6,6 +6,7 @@ const {
   resolveConnectAddress,
   installHelpera,
   loadInstalledApps,
+  getCachedApps,
   getAppIcons,
   uninstallHelper,
   deleteAppCache,
@@ -32,6 +33,9 @@ export const installHelperApi = (address) => installHelpera(address);
 
 // 获取手机app列表，无图标
 export const loadInstalledAppsApi = (address) => loadInstalledApps(address);
+
+// 读取应用列表缓存，用于秒开
+export const getCachedAppsApi = (address) => getCachedApps(address);
 
 // 批量获取应用图标（每批最多 20 个包名）
 export const getAppIconsApi = (address, packages) => getAppIcons(address, packages);
