@@ -41,10 +41,12 @@ function handleClose() {
         @pointer-down-outside.prevent="handleClose"
         @escape-key-down.prevent="handleClose"
       >
-        <h3 class="mb-2 text-[13px] font-semibold text-[#1d1d1f]">{{ title }}</h3>
-        <p class="mb-5 text-[11px] leading-relaxed whitespace-pre-line text-black/50">
+        <DialogTitle class="mb-2 text-[13px] font-semibold text-[#1d1d1f]">{{ title }}</DialogTitle>
+        <DialogDescription
+          class="mb-5 text-[11px] leading-relaxed whitespace-pre-line text-black/50"
+        >
           {{ message }}
-        </p>
+        </DialogDescription>
         <p v-if="error" class="mb-4 rounded-md bg-red-500/10 px-2.5 py-2 text-[11px] text-red-600">
           {{ error }}
         </p>
