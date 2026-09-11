@@ -21,8 +21,14 @@ if [ -z "$GRADLE_HOME" ] ; then
     if [ -d "/opt/gradle" ] ; then
         GRADLE_HOME="/opt/gradle"
     elif [ -d "$HOME/.gradle/wrapper/dists" ] ; then
-        # Find the latest gradle distribution
-        GRADLE_HOME=$(find "$HOME/.gradle/wrapper/dists" -name "gradle-*" -type d | sort -V | tail -1)
+        # Find the newest distribution that actually has a runnable binary;
+        # stale/incomplete wrapper dirs (e.g. gradle-8.5-bin) are skipped.
+        for candidate in $(find "$HOME/.gradle/wrapper/dists" -maxdepth 2 -name "gradle-*" -type d | sort -V -r) ; do
+            if [ -x "$candidate/bin/gradle" ] ; then
+                GRADLE_HOME="$candidate"
+                break
+            fi
+        done
     fi
 fi
 

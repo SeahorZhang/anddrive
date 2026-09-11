@@ -1,0 +1,12 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#007AFF"
+        android:pathData="M28,8 h52 a20,20 0 0 1 20,20 v52 a20,20 0 0 1 -20,20 h-52 a20,20 0 0 1 -20,-20 v-52 a20,20 0 0 1 20,-20 z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M32,32 h20 v4 h-20 z M32,48 h20 v4 h-20 z M32,36 h4 v12 h-4 z M48,36 h4 v12 h-4 z M40,40 h4 v4 h-4 z M56,32 h20 v4 h-20 z M56,48 h20 v4 h-20 z M56,36 h4 v12 h-4 z M72,36 h4 v12 h-4 z M64,40 h4 v4 h-4 z M32,56 h20 v4 h-20 z M32,72 h20 v4 h-20 z M32,60 h4 v12 h-4 z M48,60 h4 v12 h-4 z M40,64 h4 v4 h-4 z M52,52 h4 v4 h-4 z M56,52 h4 v4 h-4 z M64,52 h4 v4 h-4 z M72,52 h4 v4 h-4 z M52,56 h4 v4 h-4 z M52,64 h4 v4 h-4 z M52,72 h4 v4 h-4 z M56,56 h4 v4 h-4 z M64,56 h4 v4 h-4 z M72,56 h4 v4 h-4 z M56,60 h4 v4 h-4 z M68,60 h4 v4 h-4 z M60,64 h4 v4 h-4 z M72,64 h4 v4 h-4 z M56,68 h4 v4 h-4 z M64,68 h4 v4 h-4 z M60,72 h4 v4 h-4 z M68,72 h4 v4 h-4 z M72,72 h4 v4 h-4 z" />
+</vector>

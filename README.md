@@ -67,7 +67,7 @@ Vue renderer (src/)
   → Android app_process: com.anddrive.helper.ListMain（shell uid 2000，stdout JSON）
 ```
 
-缓存位于 Electron userData 目录，并按设备 serial 隔离。应用列表先显示有效缓存，再用设备上的权威列表（标签与图标内联）替换。Helper APK 仅作代码容器：不授予权限、不监听端口，桌面图标为点击即关的占位 Activity。
+缓存位于 Electron userData 目录，并按设备 serial 隔离。应用列表先显示有效缓存，再用设备上的权威列表（标签与图标内联）替换。Helper APK 仅作代码容器：不授予权限、不监听端口；它带有一个桌面图标，点击后跳转到系统无线调试的二维码配对界面，方便手机直接扫码配对。
 
 ## 连接与断开
 

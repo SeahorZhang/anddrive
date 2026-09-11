@@ -1,8 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Pure code container for app_process: no components, no permissions. -->
+    <!-- ListMain 仍是 app_process 纯代码容器；下面是扫码配对的桌面快捷入口。 -->
     <application
         android:allowBackup="false"
-        android:label="AndDrive Helper" />
+        android:icon="@drawable/ic_launcher"
+        android:label="AndDrive Helper">
+
+        <activity
+            android:name=".QrPairActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
 </manifest>
