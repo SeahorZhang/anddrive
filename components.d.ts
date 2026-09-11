@@ -26,6 +26,7 @@ declare module 'vue' {
     ScrollAreaScrollbar: typeof import('reka-ui')['ScrollAreaScrollbar']
     ScrollAreaThumb: typeof import('reka-ui')['ScrollAreaThumb']
     ScrollAreaViewport: typeof import('reka-ui')['ScrollAreaViewport']
+    Settings: typeof import('./src/components/Settings.vue')['default']
     TooltipContent: typeof import('reka-ui')['TooltipContent']
     TooltipPortal: typeof import('reka-ui')['TooltipPortal']
     TooltipProvider: typeof import('reka-ui')['TooltipProvider']

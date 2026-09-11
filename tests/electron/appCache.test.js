@@ -77,4 +77,23 @@ describe('app cache persistence', () => {
     expect(await readAppCache(serial)).toBeNull()
     await expect(fs.access(cacheFile())).rejects.toMatchObject({ code: 'ENOENT' })
   })
+
+  it('keeps a fresh temp file that belongs to an in-flight write', async () => {
+    const tmpFile = `${cacheFile()}.999.deadbeef.tmp`
+    await fs.mkdir(path.dirname(cacheFile()), { recursive: true })
+    await fs.writeFile(tmpFile, 'in-flight')
+
+    expect(await writeAppCache(serial, snapshot())).toBe(true)
+
+    await expect(fs.access(tmpFile)).resolves.toBeUndefined()
+  })
+
+  it('resolves concurrent writes for the same device without dropping either', async () => {
+    const results = await Promise.all([
+      writeAppCache(serial, snapshot()),
+      writeAppCache(serial, snapshot()),
+    ])
+
+    expect(results).toEqual([true, true])
+  })
 })

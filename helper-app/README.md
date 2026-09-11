@@ -25,7 +25,7 @@ APK 输出于 `helper-app/app/build/outputs/apk/debug/app-debug.apk`，`pnpm bui
 
 ## 运行方式
 
-1. 主进程使用 ADB 将 `resources/helper-app.apk` 安装到设备（仅当未安装时）。
+1. 主进程在每次连接设备时读取设备上已安装 Helper 的版本，与随包版本不一致（或未安装）时才用 ADB 安装 `resources/helper-app.apk`，保证手机上是随包的最新版本。
 2. 通过 `adb shell pm path com.anddrive.helper` 解析设备上的 base.apk 路径。
 3. 以 shell 身份执行一次：
 

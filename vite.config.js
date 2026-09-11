@@ -61,6 +61,9 @@ export default defineConfig(({ command }) => {
         '@': fileURLToPath(new URL('./src', import.meta.url)),
       },
     },
+    define: {
+      __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+    },
     clearScreen: false,
   }
 })

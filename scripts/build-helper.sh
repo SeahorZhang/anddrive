@@ -49,5 +49,16 @@ fi
 echo "复制APK到resources目录..."
 cp "$APK_PATH" "$RESOURCES_DIR/$APK_NAME"
 
+# 从 APK 提取版本号，供桌面端直接引用，无需手工维护
+AAPT2="$(ls "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)"
+if [ -n "$AAPT2" ]; then
+    BADGING="$("$AAPT2" dump badging "$APK_PATH")"
+    VERSION_NAME="$(printf '%s\n' "$BADGING" | grep -oE "versionName='[^']*'" | head -1 | cut -d"'" -f2)"
+    VERSION_CODE="$(printf '%s\n' "$BADGING" | grep -oE "versionCode='[^']*'" | head -1 | cut -d"'" -f2)"
+    BUILT_AT="$(date -u -r "$APK_PATH" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '{"versionName":"%s","versionCode":%s,"builtAt":"%s"}\n' "$VERSION_NAME" "$VERSION_CODE" "$BUILT_AT" > "$RESOURCES_DIR/helper-app.version.json"
+    echo "Helper 版本: ${VERSION_NAME} (${VERSION_CODE})"
+fi
+
 echo "构建完成!"
 echo "APK位置: $RESOURCES_DIR/$APK_NAME"

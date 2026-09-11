@@ -6,6 +6,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import Bonjour from 'bonjour-service'
 import { CHANNELS } from './ipcContract.js'
+import helperVersion from '../resources/helper-app.version.json'
 
 // ---------------------------------------------------------------------------
 // 资源路径
@@ -252,6 +253,7 @@ function startScrcpy(args) {
 
 export const CACHE_VERSION = 2
 export const CACHE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000
+const CACHE_TMP_MAX_AGE_MS = 60 * 60 * 1000
 const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024
 const MAX_DEVICE_CACHES = 20
 const MAX_APPS = 5000
@@ -389,7 +391,14 @@ async function pruneCaches(protectedPath) {
       const filePath = path.join(root, entry.name)
       if (!entry.isFile()) continue
       if (entry.name.includes('.tmp')) {
-        await removeFile(filePath)
+        // Only reclaim stale temps: a fresh one may belong to a concurrent
+        // writeAppCache that is about to rename it into place.
+        try {
+          const stats = await fs.stat(filePath)
+          if (Date.now() - stats.mtimeMs > CACHE_TMP_MAX_AGE_MS) await removeFile(filePath)
+        } catch (error) {
+          if (error?.code !== 'ENOENT') console.warn('Failed to prune app cache temp:', error)
+        }
         continue
       }
       if (!entry.name.endsWith('.json')) continue
@@ -489,6 +498,24 @@ async function uninstallHelper(serial) {
   // adbExecSafe never rejects: on this ROM a *successful* uninstall still
   // exits 1 and prints "Failure [...]". Output is logged, not trusted.
   return await adbExecSafe('-s', serial, 'uninstall', HELPER_PACKAGE)
+}
+
+/** @returns {Promise<string | null>} versionName of the on-device Helper */
+async function getInstalledHelperVersion(serial) {
+  try {
+    const output = await adbExec('-s', serial, 'shell', 'dumpsys', 'package', HELPER_PACKAGE)
+    const match = output.match(/versionName=(\S+)/)
+    return match ? match[1] : null
+  } catch {
+    return null
+  }
+}
+
+/** 设备上未安装或版本与随包不一致时才安装。 */
+async function ensureLatestHelper(serial) {
+  if ((await getInstalledHelperVersion(serial)) !== helperVersion.versionName) {
+    await installHelper(serial)
+  }
 }
 
 /**
@@ -647,6 +674,8 @@ async function getAppIcons(serial, packages) {
 ipcMain.handle('adb:connect', async (_, address) => {
   const output = await adbExec('connect', address)
   if (!/connected to /i.test(output)) throw new Error(output || '连接失败')
+  // 版本不一致才重装，避免每次连接都安装
+  await ensureLatestHelper(address)
   return output.trim()
 })
 

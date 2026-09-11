@@ -1,8 +1,10 @@
 <script setup>
 import PageHome from './components/home/index.vue'
+import PageSettings from './components/Settings.vue'
 import { connectApi, disconnectApi } from '@/api'
 
-const pageType = ref('loading') // loading | home | addDevice
+const pageType = ref('loading') // loading | home | addDevice | settings
+const settingsReturn = ref('addDevice')
 const deviceDialogVisible = ref(false)
 const device = ref(null)
 const disconnecting = ref(false)
@@ -41,6 +43,15 @@ async function disconnect() {
     disconnecting.value = false
   }
 }
+
+function openSettings() {
+  settingsReturn.value = pageType.value === 'home' ? 'home' : 'addDevice'
+  pageType.value = 'settings'
+}
+
+function closeSettings() {
+  pageType.value = settingsReturn.value
+}
 </script>
 
 <template>
@@ -49,6 +60,8 @@ async function disconnect() {
     :disconnecting="disconnecting"
     :disconnect-error="disconnectError"
     @disconnect="disconnect"
+    @open-settings="openSettings"
+    @close-settings="closeSettings"
   />
 
   <div v-if="pageType === 'loading'" class="flex flex-1 items-center justify-center">
@@ -59,6 +72,8 @@ async function disconnect() {
   </div>
 
   <PageHome v-else-if="pageType === 'home'" :device="device" />
+
+  <PageSettings v-else-if="pageType === 'settings'" />
 
   <AddDevice v-else-if="pageType === 'addDevice'" v-model="deviceDialogVisible" />
   <AddDeviceDialog v-model="deviceDialogVisible" @paired="connect" />

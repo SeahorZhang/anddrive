@@ -8,7 +8,22 @@ const props = defineProps({
   disconnectError: { type: String, default: '' },
 })
 const showConfirm = ref(false)
-const emit = defineEmits(['disconnect'])
+const emit = defineEmits(['disconnect', 'openSettings', 'closeSettings'])
+
+const actions = computed(() => {
+  if (props.pageType === 'settings') {
+    return [{ icon: 'lucide:arrow-left', tip: '返回', event: 'closeSettings' }]
+  }
+  const list = []
+  if (props.pageType === 'home') list.push({ icon: 'lucide:unplug', tip: '断开连接', event: 'disconnect' })
+  list.push({ icon: 'lucide:settings', tip: '设置', event: 'openSettings' })
+  return list
+})
+
+function onAction(event) {
+  if (event === 'disconnect') showConfirm.value = true
+  else emit(event)
+}
 
 function handleConfirm() {
   emit('disconnect')
@@ -32,17 +47,17 @@ watch(
       <div style="-webkit-app-region: drag" class="h-11 w-full"></div>
 
       <div
-        v-if="pageType === 'home'"
+        v-if="pageType !== 'loading'"
         style="-webkit-app-region: no-drag"
         class="absolute top-1/2 right-4 z-10 flex -translate-y-1/2 items-center gap-1"
       >
-        <TooltipRoot>
+        <TooltipRoot v-for="action in actions" :key="action.event">
           <TooltipTrigger as-child>
             <BaseButton
-              icon="lucide:unplug"
+              :icon="action.icon"
               icon-only
-              :disabled="disconnecting"
-              @click="showConfirm = true"
+              :disabled="action.event === 'disconnect' && disconnecting"
+              @click="onAction(action.event)"
             />
           </TooltipTrigger>
           <TooltipPortal>
@@ -51,7 +66,7 @@ watch(
               side="bottom"
               class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg"
             >
-              断开连接
+              {{ action.tip }}
             </TooltipContent>
           </TooltipPortal>
         </TooltipRoot>
