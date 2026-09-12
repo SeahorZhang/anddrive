@@ -48,6 +48,10 @@ dist-electron
 release
 /preload.mjs
 
+# 本地自签名代码签名证书：只提交公开证书，私钥只留在本地（务必备份）
+/certs/*.key.pem
+/certs/*.p12
+
 # Android/Gradle local and generated files
 /helper-app/local.properties
 /helper-app/build/

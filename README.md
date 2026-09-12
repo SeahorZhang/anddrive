@@ -55,6 +55,50 @@ pnpm build:beta
 
 `pnpm build:beta` 构建可并存的 Beta 版（`AndDrive Beta`，独立 appId 与 userData，输出到 `release/beta/<version>`），版本自动带上 `-beta.<BETA_TAG>` 后缀。可通过 `BETA_TAG=xxx pnpm build:beta` 指定标签，默认使用 UTC 时间戳。Apple Silicon 单架构构建使用 `pnpm build:beta:mac:arm64`。
 
+## 本地签名与分发
+
+macOS 打包默认使用 ad-hoc 签名，cdhash 每次构建都会变化，系统会把每次构建当成新应用，「本地网络」权限无法保留，导致连接设备失败。项目用一个自签名代码签名证书解决这个问题，**不需要 Apple 开发者账号**。
+
+证书文件：
+
+| 文件 | 用途 | 是否入库 |
+| --- | --- | --- |
+| `certs/self-signed.cert.pem` | 公开证书，供接收方信任 | 是 |
+| `certs/self-signed.key.pem` | 私钥，仅用于本机签名 | 否，务必自行备份 |
+
+> 私钥一旦丢失，就无法再用同一身份签名，已分发版本后续升级需要重新分发证书；请把 `certs/self-signed.key.pem` 备份到安全位置。
+
+首次运行：
+
+```sh
+pnpm cert    # 已存在则复用；有私钥+证书则恢复；都没有才新建，并信任
+pnpm build
+```
+
+### 分发给其他人
+
+接收方必须信任同一个证书，才能通过 Gatekeeper 并让「本地网络」权限稳定生效。
+
+1. 拿到公开证书：直接用仓库里的 `certs/self-signed.cert.pem`，或本地导出：
+
+   ```sh
+   pnpm cert:export   # 输出 release/AndDrive-Signing.crt
+   ```
+
+2. 把证书文件和 `scripts/install-signing-cert.sh` 一起发给接收方。
+
+3. 接收方一键安装并信任，并顺带去掉 App 的隔离属性：
+
+   ```sh
+   bash install-signing-cert.sh AndDrive-Signing.crt --app "/Applications/AndDrive Beta.app"
+   ```
+
+首次连接设备时，系统会弹出「本地网络」授权，点击允许即可。
+
+> - 自签名证书只保证「本机信任 + 权限稳定」，不等于 Apple 公证。接收方若从浏览器或 AirDrop 下载 App，仍可能被 Gatekeeper 拦截，右键 App →「打开」即可。
+> - 若接收方也要自行构建并签名，让他们各自运行 `pnpm cert` 生成自己的证书，而不是共享私钥。
+> - 想要「下载即用、无需任何信任步骤」，只能使用付费的 Apple Developer ID 并公证，本方案不涉及。
+
 ## 架构
 
 ```text

@@ -26,6 +26,7 @@
       "dmg"
     ],
     "artifactName": "${productName}-Mac-${arch}-${version}-Installer.${ext}",
+    "identity": "AndDrive Self-Signed",
     "extendInfo": {
       "NSLocalNetworkUsageDescription": "AndDrive 需要访问本地网络，以通过 mDNS 发现并连接同一网络下的 Android 设备。",
       "NSBonjourServices": [
