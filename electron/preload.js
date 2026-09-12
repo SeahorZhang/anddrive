@@ -19,4 +19,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     deleteAppCache: (serial) => invoke(CHANNELS.adbDeleteAppCache, serial),
     uninstallHelper: (serial) => invoke(CHANNELS.adbUninstallHelper, serial),
   },
+  permissions: {
+    getStatus: () => invoke(CHANNELS.permissionsStatus),
+    request: (id) => invoke(CHANNELS.permissionsRequest, id),
+    openSettings: (id) => invoke(CHANNELS.permissionsOpenSettings, id),
+  },
 });

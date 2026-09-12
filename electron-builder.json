@@ -26,6 +26,13 @@
       "dmg"
     ],
     "artifactName": "${productName}-Mac-${arch}-${version}-Installer.${ext}",
+    "extendInfo": {
+      "NSLocalNetworkUsageDescription": "AndDrive 需要访问本地网络，以通过 mDNS 发现并连接同一网络下的 Android 设备。",
+      "NSBonjourServices": [
+        "_adb-tls-connect._tcp",
+        "_adb-tls-pairing._tcp"
+      ]
+    },
     "extraResources": [
       {
         "from": "resources/adb/mac/adb",

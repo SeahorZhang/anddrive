@@ -12,7 +12,15 @@ const {
   deleteAppCache,
 } = window.electronAPI.adb;
 
-const { startScrcpy } = window.electronAPI;
+const { startScrcpy, platform } = window.electronAPI;
+
+const {
+  getStatus: getPermissionStatus,
+  request: requestPermission,
+  openSettings: openPermissionSettings,
+} = window.electronAPI.permissions;
+
+export const isMac = platform === 'darwin';
 
 export const connectApi = (address) => connect(address);
 
@@ -48,3 +56,12 @@ export const deleteAppCacheApi = (address) => deleteAppCache(address);
 
 // 通过 scrcpy 启动应用镜像窗口
 export const startScrcpyApi = (options) => startScrcpy(options);
+
+// 读取 macOS 系统权限状态
+export const getPermissionStatusApi = () => getPermissionStatus();
+
+// 触发 macOS 系统授权流程
+export const requestPermissionApi = (id) => requestPermission(id);
+
+// 打开系统设置中对应的隐私面板
+export const openPermissionSettingsApi = (id) => openPermissionSettings(id);
