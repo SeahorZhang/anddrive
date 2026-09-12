@@ -25,9 +25,6 @@
     "test:helper": "helper-app/gradlew -p helper-app testDebugUnitTest",
     "lint:helper": "helper-app/gradlew -p helper-app lintDebug"
   },
-  "dependencies": {
-    "bonjour-service": "^1.4.4"
-  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@iconify-json/lucide": "^1.2.131",

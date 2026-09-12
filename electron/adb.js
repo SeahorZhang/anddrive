@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import Bonjour from 'bonjour-service'
+import { browse } from './mdns.js'
 import { CHANNELS } from './ipcContract.js'
 import helperVersion from '../resources/helper-app.version.json'
 
@@ -114,12 +114,24 @@ export function isAlreadyDisconnectedError(error) {
 // mDNS 设备发现
 // ---------------------------------------------------------------------------
 
-let bonjour = null
 let pairingBrowser = null
 let connectBrowser = null
 
 const ipOf = (svc) => {
   return svc.addresses?.find((a) => !a.includes(':') && a !== '127.0.0.1')
+}
+
+/** Shape a discovered mDNS service into the device payload the renderer expects. */
+function deviceFromService(svc) {
+  const ip = ipOf(svc)
+  if (!ip) return null
+  const { txt = {}, port } = svc
+  return {
+    given_name: txt.given_name,
+    name: txt.name,
+    serial: txt.serial,
+    address: `${ip}:${port}`,
+  }
 }
 
 /**
@@ -132,21 +144,11 @@ const ipOf = (svc) => {
 async function findDevice() {
   stopPairingDiscovery()
 
-  if (!bonjour) {
-    bonjour = new Bonjour()
-  }
-
   return new Promise((resolve) => {
-    bonjour.find({ type: 'adb-tls-pairing' }, (svc) => {
-      const ip = ipOf(svc)
-      if (!ip) return
-      const { txt = {}, port } = svc
-      resolve({
-        given_name: txt.given_name,
-        name: txt.name,
-        serial: txt.serial,
-        address: `${ip}:${port}`,
-      })
+    pairingBrowser = browse('adb-tls-pairing', (svc) => {
+      const device = deviceFromService(svc)
+      if (!device) return
+      resolve(device)
       stopPairingDiscovery()
     })
   })
@@ -155,7 +157,7 @@ async function findDevice() {
 /** 停止 Pairing Discovery */
 function stopPairingDiscovery() {
   if (pairingBrowser) {
-    pairingBrowser.stop?.()
+    pairingBrowser.stop()
     pairingBrowser = null
   }
 }
@@ -170,21 +172,11 @@ function stopPairingDiscovery() {
 async function resolveConnectAddress() {
   stopConnectDiscovery()
 
-  if (!bonjour) {
-    bonjour = new Bonjour()
-  }
-
   return new Promise((resolve) => {
-    bonjour.find({ type: 'adb-tls-connect' }, (svc) => {
-      const ip = ipOf(svc)
-      if (!ip) return
-      const { txt = {}, port } = svc
-      resolve({
-        given_name: txt.given_name,
-        name: txt.name,
-        serial: txt.serial,
-        address: `${ip}:${port}`,
-      })
+    connectBrowser = browse('adb-tls-connect', (svc) => {
+      const device = deviceFromService(svc)
+      if (!device) return
+      resolve(device)
       stopConnectDiscovery()
     })
   })
@@ -193,7 +185,7 @@ async function resolveConnectAddress() {
 /** 停止 Connect Discovery */
 function stopConnectDiscovery() {
   if (connectBrowser) {
-    connectBrowser.stop?.()
+    connectBrowser.stop()
     connectBrowser = null
   }
 }

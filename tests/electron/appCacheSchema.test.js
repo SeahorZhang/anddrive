@@ -4,7 +4,6 @@ vi.mock('electron', () => ({
   app: { getPath: () => '' },
   ipcMain: { handle: vi.fn() },
 }))
-vi.mock('bonjour-service', () => ({ default: class {} }))
 
 const {
   CACHE_MAX_AGE_MS,

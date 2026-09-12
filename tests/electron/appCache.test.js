@@ -11,7 +11,6 @@ vi.mock('electron', () => ({
   },
   ipcMain: { handle: vi.fn() },
 }))
-vi.mock('bonjour-service', () => ({ default: class {} }))
 
 const { readAppCache, writeAppCache, CACHE_MAX_AGE_MS, CACHE_VERSION } = await import('../../electron/adb.js')
 

@@ -68,7 +68,7 @@ andrive_next 是一个基于 Vue 3 + Electron 的无线 ADB 设备管理工具�
 
 ### 3. 发现服务 (Bonjour/mDNS)
 
-`electron/adb/discoveryService.js` - 使用 `bonjour-service` 通过 mDNS 发现服务：
+`electron/mdns.js` - 自实现的 mDNS/DNS-SD 浏览器，在 `electron/adb.js` 中用于发现服务：
 
 **配对发现:**
 - 服务类型: `adb-tls-pairing`
@@ -84,9 +84,9 @@ andrive_next 是一个基于 Vue 3 + Electron 的无线 ADB 设备管理工具�
 - `startPairingDiscovery(onDevice)` - 启动配对服务发现，通过回调返回发现的设备
 - `startConnectDiscovery(onDevice)` - 启动连接端点发现
 - `resolveConnectAddress(serial, options)` - 根据 serial 的 guid 解析当前 connect 地址，轮询最多 6 秒
-- `stopDiscovery()` - 停止所有发现，销毁 bonjour 实例
+- `stopDiscovery()` - 停止所有发现，关闭 mDNS socket
 
-**Bonjour 服务发现机制:**
+**mDNS 服务发现机制:**
 - 监听局域网中的 mDNS 服务
 - 提取 IP（过滤掉 127.0.0.1 和端口信息）
 - 通过服务名称中的 guid 匹配设备
