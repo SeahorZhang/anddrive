@@ -1,3 +1,4 @@
+/* global __APP_CHANNEL__ */
 import { app, BrowserWindow } from "electron";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -12,9 +13,11 @@ process.env.VITE_PUBLIC = VITE_DEV_SERVER_URL
   ? path.join(process.env.APP_ROOT, "public")
   : RENDERER_DIST;
 
-// 开发模式使用独立的 userData，避免与已安装的生产版共用单实例锁和应用缓存。
+// 开发模式与 Beta 版使用独立的 userData，避免与正式版共用单实例锁和应用缓存。
 if (VITE_DEV_SERVER_URL) {
   app.setPath("userData", path.join(app.getPath("appData"), "anddrive-dev"));
+} else if (__APP_CHANNEL__ === "beta") {
+  app.setPath("userData", path.join(app.getPath("appData"), "anddrive-beta"));
 }
 
 if (!app.requestSingleInstanceLock()) {

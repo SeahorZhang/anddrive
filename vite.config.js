@@ -10,6 +10,7 @@ import { defineConfig, perEnvironmentPlugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { electronSimple } from 'vite-plugin-electron/multi-env'
 import { notBundle } from 'vite-plugin-electron/plugin'
+import { appChannel, appVersion } from './scripts/app-version.mjs'
 
 const projectRoot = fileURLToPath(new URL('.', import.meta.url))
 const srcDir = path.join(projectRoot, 'src')
@@ -118,6 +119,8 @@ export default defineConfig(({ command }) => {
     },
     define: {
       __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+      __APP_CHANNEL__: JSON.stringify(appChannel),
+      __APP_VERSION__: JSON.stringify(appVersion),
     },
     clearScreen: false,
   }

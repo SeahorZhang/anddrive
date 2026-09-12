@@ -44,6 +44,7 @@ pnpm test:helper
 pnpm lint:helper
 pnpm build-helper
 pnpm build
+pnpm build:beta
 ```
 
 `pnpm lint`、`pnpm format:check` 和测试命令只检查，不应修改工作区。需要自动修复 lint 时使用 `pnpm lint:fix`。
@@ -51,6 +52,8 @@ pnpm build
 `pnpm build-helper` 使用 `helper-app/gradlew` 构建 APK，并复制到 `resources/helper-app.apk`。
 
 `pnpm build` 会先运行资源校验（`pnpm run verify-resources`），确认 `resources/adb/mac/adb`、`resources/scrcpy/*` 和 `helper-app.apk` 存在且非空，缺资源时快速失败。首次准备资源可运行 `pnpm run download-adb`。
+
+`pnpm build:beta` 构建可并存的 Beta 版（`AndDrive Beta`，独立 appId 与 userData，输出到 `release/beta/<version>`），版本自动带上 `-beta.<BETA_TAG>` 后缀。可通过 `BETA_TAG=xxx pnpm build:beta` 指定标签，默认使用 UTC 时间戳。Apple Silicon 单架构构建使用 `pnpm build:beta:mac:arm64`。
 
 ## 架构
 

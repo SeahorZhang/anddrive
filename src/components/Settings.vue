@@ -1,6 +1,5 @@
 <script setup>
-/* global __BUILD_TIME__ */
-import packageJson from '../../package.json'
+/* global __BUILD_TIME__, __APP_CHANNEL__, __APP_VERSION__ */
 import helperVersion from '../../resources/helper-app.version.json'
 
 function formatTime(value) {
@@ -12,7 +11,8 @@ const sections = [
   {
     title: '应用',
     rows: [
-      { label: '版本', value: `v${packageJson.version}` },
+      { label: '版本', value: `v${__APP_VERSION__}` },
+      { label: '通道', value: __APP_CHANNEL__ === 'beta' ? 'Beta' : '正式' },
       { label: '构建时间', value: formatTime(__BUILD_TIME__) },
     ],
   },
