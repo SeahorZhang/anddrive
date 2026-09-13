@@ -28,4 +28,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     request: (id) => invoke(CHANNELS.permissionsRequest, id),
     openSettings: (id) => invoke(CHANNELS.permissionsOpenSettings, id),
   },
+  favorites: {
+    get: (serial) => invoke(CHANNELS.favoritesGet, serial),
+    toggle: (serial, packageName) => invoke(CHANNELS.favoritesToggle, serial, packageName),
+  },
 });

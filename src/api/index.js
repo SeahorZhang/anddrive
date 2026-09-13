@@ -24,6 +24,8 @@ const {
   openSettings: openPermissionSettings,
 } = window.electronAPI.permissions;
 
+const { get: getFavorites, toggle: toggleFavorite } = window.electronAPI.favorites;
+
 export const isMac = platform === 'darwin';
 
 export const connectApi = (address) => connect(address);
@@ -81,3 +83,9 @@ export const requestPermissionApi = (id) => requestPermission(id);
 
 // 打开系统设置中对应的隐私面板
 export const openPermissionSettingsApi = (id) => openPermissionSettings(id);
+
+// 读取某台设备的收藏包名列表（跨重启保留）
+export const getFavoritesApi = (serial) => getFavorites(serial);
+
+// 切换收藏状态，返回更新后的收藏列表
+export const toggleFavoriteApi = (serial, packageName) => toggleFavorite(serial, packageName);

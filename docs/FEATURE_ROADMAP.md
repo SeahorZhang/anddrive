@@ -141,14 +141,16 @@
 
 ## 6. P1 — 核心体验增强
 
-### [ ] P1-1 搜索、排序与收藏
+### [~] P1-1 搜索、排序与收藏
 
 - **目标**：应用多时也能快速定位。
 - **功能点**：
   - 搜索支持包名、拼音首字母（引入轻量拼音库或预生成索引）。
   - 排序：最近使用（MRU）、名称、安装时间。
-  - 收藏/置顶，单独分组显示。
+  - [x] 收藏/置顶，单独分组显示。
 - **涉及模块**：`src/components/home/AppList.vue:35`、`src/composables`（新增）、`electron/adb.js`。
+- **实现位置（收藏）**：`electron/favorites.js`（按 serial 持久化到 `userData/favorites.json` + IPC）、`electron/ipcContract.js`、`electron/preload.js`、`src/api/index.js`（`getFavoritesApi` / `toggleFavoriteApi`）、`src/composables/useFavorites.js`、`src/components/home/AppList.vue`（收藏/置顶分组、悬停星标、乐观更新）。
+- **待办**：拼音首字母搜索、名称/安装时间排序、MRU 排序（依赖 P1-4）。
 - **验收标准**：输入拼音首字母可命中；收藏跨重启保留。
 
 ### [ ] P1-2 应用操作菜单

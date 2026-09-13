@@ -11,6 +11,7 @@ import {
   startScrcpyApi,
 } from '@/api'
 import { notify, notifyError } from '@/composables/useNotifications'
+import { useFavorites } from '@/composables/useFavorites'
 import { isHelperSetupError, readableError } from '@/utils/errors'
 
 const props = defineProps({
@@ -38,6 +39,22 @@ const filteredApps = computed(() => {
   const q = searchText.value.trim().toLowerCase()
   if (!q) return apps.value
   return apps.value.filter((app) => app.label.toLowerCase().includes(q))
+})
+
+/** 收藏（置顶）状态，按设备隔离并跨重启保留 */
+const { isFavorite, toggleFavorite } = useFavorites(() => props.address)
+
+/** 收藏单独分组置顶，其余归入“全部应用” */
+const sections = computed(() => {
+  const list = filteredApps.value
+  const favoriteApps = list.filter((app) => isFavorite(app.packageName))
+  const otherApps = list.filter((app) => !isFavorite(app.packageName))
+  const result = []
+  if (favoriteApps.length) result.push({ key: 'favorites', title: '收藏', apps: favoriteApps })
+  if (otherApps.length) {
+    result.push({ key: 'all', title: favoriteApps.length ? '全部应用' : '', apps: otherApps })
+  }
+  return result
 })
 
 /** 把一批 {packageName, iconUrl, iconUpdatedAt} 合并进当前列表 */
@@ -240,20 +257,42 @@ async function launchApp(app) {
             <span class="text-[12px]">正在读取应用列表…</span>
           </div>
 
-          <div v-else-if="filteredApps.length > 0" class="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-1">
-            <button v-for="app in filteredApps" :key="app.packageName" type="button" title="点击启动"
-              class="group flex cursor-pointer flex-col items-center gap-1.5 rounded-[12px] p-2 transition-colors outline-none hover:bg-black/[0.05] focus-visible:bg-black/[0.05] active:bg-black/[0.09]"
-              @click="launchApp(app)">
-              <img v-if="app.iconUrl" :src="app.iconUrl"
-                class="pointer-events-none size-11 rounded-[11px] shadow-[0_1px_3px_rgba(0,0,0,0.14)]" />
-              <div v-else
-                class="pointer-events-none flex size-11 items-center justify-center rounded-[11px] bg-black/[0.06] text-black/25">
-                <Icon icon="lucide:package" :width="20" :height="20" />
+          <div v-else-if="filteredApps.length > 0" class="flex flex-col gap-3">
+            <section v-for="section in sections" :key="section.key">
+              <div v-if="section.title"
+                class="mb-1 flex items-center gap-1.5 px-1 text-[11px] font-medium text-black/40">
+                <Icon v-if="section.key === 'favorites'" icon="lucide:star" :width="11" :height="11"
+                  class="fill-current text-[#f5a623]" />
+                {{ section.title }}
+                <span class="text-black/25">{{ section.apps.length }}</span>
               </div>
-              <span class="pointer-events-none w-full truncate text-center text-[11px] leading-tight text-black/70">
-                {{ app.label }}
-              </span>
-            </button>
+              <div class="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-1">
+                <div v-for="app in section.apps" :key="app.packageName" role="button" tabindex="0"
+                  :title="`启动 ${app.label}`"
+                  class="group relative flex cursor-pointer flex-col items-center gap-1.5 rounded-[12px] p-2 transition-colors outline-none hover:bg-black/[0.05] focus-visible:bg-black/[0.05] active:bg-black/[0.09]"
+                  @click="launchApp(app)" @keydown.enter="launchApp(app)" @keydown.space.prevent="launchApp(app)">
+                  <button type="button" :title="isFavorite(app.packageName) ? '取消收藏' : '收藏并置顶'"
+                    :aria-pressed="isFavorite(app.packageName)"
+                    class="absolute top-1 right-1 z-10 flex size-5 cursor-pointer items-center justify-center rounded-full bg-white/85 shadow-[0_1px_2px_rgba(0,0,0,0.15)] transition-opacity"
+                    :class="isFavorite(app.packageName)
+                      ? 'text-[#f5a623] opacity-100'
+                      : 'text-black/35 opacity-0 group-hover:opacity-100 hover:text-[#f5a623]'
+                      " @click.stop="toggleFavorite(app.packageName)">
+                    <Icon icon="lucide:star" :width="12" :height="12"
+                      :class="isFavorite(app.packageName) && 'fill-current'" />
+                  </button>
+                  <img v-if="app.iconUrl" :src="app.iconUrl"
+                    class="pointer-events-none size-11 rounded-[11px] shadow-[0_1px_3px_rgba(0,0,0,0.14)]" />
+                  <div v-else
+                    class="pointer-events-none flex size-11 items-center justify-center rounded-[11px] bg-black/[0.06] text-black/25">
+                    <Icon icon="lucide:package" :width="20" :height="20" />
+                  </div>
+                  <span class="pointer-events-none w-full truncate text-center text-[11px] leading-tight text-black/70">
+                    {{ app.label }}
+                  </span>
+                </div>
+              </div>
+            </section>
           </div>
 
           <div v-else class="flex flex-col items-center justify-center gap-3 py-16 text-black/35">

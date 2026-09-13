@@ -20,4 +20,8 @@ export const CHANNELS = {
   permissionsStatus: 'permissions:getStatus',
   permissionsRequest: 'permissions:request',
   permissionsOpenSettings: 'permissions:openSettings',
+
+  /** 应用收藏（electron/favorites.js）。 */
+  favoritesGet: 'favorites:get',
+  favoritesToggle: 'favorites:toggle',
 }
