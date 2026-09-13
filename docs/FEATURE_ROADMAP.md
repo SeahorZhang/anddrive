@@ -86,7 +86,7 @@
 - **实现位置**：`src/composables/useNotifications.js`（基于 `vue-sonner` 的 `toast` 封装 `notify`）、`src/App.vue`（挂载 `<Toaster />` + 连接/断开错误可读化）、`src/main.js`（引入 `vue-sonner/style.css`）、`src/utils/errors.js`（`readableError` / `isHelperSetupError`）、`src/components/home/AppList.vue`（列表/图标/Helper/启动集成）、`src/components/Settings.vue`（权限操作反馈）。
 - **验收标准**：断开失败、列表加载失败、图标获取失败、Helper 安装失败均出现可读提示；错误场景可一键重试。
 
-### [ ] P0-2 连接健康检查与自动重连
+### [x] P0-2 连接健康检查与自动重连
 
 - **目标**：网络抖动/设备休眠后自动恢复，减少手动重连。
 - **功能点**：
@@ -94,6 +94,7 @@
   - 掉线后回到 `loading`/`addDevice` 并可自动尝试 `adb connect` 重连（可开关）。
   - 区分「设备离线」与「transport 断开」，复用 `disconnectTransport` 幂等语义。
 - **涉及模块**：`src/App.vue:54`、`electron/adb.js:77`、`electron/adb.js:284`。
+- **实现位置**：`electron/adb.js`（`getDeviceState` 状态分类、`resolveReconnectAddress`、`reconnectDevice` + IPC）、`electron/preload.js`、`src/api/index.js`（`getDeviceStateApi` / `reconnectApi`）、`src/composables/useConnectionPreferences.js`（`autoReconnect` 开关）、`src/components/Settings.vue`（开关 UI）、`src/App.vue`（5s 心跳 `healthLoop`、`handleConnectionLost`、`startRecovery` 退避重连、发现循环令牌化）。
 - **验收标准**：拔网/息屏后 30s 内页面反映离线；恢复网络后自动恢复首页或提示重连。
 
 ### [ ] P0-3 操作进行态与进度反馈

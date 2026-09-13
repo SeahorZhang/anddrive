@@ -315,6 +315,65 @@ async function getConnectedDevice() {
 }
 
 // ---------------------------------------------------------------------------
+// 连接健康检查与重连
+// ---------------------------------------------------------------------------
+
+/**
+ * 读取某台设备在 `adb devices` 中的实时状态，用于连接健康检查：
+ * - `device`：在线可用
+ * - `offline`：仍登记在 adb 中但无法通信（设备休眠 / 网络抖动）
+ * - `unauthorized`：未授权
+ * - `absent`：transport 已断开，设备从列表消失
+ * @param {string} serial
+ * @returns {Promise<"device" | "offline" | "unauthorized" | "absent">}
+ */
+async function getDeviceState(serial) {
+  if (typeof serial !== "string" || !serial) return "absent";
+  await ensureServer();
+  return parseAdbDevices(await adbExec("devices")).get(serial) || "absent";
+}
+
+/**
+ * 从 mDNS 连接服务里解析设备当前可用的 `host:port`，供断线重连使用。
+ * @param {string} serial
+ * @returns {Promise<string | null>}
+ */
+async function resolveReconnectAddress(serial) {
+  if (typeof serial !== "string" || !serial) return null;
+  await ensureServer();
+  const services = parseMdnsServices(await adbExec("mdns", "services")).filter(
+    (s) => s.type === "_adb-tls-connect._tcp",
+  );
+  const matched = services.find(
+    (s) =>
+      s.address === serial || s.name === serial || `${s.name}._adb-tls-connect._tcp` === serial,
+  );
+  return matched?.address || null;
+}
+
+/**
+ * 尝试恢复与某台设备的无线连接。设备已在线时直接返回；否则解析可用地址后
+ * 重新 `adb connect`。与 disconnectTransport 一致，「已经断开」走幂等成功路径，
+ * 由调用方重新读取当前设备。
+ * @param {string} serial
+ * @returns {Promise<{ online: boolean, address?: string, reason?: string }>}
+ */
+async function reconnectDevice(serial) {
+  if (typeof serial !== "string" || !serial) return { online: false, reason: "no-serial" };
+  if ((await getDeviceState(serial)) === "device") return { online: true, address: serial };
+
+  // 配对场景 serial 本身就是 host:port；发现场景回落到 mDNS 广播的地址。
+  const address = /:\d+$/.test(serial) ? serial : await resolveReconnectAddress(serial);
+  if (!address) return { online: false, reason: "no-address" };
+
+  const result = await adbExecSafe("connect", address);
+  if (!/connected to /i.test(result.stdout)) {
+    return { online: false, reason: result.stderr || result.stdout || "connect-failed" };
+  }
+  return { online: true, address };
+}
+
+// ---------------------------------------------------------------------------
 // scrcpy 镜像窗口
 // ---------------------------------------------------------------------------
 
@@ -820,6 +879,12 @@ ipcMain.handle("adb:listConnectDevices", listConnectDevices);
 
 // 当前已连接（其他工具建立）的设备，供启动时接管
 ipcMain.handle("adb:getConnectedDevice", getConnectedDevice);
+
+// 连接健康检查：读取单台设备的实时状态（device / offline / unauthorized / absent）
+ipcMain.handle("adb:getDeviceState", (_, serial) => getDeviceState(serial));
+
+// 断线重连：设备在线幂等返回，否则解析 mDNS 地址后重新 adb connect
+ipcMain.handle("adb:reconnect", (_, serial) => reconnectDevice(serial));
 
 // 配对设备
 ipcMain.handle(CHANNELS.adbPair, async (event, device, password) => {

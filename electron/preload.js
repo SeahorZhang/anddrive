@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
     resolveConnectAddress: (serial) => invoke("adb:resolveConnectAddress", serial),
     listConnectDevices: () => invoke("adb:listConnectDevices"),
     getConnectedDevice: () => invoke("adb:getConnectedDevice"),
+    getDeviceState: (serial) => invoke("adb:getDeviceState", serial),
+    reconnect: (serial) => invoke("adb:reconnect", serial),
     installHelpera: (address) => invoke("adb:installHelper", address),
     loadInstalledApps: (address) => invoke("adb:loadInstalledApps", address),
     getCachedApps: (address) => invoke(CHANNELS.adbGetCachedApps, address),

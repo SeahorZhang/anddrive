@@ -8,6 +8,7 @@ import {
   openPermissionSettingsApi,
 } from '@/api'
 import { notifyError } from '@/composables/useNotifications'
+import { autoReconnect } from '@/composables/useConnectionPreferences'
 
 function formatTime(value) {
   const date = new Date(value)
@@ -112,6 +113,27 @@ onMounted(refreshPermissions)
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 pb-5">
+    <section>
+      <div class="mb-1.5 flex items-center justify-between px-1">
+        <span class="text-[11px] font-medium text-black/40">连接</span>
+      </div>
+      <div
+        class="divide-y divide-black/[0.06] overflow-hidden rounded-[12px] border border-black/[0.06] bg-white/70 shadow-[0_1px_2px_rgba(0,0,0,0.04)] backdrop-blur"
+      >
+        <div class="flex items-center gap-3 px-4 py-3">
+          <div class="min-w-0 flex-1">
+            <div class="text-[13px] text-black/70">自动重连</div>
+            <div class="mt-1 text-[11px] text-black/40">
+              连接中断或设备离线后，自动尝试恢复与设备的连接
+            </div>
+          </div>
+          <BaseButton variant="secondary" @click="autoReconnect = !autoReconnect">
+            {{ autoReconnect ? '已开启' : '已关闭' }}
+          </BaseButton>
+        </div>
+      </div>
+    </section>
+
     <section v-if="isMac">
       <div class="mb-1.5 flex items-center justify-between px-1">
         <span class="text-[11px] font-medium text-black/40">系统权限</span>

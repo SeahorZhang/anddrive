@@ -6,6 +6,8 @@ const {
   resolveConnectAddress,
   listConnectDevices,
   getConnectedDevice,
+  getDeviceState,
+  reconnect,
   installHelpera,
   loadInstalledApps,
   getCachedApps,
@@ -43,6 +45,12 @@ export const listConnectDevicesApi = () => listConnectDevices();
 
 // 当前已连接（其他工具建立）的设备，供启动时接管
 export const getConnectedDeviceApi = () => getConnectedDevice();
+
+// 读取单台设备的实时状态：device / offline / unauthorized / absent
+export const getDeviceStateApi = (serial) => getDeviceState(serial);
+
+// 断线重连：设备在线幂等返回，否则解析 mDNS 地址后重新连接
+export const reconnectApi = (serial) => reconnect(serial);
 
 // 安装app
 export const installHelperApi = (address) => installHelpera(address);
