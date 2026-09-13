@@ -1,5 +1,4 @@
 <script setup>
-import { Icon } from '@iconify/vue'
 import AppList from './AppList.vue'
 
 const props = defineProps({

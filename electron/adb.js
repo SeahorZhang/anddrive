@@ -874,6 +874,7 @@ ipcMain.handle(CHANNELS.scrcpyStart, (_, options) => {
     options.serial,
     "--new-display=1920x1080/320",
     `--start-app=${options.packageName}`,
+    "--keep-active",
     "--video-codec=h265",
     "-b",
     "24M",
