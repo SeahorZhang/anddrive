@@ -1,4 +1,4 @@
-import { app, ipcMain } from "electron";
+import { app, dialog, ipcMain } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -858,6 +858,150 @@ async function getAppIcons(serial, packages) {
 }
 
 // ---------------------------------------------------------------------------
+// 应用操作（强制停止 / 清除数据 / 卸载 / 应用信息 / 导出 APK）
+// ---------------------------------------------------------------------------
+
+const PACKAGE_NAME_RE = /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/;
+const MAX_PACKAGE_LENGTH = 512;
+
+/**
+ * 校验并规范化包名。所有应用操作都先经过这里，避免把任意字符串带进
+ * 设备 shell 命令。
+ * @param {unknown} value
+ * @returns {string}
+ */
+export function normalizePackageName(value) {
+  if (typeof value !== "string") throw new Error("应用包名无效");
+  const pkg = value.trim();
+  if (!pkg || pkg.length > MAX_PACKAGE_LENGTH || !PACKAGE_NAME_RE.test(pkg)) {
+    throw new Error("应用包名无效");
+  }
+  return pkg;
+}
+
+/** @param {unknown} serial */
+function assertSerial(serial) {
+  if (typeof serial !== "string" || !serial.trim() || serial.length > 1024) {
+    throw new Error("设备序列号无效");
+  }
+  return serial;
+}
+
+/**
+ * 读取应用的 APK 路径，split APK 会返回多个。
+ * @param {string} serial @param {string} packageName
+ * @returns {Promise<string[]>}
+ */
+async function getAppApkPaths(serial, packageName) {
+  const output = await adbExecSafe("-s", serial, "shell", "pm", "path", packageName);
+  return output.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("package:"))
+    .map((line) => line.slice("package:".length).trim())
+    .filter(Boolean);
+}
+
+/** 强制停止应用。 */
+async function forceStopApp(serial, packageName) {
+  assertSerial(serial);
+  const pkg = normalizePackageName(packageName);
+  await ensureServer();
+  const { code, stderr } = await adbExecSafe("-s", serial, "shell", "am", "force-stop", pkg);
+  if (code !== 0) throw new Error(stderr || "强制停止失败");
+  return true;
+}
+
+/** 清除应用数据。 */
+async function clearAppData(serial, packageName) {
+  assertSerial(serial);
+  const pkg = normalizePackageName(packageName);
+  await ensureServer();
+  const { code, stdout, stderr } = await adbExecSafe("-s", serial, "shell", "pm", "clear", pkg);
+  if (code !== 0 || !/success/i.test(stdout)) {
+    throw new Error(stderr || stdout || "清除应用数据失败");
+  }
+  return true;
+}
+
+/** 卸载应用。部分 ROM 成功也返回非零，输出含 Success 即视为成功。 */
+async function uninstallApp(serial, packageName) {
+  assertSerial(serial);
+  const pkg = normalizePackageName(packageName);
+  await ensureServer();
+  const { code, stdout, stderr } = await adbExecSafe("-s", serial, "uninstall", pkg);
+  if (code !== 0 && !/success/i.test(stdout)) {
+    throw new Error(stderr || stdout || "卸载失败");
+  }
+  return true;
+}
+
+/**
+ * 读取应用信息（版本、SDK、安装/更新时间、安装来源、APK 路径）。
+ * @param {string} serial @param {string} packageName
+ */
+async function getAppInfo(serial, packageName) {
+  assertSerial(serial);
+  const pkg = normalizePackageName(packageName);
+  await ensureServer();
+  const [dump, apkPaths] = await Promise.all([
+    adbExecSafe("-s", serial, "shell", "dumpsys", "package", pkg),
+    getAppApkPaths(serial, pkg),
+  ]);
+  const text = dump.stdout;
+  const pick = (pattern) => {
+    const match = text.match(pattern);
+    return match ? match[1].trim() : null;
+  };
+  const versionAndSdk = text.match(/versionCode=(\d+)\s+minSdk=(\d+)\s+targetSdk=(\d+)/);
+  return {
+    packageName: pkg,
+    versionName: pick(/versionName=(\S+)/),
+    versionCode: versionAndSdk ? Number(versionAndSdk[1]) : null,
+    minSdk: versionAndSdk ? Number(versionAndSdk[2]) : null,
+    targetSdk: versionAndSdk ? Number(versionAndSdk[3]) : null,
+    firstInstallTime: pick(/firstInstallTime=([^\n]+)/),
+    lastUpdateTime: pick(/lastUpdateTime=([^\n]+)/),
+    installerPackageName: pick(/installerPackageName=(\S+)/),
+    apkPaths,
+  };
+}
+
+/**
+ * 导出应用 APK：弹目录选择框，再用 adb pull 把 base/split APK 拉到该目录。
+ * @param {string} serial @param {string} packageName
+ * @returns {Promise<{ canceled: boolean, dir?: string, files?: string[] }>}
+ */
+async function exportApk(serial, packageName) {
+  assertSerial(serial);
+  const pkg = normalizePackageName(packageName);
+  await ensureServer();
+  const apkPaths = await getAppApkPaths(serial, pkg);
+  if (!apkPaths.length) throw new Error("未找到应用的 APK 文件");
+
+  const choice = await dialog.showOpenDialog({
+    title: "选择导出目录",
+    buttonLabel: "导出到此处",
+    properties: ["openDirectory", "createDirectory"],
+  });
+  if (choice.canceled || !choice.filePaths?.[0]) return { canceled: true };
+
+  const dir = choice.filePaths[0];
+  const files = [];
+  for (const remote of apkPaths) {
+    const name = path.posix.basename(remote);
+    const destination = path.join(dir, name);
+    const result = await adbExecSafe("-s", serial, "pull", remote, destination);
+    const pulled = /(\d+) files? pulled/i.exec(result.stdout);
+    if (result.code !== 0 || !pulled || Number(pulled[1]) === 0) {
+      throw new Error(result.stderr || result.stdout || `导出 ${name} 失败`);
+    }
+    files.push(name);
+  }
+  return { canceled: false, dir, files };
+}
+
+// ---------------------------------------------------------------------------
 // IPC handlers
 // ---------------------------------------------------------------------------
 
@@ -931,6 +1075,13 @@ ipcMain.handle("adb:deleteAppCache", async (event, address) => {
 ipcMain.handle(CHANNELS.adbGetCachedApps, async (event, address) => {
   return getCachedApps(address);
 });
+
+// 应用操作：强制停止 / 清除数据 / 卸载 / 应用信息 / 导出 APK
+ipcMain.handle(CHANNELS.adbForceStop, (_, serial, pkg) => forceStopApp(serial, pkg));
+ipcMain.handle(CHANNELS.adbClearData, (_, serial, pkg) => clearAppData(serial, pkg));
+ipcMain.handle(CHANNELS.adbUninstallApp, (_, serial, pkg) => uninstallApp(serial, pkg));
+ipcMain.handle(CHANNELS.adbAppInfo, (_, serial, pkg) => getAppInfo(serial, pkg));
+ipcMain.handle(CHANNELS.adbExportApk, (_, serial, pkg) => exportApk(serial, pkg));
 
 // 通过 scrcpy 启动应用镜像窗口（渲染层只传 { serial, packageName, label }，一条命令启动）
 ipcMain.handle(CHANNELS.scrcpyStart, (_, options) => {

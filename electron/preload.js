@@ -22,6 +22,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
     disconnect: (serial) => invoke(CHANNELS.adbDisconnect, serial),
     deleteAppCache: (serial) => invoke(CHANNELS.adbDeleteAppCache, serial),
     uninstallHelper: (serial) => invoke(CHANNELS.adbUninstallHelper, serial),
+    forceStopApp: (serial, packageName) => invoke(CHANNELS.adbForceStop, serial, packageName),
+    clearAppData: (serial, packageName) => invoke(CHANNELS.adbClearData, serial, packageName),
+    uninstallApp: (serial, packageName) => invoke(CHANNELS.adbUninstallApp, serial, packageName),
+    getAppInfo: (serial, packageName) => invoke(CHANNELS.adbAppInfo, serial, packageName),
+    exportApk: (serial, packageName) => invoke(CHANNELS.adbExportApk, serial, packageName),
   },
   permissions: {
     getStatus: () => invoke(CHANNELS.permissionsStatus),

@@ -13,6 +13,13 @@ export const CHANNELS = {
   adbUninstallHelper: 'adb:uninstallHelper',
   adbGetAppIcons: 'adb:getAppIcons',
 
+  /** 应用操作（electron/adb.js）。 */
+  adbForceStop: 'adb:forceStop',
+  adbClearData: 'adb:clearData',
+  adbUninstallApp: 'adb:uninstallApp',
+  adbAppInfo: 'adb:getAppInfo',
+  adbExportApk: 'adb:exportApk',
+
   /** Payload is a ScrcpyRequest (shared/types.js). */
   scrcpyStart: 'start_scrcpy',
 

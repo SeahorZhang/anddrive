@@ -19,6 +19,7 @@
 | 日期 | 变更 |
 | --- | --- |
 | 2026-09-14 | 初稿，建立 P0–P3 分级 |
+| 2026-09-14 | P1-2 应用操作菜单完成（右键菜单、危险操作确认、IPC 落位） |
 
 ---
 
@@ -153,7 +154,7 @@
 - **待办**：拼音首字母搜索、名称/安装时间排序、MRU 排序（依赖 P1-4）。
 - **验收标准**：输入拼音首字母可命中；收藏跨重启保留。
 
-### [ ] P1-2 应用操作菜单
+### [x] P1-2 应用操作菜单
 
 - **目标**：从「只能启动」扩展到常用应用管理。
 - **功能点**：
@@ -161,6 +162,7 @@
   - 危险操作二次确认（复用 `ConfirmDialog.vue`）。
   - 卸载/导出走 `adb shell pm`、`adb pull`，结果进通知系统。
 - **涉及模块**：`src/components/home/AppList.vue`、`electron/adb.js`（新增 IPC）。
+- **实现位置**：`electron/adb.js`（`normalizePackageName` 包名校验、`forceStopApp` / `clearAppData` / `uninstallApp` / `getAppInfo` / `exportApk` + IPC，导出走 `dialog.showOpenDialog` + `adb pull`）、`electron/ipcContract.js` / `electron/preload.js` / `src/api/index.js`（`adb:forceStop` / `clearData` / `uninstallApp` / `getAppInfo` / `exportApk` 桥接）、`src/components/home/AppList.vue`（reka-ui `ContextMenu` 右键菜单、危险操作 `ConfirmDialog` 二次确认、忙碌态与结果通知）、`src/components/AppInfoDialog.vue`（应用信息展示）、`src/utils/clipboard.js`（复制包名，含 `file://` 回落）、`tests/electron/appActions.test.js`。
 - **验收标准**：每个操作有结果反馈；导出 APK 落到用户选择目录。
 
 ### [ ] P1-3 scrcpy 参数配置与多窗口管理

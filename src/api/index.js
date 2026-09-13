@@ -14,6 +14,11 @@ const {
   getAppIcons,
   uninstallHelper,
   deleteAppCache,
+  forceStopApp,
+  clearAppData,
+  uninstallApp,
+  getAppInfo,
+  exportApk,
 } = window.electronAPI.adb;
 
 const { startScrcpy, platform } = window.electronAPI;
@@ -71,6 +76,17 @@ export const uninstallHelperApi = (address) => uninstallHelper(address);
 
 // 清除应用列表缓存
 export const deleteAppCacheApi = (address) => deleteAppCache(address);
+
+// 应用操作：强制停止 / 清除数据 / 卸载
+export const forceStopAppApi = (serial, packageName) => forceStopApp(serial, packageName);
+export const clearAppDataApi = (serial, packageName) => clearAppData(serial, packageName);
+export const uninstallAppApi = (serial, packageName) => uninstallApp(serial, packageName);
+
+// 读取应用信息（版本 / SDK / 安装时间 / APK 路径）
+export const getAppInfoApi = (serial, packageName) => getAppInfo(serial, packageName);
+
+// 导出应用 APK 到用户选择的目录
+export const exportApkApi = (serial, packageName) => exportApk(serial, packageName);
 
 // 通过 scrcpy 启动应用镜像窗口
 export const startScrcpyApi = (options) => startScrcpy(options);
