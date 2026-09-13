@@ -118,7 +118,7 @@ export default defineConfig(({ command }) => {
     },
     define: {
       __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
-      __APP_CHANNEL__: JSON.stringify(appChannel),
+      __APP_CHANNEL__: JSON.stringify(isServe ? "dev" : appChannel),
       __APP_VERSION__: JSON.stringify(appVersion),
     },
     clearScreen: false,

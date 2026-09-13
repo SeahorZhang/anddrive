@@ -6,7 +6,7 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "vite",
-    "build:pord": "node scripts/verify-resources.mjs && vite build && electron-builder",
+    "build:prod": "node scripts/verify-resources.mjs && vite build && electron-builder",
     "build": "export BETA_TAG=${BETA_TAG:-$(date -u +%Y%m%d%H%M)} APP_CHANNEL=beta; node scripts/verify-resources.mjs && vite build && electron-builder --config electron-builder.beta.mjs",
     "verify-resources": "node scripts/verify-resources.mjs",
     "build-helper": "bash scripts/build-helper.sh",
