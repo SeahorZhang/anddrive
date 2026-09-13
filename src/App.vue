@@ -1,31 +1,86 @@
 <script setup>
 import PageHome from './components/home/index.vue'
 import PageSettings from './components/Settings.vue'
-import { connectApi, disconnectApi } from '@/api'
+import { connectApi, disconnectApi, listConnectDevicesApi, getConnectedDeviceApi } from '@/api'
+
+const DISCOVERY_INTERVAL_MS = 1000
 
 const pageType = ref('loading') // loading | home | addDevice | settings
 const settingsReturn = ref('addDevice')
 const deviceDialogVisible = ref(false)
 const device = ref(null)
+const discoveredDevices = ref([])
 const disconnecting = ref(false)
 const disconnectError = ref('')
 
-const connect = async () => {
-  device.value = localStorage.getItem('device') ? JSON.parse(localStorage.getItem('device')) : null
-  if (device.value) {
-    try {
-      await connectApi(device.value.address)
-      deviceDialogVisible.value = false
-      pageType.value = 'home'
-    } catch (e) {
-      console.error('连接设备失败：', e)
-      pageType.value = 'addDevice'
-    }
-  } else {
-    pageType.value = 'addDevice'
+// 接管已连接设备并进入首页（设备已在 adb devices 中，无需再次 connect）
+function adoptDevice(target) {
+  device.value = target
+  deviceDialogVisible.value = false
+  pageType.value = 'home'
+}
+
+// 先 adb connect 再进入首页
+async function connectTo(target) {
+  try {
+    await connectApi(target.address)
+    adoptDevice(target)
+  } catch (e) {
+    console.error('连接设备失败：', e)
   }
 }
-connect()
+
+const connect = async () => {
+  // 电脑已通过其他工具连上手机时，直接接管该连接进首页
+  try {
+    const connected = await getConnectedDeviceApi()
+    if (connected) {
+      adoptDevice(connected)
+      return
+    }
+  } catch (e) {
+    console.error('获取已连接设备失败：', e)
+  }
+
+  device.value = null
+  pageType.value = 'addDevice'
+}
+
+// 持续发现手机服务：只在未连接时轮询，连接后立即停止
+// autoAdopt：启动后若发现已有连接（可能别的程序连的）自动进首页；
+// 用户主动断开后不再自动接管，改为手动从列表选择。
+let autoAdopt = true
+let discoveryRunning = false
+async function discoverLoop() {
+  if (discoveryRunning) return
+  discoveryRunning = true
+  while (!device.value) {
+    try {
+      const devices = await listConnectDevicesApi()
+      if (device.value) break
+      const connected = autoAdopt ? devices.find((d) => d.connected) : null
+      if (connected) {
+        adoptDevice(connected)
+        break
+      }
+      discoveredDevices.value = devices
+    } catch (e) {
+      console.error('发现设备失败：', e)
+    }
+    await new Promise((resolve) => setTimeout(resolve, DISCOVERY_INTERVAL_MS))
+  }
+  discoveryRunning = false
+}
+
+onMounted(() => {
+  connect()
+  discoverLoop()
+})
+
+function connectDevice(target) {
+  if (!target) return
+  adoptDevice(target)
+}
 
 async function disconnect() {
   if (!device.value) return
@@ -33,9 +88,10 @@ async function disconnect() {
   disconnectError.value = ''
   try {
     await disconnectApi(device.value.address)
-    localStorage.removeItem('device')
     device.value = null
+    autoAdopt = false
     pageType.value = 'addDevice'
+    discoverLoop()
   } catch (e) {
     disconnectError.value = e?.message || '断开连接失败'
   } finally {
@@ -55,7 +111,8 @@ function closeSettings() {
 
 <template>
   <PageHeader :pageType="pageType" :disconnecting="disconnecting" :disconnect-error="disconnectError"
-    @disconnect="disconnect" @open-settings="openSettings" @close-settings="closeSettings" />
+    :devices="discoveredDevices" @disconnect="disconnect" @open-settings="openSettings" @close-settings="closeSettings"
+    @connect-device="connectDevice" />
 
   <div v-if="pageType === 'loading'" class="flex flex-1 items-center justify-center">
     <span class="size-5 animate-spin rounded-full border-2 border-black/10 border-t-[#007aff]" aria-label="加载中" />
@@ -66,5 +123,5 @@ function closeSettings() {
   <PageSettings v-else-if="pageType === 'settings'" />
 
   <AddDevice v-else-if="pageType === 'addDevice'" v-model="deviceDialogVisible" />
-  <AddDeviceDialog v-model="deviceDialogVisible" @paired="connect" />
+  <AddDeviceDialog v-model="deviceDialogVisible" @paired="connectTo" />
 </template>

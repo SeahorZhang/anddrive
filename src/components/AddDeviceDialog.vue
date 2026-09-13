@@ -22,13 +22,12 @@ const start = async () => {
   statusMessage.value = '等待设备扫码…'
 
   const device = await findDeviceApi()
-  statusMessage.value = `正在配对 ${device?.txt?.given_name || device?.device}…`
+  statusMessage.value = `正在配对 ${device?.address || ''}…`
   try {
     await pairApi(device, password)
     statusMessage.value = '配对成功，开始建立连接…'
-    const a = await resolveConnectAddressApi(device.name)
-    localStorage.setItem('device', JSON.stringify(a))
-    emit('paired')
+    const connectService = await resolveConnectAddressApi(device.name)
+    emit('paired', connectService)
   } catch (e) {
     status.value = 'error'
     statusMessage.value = `启动发现失败: ${e.message}`

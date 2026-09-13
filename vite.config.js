@@ -1,27 +1,27 @@
-import { fileURLToPath, URL } from 'node:url'
-import { readFileSync, readdirSync, statSync } from 'node:fs'
-import path from 'node:path'
-import tailwindcss from '@tailwindcss/vite'
-import AutoImport from 'unplugin-auto-import/vite'
-import Components from 'unplugin-vue-components/vite'
-import RekaResolver from 'reka-ui/resolver'
+import { fileURLToPath, URL } from "node:url";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import path from "node:path";
+import tailwindcss from "@tailwindcss/vite";
+import AutoImport from "unplugin-auto-import/vite";
+import Components from "unplugin-vue-components/vite";
+import RekaResolver from "reka-ui/resolver";
 
-import { defineConfig, perEnvironmentPlugin } from 'vite'
-import vue from '@vitejs/plugin-vue'
-import { electronSimple } from 'vite-plugin-electron/multi-env'
-import { notBundle } from 'vite-plugin-electron/plugin'
-import { appChannel, appVersion } from './scripts/app-version.mjs'
+import { defineConfig, perEnvironmentPlugin } from "vite";
+import vue from "@vitejs/plugin-vue";
+import { electronSimple } from "vite-plugin-electron/multi-env";
+import { notBundle } from "vite-plugin-electron/plugin";
+import { appChannel, appVersion } from "./scripts/app-version.mjs";
 
-const projectRoot = fileURLToPath(new URL('.', import.meta.url))
-const srcDir = path.join(projectRoot, 'src')
+const projectRoot = fileURLToPath(new URL(".", import.meta.url));
+const srcDir = path.join(projectRoot, "src");
 
 function sourceFiles(dir, files = []) {
   for (const entry of readdirSync(dir)) {
-    const full = path.join(dir, entry)
-    if (statSync(full).isDirectory()) sourceFiles(full, files)
-    else if (/\.(vue|js)$/.test(entry)) files.push(full)
+    const full = path.join(dir, entry);
+    if (statSync(full).isDirectory()) sourceFiles(full, files);
+    else if (/\.(vue|js)$/.test(entry)) files.push(full);
   }
-  return files
+  return files;
 }
 
 /**
@@ -29,57 +29,56 @@ function sourceFiles(dir, files = []) {
  * 新增图标无需手动登记。
  */
 function offlineIconsPlugin() {
-  const virtualId = 'virtual:offline-icons'
-  const resolvedId = `\0${virtualId}`
+  const virtualId = "virtual:offline-icons";
+  const resolvedId = `\0${virtualId}`;
   return {
-    name: 'offline-icons',
+    name: "offline-icons",
     resolveId: (id) => (id === virtualId ? resolvedId : null),
     load(id) {
-      if (id !== resolvedId) return
+      if (id !== resolvedId) return;
       const collection = JSON.parse(
         readFileSync(
-          path.join(projectRoot, 'node_modules/@iconify-json/lucide/icons.json'),
-          'utf8',
+          path.join(projectRoot, "node_modules/@iconify-json/lucide/icons.json"),
+          "utf8",
         ),
-      )
-      const names = new Set()
+      );
+      const names = new Set();
       for (const file of sourceFiles(srcDir)) {
-        this.addWatchFile(file)
-        for (const match of readFileSync(file, 'utf8').matchAll(/lucide:([a-z0-9-]+)/g)) {
-          names.add(match[1])
+        this.addWatchFile(file);
+        for (const match of readFileSync(file, "utf8").matchAll(/lucide:([a-z0-9-]+)/g)) {
+          names.add(match[1]);
         }
       }
-      const icons = {}
+      const icons = {};
       for (const name of names) {
-        const icon =
-          collection.icons[name] || collection.icons[collection.aliases?.[name]?.parent]
-        if (icon) icons[name] = icon
+        const icon = collection.icons[name] || collection.icons[collection.aliases?.[name]?.parent];
+        if (icon) icons[name] = icon;
       }
       return [
         `import { setCustomIconLoader } from '@iconify/vue'`,
         `const icons = ${JSON.stringify(icons)}`,
         `setCustomIconLoader((name) => (icons[name] ? { ...icons[name], width: 24, height: 24 } : null), 'lucide')`,
-      ].join('\n')
+      ].join("\n");
     },
-  }
+  };
 }
 
 // https://vite.dev/config/
 export default defineConfig(({ command }) => {
-  const isServe = command === 'serve'
-  const isBuild = command === 'build'
-  const sourcemap = isServe || !!process.env.VSCODE_DEBUG
+  const isServe = command === "serve";
+  const isBuild = command === "build";
+  const sourcemap = isServe || !!process.env.VSCODE_DEBUG;
 
   return {
     plugins: [
       offlineIconsPlugin(),
       tailwindcss(),
-      perEnvironmentPlugin('renderer', (environment) =>
-        environment.name === 'client'
+      perEnvironmentPlugin("renderer", (environment) =>
+        environment.name === "client"
           ? [
               vue(),
               AutoImport({
-                imports: ['vue'],
+                imports: ["vue"],
                 dts: true,
               }),
               Components({
@@ -91,7 +90,7 @@ export default defineConfig(({ command }) => {
       ),
       electronSimple({
         main: {
-          input: 'electron/main.js',
+          input: "electron/main.js",
           plugins: [notBundle()],
           options: {
             build: {
@@ -101,11 +100,11 @@ export default defineConfig(({ command }) => {
           },
         },
         preload: {
-          input: 'electron/preload.js',
+          input: "electron/preload.js",
           plugins: [notBundle()],
           options: {
             build: {
-              sourcemap: sourcemap ? 'inline' : undefined,
+              sourcemap: sourcemap ? "inline" : undefined,
               minify: isBuild,
             },
           },
@@ -114,7 +113,7 @@ export default defineConfig(({ command }) => {
     ],
     resolve: {
       alias: {
-        '@': fileURLToPath(new URL('./src', import.meta.url)),
+        "@": fileURLToPath(new URL("./src", import.meta.url)),
       },
     },
     define: {
@@ -123,5 +122,5 @@ export default defineConfig(({ command }) => {
       __APP_VERSION__: JSON.stringify(appVersion),
     },
     clearScreen: false,
-  }
-})
+  };
+});
