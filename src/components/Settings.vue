@@ -77,9 +77,11 @@ async function requestPermission(permission) {
   try {
     const status = await requestPermissionApi(permission.id)
     permissionStatus.value = { ...permissionStatus.value, [permission.id]: status }
-    // 完全磁盘访问无法自动授权；辅助功能被拒绝后也无法再次弹窗，都需要跳转系统设置。
+    // 权限被拒绝后系统不会再弹窗：完全磁盘访问与本地网络只能手动开启，
+    // 辅助功能被拒绝后也无法再次弹窗，都需要跳转系统设置。
     const needsSettings =
       permission.id === 'fullDiskAccess' ||
+      (permission.id === 'localNetwork' && status === 'denied') ||
       (permission.id === 'accessibility' && status !== 'granted')
     if (needsSettings) await openPermissionSettingsApi(permission.id)
   } catch (e) {
@@ -87,6 +89,21 @@ async function requestPermission(permission) {
   } finally {
     busyId.value = ''
   }
+}
+
+async function openPermissionSettings(permission) {
+  try {
+    await openPermissionSettingsApi(permission.id)
+  } catch (e) {
+    console.error('打开系统设置失败：', e)
+  }
+}
+
+// 已授权时按钮用于跳转到对应系统设置页；未授权时先触发授权流程。
+function handlePermissionAction(permission) {
+  return permission.status === 'granted'
+    ? openPermissionSettings(permission)
+    : requestPermission(permission)
 }
 
 onMounted(refreshPermissions)
@@ -121,12 +138,11 @@ onMounted(refreshPermissions)
             <div class="mt-1 text-[11px] text-black/40">{{ row.description }}</div>
           </div>
           <BaseButton
-            v-if="row.status !== 'granted'"
             variant="secondary"
             :loading="busyId === row.id"
-            @click="requestPermission(row)"
+            @click="handlePermissionAction(row)"
           >
-            {{ row.status === 'denied' ? '去设置' : '授权' }}
+            {{ row.status === 'granted' ? '设置' : row.status === 'denied' ? '去设置' : '授权' }}
           </BaseButton>
         </div>
       </div>
