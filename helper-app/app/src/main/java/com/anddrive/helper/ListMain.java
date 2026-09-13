@@ -166,9 +166,10 @@ public final class ListMain {
 
     private static Bitmap square(Bitmap source, int sizePx) {
         int w = source.getWidth(), h = source.getHeight();
-        if (w == h && w > 0 && w <= sizePx) return source;
-        int side = w >= h ? w : h;
-        if (side <= 0) side = sizePx;
-        return Bitmap.createScaledBitmap(source, side, side, true);
+        if (w <= 0 || h <= 0) return source;
+        // 始终缩放到 sizePx×sizePx，否则大图标（如 2048×2048）会原样输出，
+        // 单批 JSON 体积暴涨导致输出被截断。
+        if (w == sizePx && h == sizePx) return source;
+        return Bitmap.createScaledBitmap(source, sizePx, sizePx, true);
     }
 }

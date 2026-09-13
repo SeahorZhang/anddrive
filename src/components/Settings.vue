@@ -106,15 +106,10 @@ onMounted(refreshPermissions)
     <section v-for="section in sections" :key="section.title">
       <div class="mb-1.5 px-1 text-[11px] font-medium text-black/40">{{ section.title }}</div>
       <div
-        class="divide-y divide-black/[0.06] overflow-hidden rounded-[12px] border border-black/[0.06] bg-white/70 shadow-[0_1px_2px_rgba(0,0,0,0.04)] backdrop-blur"
-      >
-        <div
-          v-for="row in section.rows"
-          :key="row.label"
-          class="flex items-center justify-between px-4 py-3"
-        >
+        class="divide-y divide-black/[0.06] overflow-hidden rounded-[12px] border border-black/[0.06] bg-white/70 shadow-[0_1px_2px_rgba(0,0,0,0.04)] backdrop-blur">
+        <div v-for="row in section.rows" :key="row.label" class="flex items-center justify-between px-4 py-3">
           <span class="text-[13px] text-black/70">{{ row.label }}</span>
-          <span class="text-[12px] tabular-nums text-black/45">{{ row.value }}</span>
+          <span class="text-[12px] text-black/45 tabular-nums">{{ row.value }}</span>
         </div>
       </div>
     </section>
