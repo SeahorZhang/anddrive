@@ -9,6 +9,7 @@ import {
 } from '@/api'
 import { notifyError } from '@/composables/useNotifications'
 import { autoReconnect } from '@/composables/useConnectionPreferences'
+import { scrcpyConfig, resetScrcpyConfig } from '@/composables/useScrcpyPreferences'
 
 function formatTime(value) {
   const date = new Date(value)
@@ -51,6 +52,13 @@ const STATUS_TEXT = {
 
 const permissionStatus = ref({})
 const busyId = ref('')
+
+const autoReconnectModel = computed({
+  get: () => autoReconnect.value,
+  set: (value) => {
+    autoReconnect.value = value
+  },
+})
 
 const permissionRows = computed(() =>
   PERMISSIONS.map((permission) => ({
@@ -127,11 +135,19 @@ onMounted(refreshPermissions)
               连接中断或设备离线后，自动尝试恢复与设备的连接
             </div>
           </div>
-          <BaseButton variant="secondary" @click="autoReconnect = !autoReconnect">
-            {{ autoReconnect ? '已开启' : '已关闭' }}
-          </BaseButton>
+          <SwitchToggle v-model="autoReconnectModel" />
         </div>
       </div>
+    </section>
+
+    <section>
+      <div class="mb-1.5 flex items-center justify-between px-1">
+        <span class="text-[11px] font-medium text-black/40">投屏镜像</span>
+        <button class="cursor-pointer text-[11px] text-[#007aff] outline-none hover:underline" @click="resetScrcpyConfig">
+          恢复默认
+        </button>
+      </div>
+      <ScrcpyConfigFields :config="scrcpyConfig" @change="(key, value) => (scrcpyConfig[key] = value)" />
     </section>
 
     <section v-if="isMac">

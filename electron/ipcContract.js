@@ -22,6 +22,10 @@ export const CHANNELS = {
 
   /** Payload is a ScrcpyRequest (shared/types.js). */
   scrcpyStart: 'start_scrcpy',
+  scrcpyList: 'scrcpy:list',
+  scrcpyFocus: 'scrcpy:focus',
+  scrcpyStop: 'scrcpy:stop',
+  scrcpyStopAll: 'scrcpy:stopAll',
 
   /** macOS 系统权限（electron/permissions.js）。 */
   permissionsStatus: 'permissions:getStatus',

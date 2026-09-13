@@ -23,6 +23,9 @@ const {
 
 const { startScrcpy, platform } = window.electronAPI;
 
+const { list: listScrcpy, focus: focusScrcpy, stop: stopScrcpy, stopAll: stopAllScrcpy } =
+  window.electronAPI.scrcpy;
+
 const {
   getStatus: getPermissionStatus,
   request: requestPermission,
@@ -90,6 +93,18 @@ export const exportApkApi = (serial, packageName) => exportApk(serial, packageNa
 
 // 通过 scrcpy 启动应用镜像窗口
 export const startScrcpyApi = (options) => startScrcpy(options);
+
+// 运行中的镜像会话列表
+export const listScrcpyApi = () => listScrcpy();
+
+// 聚焦指定镜像窗口
+export const focusScrcpyApi = (id) => focusScrcpy(id);
+
+// 关闭指定镜像窗口
+export const stopScrcpyApi = (id) => stopScrcpy(id);
+
+// 关闭全部镜像窗口，返回关闭数量
+export const stopAllScrcpyApi = () => stopAllScrcpy();
 
 // 读取 macOS 系统权限状态
 export const getPermissionStatusApi = () => getPermissionStatus();

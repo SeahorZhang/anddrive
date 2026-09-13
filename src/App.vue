@@ -13,6 +13,10 @@ import {
 import { readableError } from "@/utils/errors";
 import { notify, notifyError } from "@/composables/useNotifications";
 import { autoReconnect } from "@/composables/useConnectionPreferences";
+import {
+  startScrcpySessionPolling,
+  stopScrcpySessionPolling,
+} from "@/composables/useScrcpySessions";
 
 const DISCOVERY_INTERVAL_MS = 1000;
 /** 连接健康检查间隔 */
@@ -225,6 +229,11 @@ async function discoverLoop() {
 onMounted(() => {
   connect();
   discoverLoop();
+  startScrcpySessionPolling();
+});
+
+onUnmounted(() => {
+  stopScrcpySessionPolling();
 });
 
 function connectDevice(target) {

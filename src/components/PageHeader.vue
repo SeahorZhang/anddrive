@@ -51,6 +51,7 @@ watch(
 
       <div v-if="pageType !== 'loading'" style="-webkit-app-region: no-drag"
         class="absolute top-1/2 right-4 z-10 flex -translate-y-1/2 items-center gap-1">
+        <ScrcpySessions />
         <TooltipRoot v-for="action in actions" :key="action.event">
           <TooltipTrigger as-child>
             <BaseButton :icon="action.icon" icon-only :disabled="action.event === 'disconnect' && disconnecting"

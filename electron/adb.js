@@ -377,12 +377,107 @@ async function reconnectDevice(serial) {
 // scrcpy 镜像窗口
 // ---------------------------------------------------------------------------
 
-/** child process → { serial }; serial comes from the `-s` CLI arg. */
-const scrcpyProcesses = new Map();
+/** 默认投屏参数。渲染层可覆盖，字段经 normalizeScrcpyConfig 校验后才会进入命令行。 */
+export const DEFAULT_SCRCPY_CONFIG = Object.freeze({
+  /** `--new-display` 值：`<宽>x<高>/<dpi>`；`device` 表示设备原分辨率，`off` 表示不建虚拟显示。 */
+  newDisplay: "1920x1080/320",
+  bitRate: "24M",
+  maxFps: 60,
+  videoCodec: "h265",
+  audio: false,
+  /** 屏幕策略：keepActive 保持亮屏 · turnOff 息屏 · normal 不干预。 */
+  screenMode: "keepActive",
+  alwaysOnTop: false,
+  fullscreen: false,
+});
 
-function serialOf(args) {
-  const index = args.indexOf("-s");
-  return index >= 0 ? (args[index + 1] ?? null) : null;
+const VIDEO_CODECS = new Set(["h264", "h265", "av1"]);
+const SCREEN_MODES = new Set(["keepActive", "turnOff", "normal"]);
+const BIT_RATE_RE = /^\d{1,4}[KMG]?$/;
+const NEW_DISPLAY_RE = /^\d{3,5}x\d{3,5}(\/\d{2,4})?$/;
+
+/**
+ * 归一化投屏参数：非法值静默回落到默认值，避免把任意字符串带进命令行。
+ * @param {unknown} input
+ * @returns {typeof DEFAULT_SCRCPY_CONFIG}
+ */
+export function normalizeScrcpyConfig(input) {
+  const raw = input && typeof input === "object" ? input : {};
+  const newDisplay = (() => {
+    if (raw.newDisplay === "device" || raw.newDisplay === "off") return raw.newDisplay;
+    if (typeof raw.newDisplay === "string" && NEW_DISPLAY_RE.test(raw.newDisplay.trim())) {
+      return raw.newDisplay.trim();
+    }
+    return DEFAULT_SCRCPY_CONFIG.newDisplay;
+  })();
+  const maxFps = Number.isInteger(raw.maxFps)
+    ? Math.min(240, Math.max(1, raw.maxFps))
+    : DEFAULT_SCRCPY_CONFIG.maxFps;
+  return {
+    newDisplay,
+    bitRate:
+      typeof raw.bitRate === "string" && BIT_RATE_RE.test(raw.bitRate.trim())
+        ? raw.bitRate.trim()
+        : DEFAULT_SCRCPY_CONFIG.bitRate,
+    maxFps,
+    videoCodec: VIDEO_CODECS.has(raw.videoCodec)
+      ? raw.videoCodec
+      : DEFAULT_SCRCPY_CONFIG.videoCodec,
+    audio: raw.audio === true,
+    screenMode: SCREEN_MODES.has(raw.screenMode)
+      ? raw.screenMode
+      : DEFAULT_SCRCPY_CONFIG.screenMode,
+    alwaysOnTop: raw.alwaysOnTop === true,
+    fullscreen: raw.fullscreen === true,
+  };
+}
+
+/**
+ * 由领域参数构建 scrcpy 命令行（主进程内构造，渲染层不接触 CLI）。
+ * @param {{ serial: string, packageName: string, label: string, config?: unknown }} request
+ * @returns {string[]}
+ */
+export function buildScrcpyArgs(request) {
+  const serial = assertSerial(request?.serial);
+  const packageName = normalizePackageName(request?.packageName);
+  const label =
+    typeof request?.label === "string" && request.label.trim()
+      ? request.label.trim().slice(0, 200)
+      : packageName;
+  const config = normalizeScrcpyConfig(request?.config);
+
+  const args = ["-s", serial];
+  if (config.newDisplay === "device") args.push("--new-display");
+  else if (config.newDisplay !== "off") args.push(`--new-display=${config.newDisplay}`);
+  args.push(`--start-app=${packageName}`);
+
+  if (config.screenMode === "keepActive") args.push("--keep-active");
+  else if (config.screenMode === "turnOff") args.push("--stay-awake", "--turn-screen-off");
+
+  args.push(`--video-codec=${config.videoCodec}`);
+  args.push("--max-fps", String(config.maxFps));
+  args.push("-b", config.bitRate);
+  if (!config.audio) args.push("--no-audio");
+  if (config.alwaysOnTop) args.push("--always-on-top");
+  if (config.fullscreen) args.push("--fullscreen");
+  args.push("--window-x=auto", "--window-y=auto", `--window-title=${label}`);
+  return args;
+}
+
+/** child process → ScrcpySession。会话仅存活于主进程，渲染层只拿快照。 */
+const scrcpyProcesses = new Map();
+let scrcpySessionSeq = 0;
+
+/** @param {string} serial */
+function stopScrcpyProcesses(serial) {
+  let stopped = 0;
+  for (const [child, info] of scrcpyProcesses) {
+    if (serial && info.serial !== serial) continue;
+    child.kill("SIGKILL");
+    scrcpyProcesses.delete(child);
+    stopped += 1;
+  }
+  return stopped;
 }
 
 /**
@@ -391,18 +486,18 @@ function serialOf(args) {
  * @param {string} [serial]
  */
 export function stopScrcpy(serial) {
-  for (const [child, info] of scrcpyProcesses) {
-    if (serial && info.serial !== serial) continue;
-    child.kill("SIGKILL");
-    scrcpyProcesses.delete(child);
-  }
+  stopScrcpyProcesses(serial);
 }
 
 /**
  * Launch a scrcpy mirror window with a single command line.
- * @param {string[]} args full scrcpy CLI arguments
+ * @param {{ serial: string, packageName: string, label: string, config?: unknown }} request
+ * @returns {Promise<import('../shared/types.js').ScrcpySession>}
  */
-function startScrcpy(args) {
+function startScrcpy(request) {
+  const args = buildScrcpyArgs(request);
+  const serial = assertSerial(request.serial);
+  const packageName = normalizePackageName(request.packageName);
   return new Promise((resolve, reject) => {
     const child = spawn(scrcpyPath(), args, {
       stdio: "ignore",
@@ -410,14 +505,79 @@ function startScrcpy(args) {
       env: { ...process.env, ADB: adbPath() },
     });
 
-    scrcpyProcesses.set(child, { serial: serialOf(args) });
-    child.once("spawn", () => resolve(true));
+    const session = {
+      id: `scrcpy-${++scrcpySessionSeq}`,
+      pid: child.pid ?? null,
+      serial,
+      packageName,
+      label: typeof request.label === "string" && request.label.trim() ? request.label.trim() : packageName,
+      startedAt: Date.now(),
+    };
+    scrcpyProcesses.set(child, session);
+
+    child.once("spawn", () => resolve({ ...session }));
     child.once("error", (error) => {
       scrcpyProcesses.delete(child);
       reject(error);
     });
     child.once("exit", () => {
       scrcpyProcesses.delete(child);
+    });
+  });
+}
+
+/**
+ * 运行中的镜像会话快照（按启动顺序）。
+ * @returns {import('../shared/types.js').ScrcpySession[]}
+ */
+function listScrcpySessions() {
+  return [...scrcpyProcesses.values()].map((session) => ({ ...session }));
+}
+
+/**
+ * 结束指定会话。
+ * @param {unknown} id
+ */
+function stopScrcpySession(id) {
+  if (typeof id !== "string" || !id) throw new Error("镜像会话无效");
+  for (const [child, info] of scrcpyProcesses) {
+    if (info.id !== id) continue;
+    child.kill("SIGKILL");
+    scrcpyProcesses.delete(child);
+    return true;
+  }
+  throw new Error("镜像会话不存在或已关闭");
+}
+
+/** 结束全部镜像会话，返回关闭数量。 */
+function stopAllScrcpySessions() {
+  return stopScrcpyProcesses();
+}
+
+/**
+ * 将指定会话窗口置前。macOS 上通过 System Events 按进程 pid 聚焦，
+ * 需要「辅助功能」权限；其他平台为无操作成功。
+ * @param {unknown} id
+ */
+function focusScrcpySession(id) {
+  if (typeof id !== "string" || !id) throw new Error("镜像会话无效");
+  const session = [...scrcpyProcesses.values()].find((item) => item.id === id);
+  if (!session) throw new Error("镜像会话不存在或已关闭");
+  if (process.platform !== "darwin" || !Number.isInteger(session.pid)) return true;
+
+  const script = [
+    'tell application "System Events"',
+    `  set targetProcess to first process whose unix id is ${session.pid}`,
+    "  set frontmost of targetProcess to true",
+    "  try",
+    '    perform action "AXRaise" of first window of targetProcess',
+    "  end try",
+    "end tell",
+  ].join("\n");
+  return new Promise((resolve, reject) => {
+    execFile("osascript", ["-e", script], (error, _stdout, stderr) => {
+      if (error) reject(new Error(stderr?.trim() || "聚焦镜像窗口失败，请在系统设置中授予辅助功能权限"));
+      else resolve(true);
     });
   });
 }
@@ -1083,19 +1243,11 @@ ipcMain.handle(CHANNELS.adbUninstallApp, (_, serial, pkg) => uninstallApp(serial
 ipcMain.handle(CHANNELS.adbAppInfo, (_, serial, pkg) => getAppInfo(serial, pkg));
 ipcMain.handle(CHANNELS.adbExportApk, (_, serial, pkg) => exportApk(serial, pkg));
 
-// 通过 scrcpy 启动应用镜像窗口（渲染层只传 { serial, packageName, label }，一条命令启动）
-ipcMain.handle(CHANNELS.scrcpyStart, (_, options) => {
-  return startScrcpy([
-    "-s",
-    options.serial,
-    "--new-display=1920x1080/320",
-    `--start-app=${options.packageName}`,
-    "--keep-active",
-    "--video-codec=h265",
-    "-b",
-    "24M",
-    "--window-x=auto",
-    "--window-y=auto",
-    `--window-title=${options.label}`,
-  ]);
-});
+// 通过 scrcpy 启动应用镜像窗口（渲染层只传 { serial, packageName, label, config }，CLI 在主进程构造）
+ipcMain.handle(CHANNELS.scrcpyStart, (_, options) => startScrcpy(options));
+
+// 运行中镜像会话：列表 / 聚焦 / 关闭单个 / 关闭全部
+ipcMain.handle(CHANNELS.scrcpyList, () => listScrcpySessions());
+ipcMain.handle(CHANNELS.scrcpyFocus, (_, id) => focusScrcpySession(id));
+ipcMain.handle(CHANNELS.scrcpyStop, (_, id) => stopScrcpySession(id));
+ipcMain.handle(CHANNELS.scrcpyStopAll, () => stopAllScrcpySessions());

@@ -6,6 +6,12 @@ const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
 contextBridge.exposeInMainWorld("electronAPI", {
   platform: process.platform,
   startScrcpy: (options) => invoke(CHANNELS.scrcpyStart, options),
+  scrcpy: {
+    list: () => invoke(CHANNELS.scrcpyList),
+    focus: (id) => invoke(CHANNELS.scrcpyFocus, id),
+    stop: (id) => invoke(CHANNELS.scrcpyStop, id),
+    stopAll: () => invoke(CHANNELS.scrcpyStopAll),
+  },
   adb: {
     connect: (address) => invoke("adb:connect", address),
     pair: (device, password) => invoke(CHANNELS.adbPair, device, password),

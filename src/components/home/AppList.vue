@@ -3,6 +3,7 @@ import { Icon } from '@iconify/vue'
 import BaseButton from '../BaseButton.vue'
 import ConfirmDialog from '../ConfirmDialog.vue'
 import AppInfoDialog from '../AppInfoDialog.vue'
+import ScrcpyLaunchDialog from '../ScrcpyLaunchDialog.vue'
 import {
   installHelperApi,
   loadInstalledAppsApi,
@@ -19,6 +20,8 @@ import {
 } from '@/api'
 import { notify, notifyError } from '@/composables/useNotifications'
 import { useFavorites } from '@/composables/useFavorites'
+import { scrcpyConfig } from '@/composables/useScrcpyPreferences'
+import { refreshScrcpySessions } from '@/composables/useScrcpySessions'
 import { copyToClipboard } from '@/utils/clipboard'
 import { isHelperSetupError, readableError } from '@/utils/errors'
 
@@ -209,10 +212,21 @@ async function launchApp(app) {
       serial: props.address,
       packageName: app.packageName,
       label: app.label,
+      config: { ...scrcpyConfig },
     })
+    await refreshScrcpySessions()
   } catch (error) {
     notifyError(error, { title: `启动 ${app.label} 失败` })
   }
+}
+
+/** 单次启动参数对话框目标 */
+const launchDialogVisible = ref(false)
+const launchTarget = ref(null)
+
+function openLaunchDialog(app) {
+  launchTarget.value = app
+  launchDialogVisible.value = true
 }
 
 /** 危险操作统一加忙碌标记，避免重复触发 */
@@ -455,6 +469,10 @@ function confirmUninstall(app) {
                         <Icon icon="lucide:play" :width="13" :height="13" class="shrink-0 text-black/40" />
                         启动
                       </ContextMenuItem>
+                      <ContextMenuItem :class="MENU_ITEM_CLASS" @select="openLaunchDialog(app)">
+                        <Icon icon="lucide:settings-2" :width="13" :height="13" class="shrink-0 text-black/40" />
+                        启动（自定义参数）
+                      </ContextMenuItem>
                       <ContextMenuItem :class="MENU_ITEM_CLASS" @select="forceStopApp(app)">
                         <Icon icon="lucide:square" :width="13" :height="13" class="shrink-0 text-black/40" />
                         强制停止
@@ -509,5 +527,8 @@ function confirmUninstall(app) {
       @cancel="cancelConfirm" @close="cancelConfirm" />
 
     <AppInfoDialog v-model="infoVisible" :info="appInfo" />
+
+    <ScrcpyLaunchDialog v-model="launchDialogVisible" :serial="props.address"
+      :package-name="launchTarget?.packageName || ''" :label="launchTarget?.label || ''" />
   </div>
 </template>

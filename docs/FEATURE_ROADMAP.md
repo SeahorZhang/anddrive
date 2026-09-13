@@ -20,6 +20,7 @@
 | --- | --- |
 | 2026-09-14 | 初稿，建立 P0–P3 分级 |
 | 2026-09-14 | P1-2 应用操作菜单完成（右键菜单、危险操作确认、IPC 落位） |
+| 2026-09-14 | P1-3 scrcpy 参数配置与多窗口管理完成（参数表单、会话列表、生命周期） |
 
 ---
 
@@ -34,7 +35,7 @@
 | 单设备会话 | `src/App.vue` | 只维护一台活动设备，连接后停止发现轮询 |
 | 应用列表（两阶段） | `electron/adb.js:740`、`src/components/home/AppList.vue:76` | 先包名/标签，再按 20 个/批补齐图标 |
 | 图标缓存 | `electron/adb.js:370` | 90 天快照、7 天图标刷新、原子写入 |
-| scrcpy 启动 | `electron/adb.js:871` | 固定虚拟显示、h265、24M、keep-active |
+| scrcpy 启动与多窗口 | `electron/adb.js` `startScrcpy` / `scrcpyProcesses`、`src/components/ScrcpySessions.vue` | 参数可配（分辨率/码率/fps/编码/音频/息屏/置顶/全屏），会话列表聚焦与关闭 |
 | Helper 自动安装/升级 | `electron/adb.js:642` `ensureLatestHelper` | 版本不一致时 `adb install -r` |
 | 应用列表缓存秒开 | `electron/adb.js:866` | `getCachedApps` 先渲染缓存 |
 | macOS 权限面板 | `electron/permissions.js`、`src/components/Settings.vue` | 本地网络/辅助功能/完全磁盘访问 |
@@ -45,7 +46,7 @@
 - **错误不可感知**：`src/components/home/AppList.vue:56`、`:61`、`:93` 等失败只 `console.log`，用户看不到。
 - **无重连**：网络切换或设备休眠后连接失效，`src/App.vue` 的发现循环在连接后即停止，需手动重来。
 - **无操作进度**：Helper 安装、列表加载、图标批次仅有一个全局 `loading`，无进度与阶段提示。
-- **无设置持久化**：scrcpy 参数写死在 `electron/adb.js:871`；上次设备、窗口几何不保存。
+- **无设置持久化**：`electron/adb.js` 的 scrcpy 参数已在渲染层用 localStorage 持久化，但上次设备、窗口几何尚未保存。
 - **MRU 仅会话内**：`PRINCIPLE_DOCUMENT.md` 提到的 MRU 排序未跨会话持久化。
 - **多设备无 UI**：`shared/deviceSession.js` 早期会话冲突逻辑已移除，当前静默取第一台。
 - **工程保障弱**：测试仅覆盖 electron 解析逻辑，无渲染层测试，无 CI 工作流。
@@ -165,7 +166,7 @@
 - **实现位置**：`electron/adb.js`（`normalizePackageName` 包名校验、`forceStopApp` / `clearAppData` / `uninstallApp` / `getAppInfo` / `exportApk` + IPC，导出走 `dialog.showOpenDialog` + `adb pull`）、`electron/ipcContract.js` / `electron/preload.js` / `src/api/index.js`（`adb:forceStop` / `clearData` / `uninstallApp` / `getAppInfo` / `exportApk` 桥接）、`src/components/home/AppList.vue`（reka-ui `ContextMenu` 右键菜单、危险操作 `ConfirmDialog` 二次确认、忙碌态与结果通知）、`src/components/AppInfoDialog.vue`（应用信息展示）、`src/utils/clipboard.js`（复制包名，含 `file://` 回落）、`tests/electron/appActions.test.js`。
 - **验收标准**：每个操作有结果反馈；导出 APK 落到用户选择目录。
 
-### [ ] P1-3 scrcpy 参数配置与多窗口管理
+### [x] P1-3 scrcpy 参数配置与多窗口管理
 
 - **目标**：镜像质量可调，多窗口可控。
 - **功能点**：
@@ -173,6 +174,7 @@
   - 运行中会话列表：聚焦、关闭、关闭全部。
   - 会话生命周期绑定设备（`stopScrcpy(serial)` 已具备基础能力）。
 - **涉及模块**：`electron/adb.js:346` `startScrcpy`、`:871` IPC handler、新增会话状态 UI。
+- **实现位置**：`electron/adb.js`（`DEFAULT_SCRCPY_CONFIG` / `normalizeScrcpyConfig` 参数校验、`buildScrcpyArgs` 命令行构造、会话 Map 记录 `id/pid/serial/label/startedAt`、`listScrcpySessions` / `focusScrcpySession`（macOS `osascript` 按 pid 聚焦）/ `stopScrcpySession` / `stopAllScrcpySessions` + IPC）、`electron/ipcContract.js` / `electron/preload.js` / `src/api/index.js`（`scrcpy:list` / `focus` / `stop` / `stopAll` 桥接）、`src/composables/useScrcpyPreferences.js`（全局参数 localStorage 持久化）、`src/composables/useScrcpySessions.js`（会话轮询）、`src/components/ScrcpyConfigFields.vue`（参数表单）、`src/components/ScrcpyLaunchDialog.vue`（单次启动覆盖）、`src/components/ScrcpySessions.vue`（头部会话列表：聚焦/关闭/全部关闭）、`src/components/Settings.vue`（投屏默认参数）、`src/App.vue`（会话轮询生命周期）、`tests/electron/scrcpy.test.js`。
 - **验收标准**：修改参数后下次启动生效；能看到并关闭指定镜像窗口。
 
 ### [ ] P1-4 MRU 跨会话持久化
