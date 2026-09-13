@@ -1162,6 +1162,213 @@ async function exportApk(serial, packageName) {
 }
 
 // ---------------------------------------------------------------------------
+// 设备信息（型号 / 系统 / 存储 / 电量 / 网络 / CPU / 内存）
+// ---------------------------------------------------------------------------
+
+const STATS_CACHE_TTL_MS = 30 * 1000;
+/** serial → { at, data }；刷新时 force 跳过缓存。 */
+const deviceStatsCache = new Map();
+
+/** `[key]: [value]` 形式的 getprop 输出解析为 Map。 */
+function parseGetprop(output) {
+  const props = new Map();
+  const re = /\[([^\]]+)\]:\s*\[([^\]]*)\]/g;
+  let match;
+  while ((match = re.exec(output || ""))) props.set(match[1], match[2]);
+  return props;
+}
+
+function pickProp(props, ...keys) {
+  for (const key of keys) {
+    const value = props.get(key);
+    if (value) return value;
+  }
+  return null;
+}
+
+/** 从 serial（host:port）提取 IPv4，USB serial 返回 null。 */
+function hostFromSerial(serial) {
+  if (typeof serial !== "string") return null;
+  const host = serial.split(":")[0];
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) ? host : null;
+}
+
+/** `df -k` 输出解析为字节数；优先 /data，其次最后一行。 */
+function parseStorage(output) {
+  const lines = (output || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const line = lines.find((item) => /\s\/data$/.test(item)) || lines[lines.length - 1];
+  if (!line) return null;
+  const parts = line.split(/\s+/);
+  if (parts.length < 5) return null;
+  const totalKb = Number(parts[1]);
+  const usedKb = Number(parts[2]);
+  const availKb = Number(parts[3]);
+  if (!Number.isFinite(totalKb) || totalKb <= 0) return null;
+  const percent = Number.parseInt(parts[4], 10);
+  return {
+    totalBytes: totalKb * 1024,
+    usedBytes: Number.isFinite(usedKb) ? usedKb * 1024 : null,
+    availableBytes: Number.isFinite(availKb) ? availKb * 1024 : null,
+    percentUsed: Number.isFinite(percent) ? percent : null,
+  };
+}
+
+const BATTERY_STATUS = {
+  1: "unknown",
+  2: "charging",
+  3: "discharging",
+  4: "notCharging",
+  5: "full",
+};
+
+/** `dumpsys battery` 输出解析。 */
+function parseBattery(output) {
+  const text = output || "";
+  const pick = (key) => {
+    const match = text.match(new RegExp(`^\\s*${key}\\s*:\\s*(.+)$`, "mi"));
+    return match ? match[1].trim() : null;
+  };
+  const level = Number.parseInt(pick("level") ?? "", 10);
+  const status = Number.parseInt(pick("status") ?? "", 10);
+  const temperature = Number.parseInt(pick("temperature") ?? "", 10);
+  const powered = ["AC powered", "USB powered", "Wireless powered"].some((key) =>
+    /true/i.test(pick(key) || ""),
+  );
+  return {
+    level: Number.isFinite(level) ? level : null,
+    status: BATTERY_STATUS[status] || null,
+    temperatureC: Number.isFinite(temperature) ? temperature / 10 : null,
+    charging: powered || status === 2 || status === 5,
+  };
+}
+
+/** `/proc/meminfo` 输出解析为字节数。 */
+function parseMemory(output) {
+  const read = (key) => {
+    const match = (output || "").match(new RegExp(`^${key}:\\s*(\\d+)\\s*kB`, "mi"));
+    return match ? Number(match[1]) * 1024 : null;
+  };
+  const totalBytes = read("MemTotal");
+  const availableBytes = read("MemAvailable");
+  if (totalBytes == null) return null;
+  return {
+    totalBytes,
+    availableBytes,
+    usedBytes: availableBytes != null ? totalBytes - availableBytes : null,
+  };
+}
+
+/** `cat /proc/loadavg; echo ---; nproc; echo ###; grep Hardware` 输出解析。 */
+function parseCpu(output) {
+  const [loadRaw, restRaw] = (output || "").split("---");
+  const [coresRaw, hardwareRaw] = (restRaw || "").split("###");
+  const loadMatch = (loadRaw || "").trim().match(/^[\d.]+/);
+  const load1 = loadMatch ? Number.parseFloat(loadMatch[0]) : null;
+  const cores = Number.parseInt((coresRaw || "").trim(), 10);
+  const hardware = (hardwareRaw || "").match(/hardware\s*:\s*(.+)/i);
+  return {
+    load1: Number.isFinite(load1) ? load1 : null,
+    cores: Number.isFinite(cores) ? cores : null,
+    hardware: hardware ? hardware[1].trim() : null,
+  };
+}
+
+/** `ip -o -4 addr` 输出解析，优先 wlan 接口，其次 serial 主机。 */
+function parseNetwork(output, fallbackIp) {
+  const candidates = [];
+  for (const line of (output || "").split("\n")) {
+    const ip = line.match(/\binet\s+(\d+\.\d+\.\d+\.\d+)\//);
+    if (!ip) continue;
+    const iface = line.match(/^\s*\d+:\s+([^\s:@]+)/);
+    candidates.push({ ip: ip[1], interface: iface ? iface[1] : null });
+  }
+  const wifi = candidates.find((item) => item.interface && /^wlan/i.test(item.interface));
+  const chosen = wifi || candidates.find((item) => item.interface && item.interface !== "lo") || null;
+  return {
+    ip: chosen?.ip || fallbackIp || null,
+    interface: chosen?.interface || null,
+  };
+}
+
+/**
+ * 将原始命令输出解析为结构化设备信息（纯函数，便于测试）。
+ * @param {{ props?: string, storage?: string, battery?: string, memory?: string, cpu?: string, network?: string }} raw
+ * @param {string} [serial]
+ */
+export function parseDeviceStats(raw, serial) {
+  const props = parseGetprop(raw?.props || "");
+  const cpu = parseCpu(raw?.cpu || "");
+  const sdk = Number.parseInt(pickProp(props, "ro.build.version.sdk") || "", 10);
+  return {
+    model: pickProp(props, "ro.product.model", "ro.product.vendor.model"),
+    brand: pickProp(props, "ro.product.brand"),
+    manufacturer: pickProp(props, "ro.product.manufacturer"),
+    androidVersion: pickProp(props, "ro.build.version.release"),
+    sdk: Number.isFinite(sdk) ? sdk : null,
+    cpu: {
+      model: pickProp(props, "ro.soc.model", "ro.soc.manufacturer", "ro.board.platform") || cpu.hardware,
+      cores: cpu.cores,
+      load1: cpu.load1,
+    },
+    memory: parseMemory(raw?.memory || ""),
+    storage: parseStorage(raw?.storage || ""),
+    battery: parseBattery(raw?.battery || ""),
+    network: parseNetwork(raw?.network || "", hostFromSerial(serial)),
+  };
+}
+
+/** 采集原始设备信息并解析；缓存 30s，force 时刷新。 */
+async function getDeviceStats(serial, force = false) {
+  assertSerial(serial);
+  const cached = deviceStatsCache.get(serial);
+  if (!force && cached && Date.now() - cached.at < STATS_CACHE_TTL_MS) {
+    return { ...cached.data, cached: true };
+  }
+  await ensureServer();
+
+  const cpuScript =
+    "cat /proc/loadavg; echo ---; nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo; echo ###; grep -m1 -i hardware /proc/cpuinfo";
+  const [propRes, dfRes, batteryRes, memRes, cpuRes, netRes] = await Promise.all([
+    adbExecSafe("-s", serial, "shell", "getprop"),
+    adbExecSafe("-s", serial, "shell", "df", "-k", "/data"),
+    adbExecSafe("-s", serial, "shell", "dumpsys", "battery"),
+    adbExecSafe("-s", serial, "shell", "cat", "/proc/meminfo"),
+    adbExecSafe("-s", serial, "shell", cpuScript),
+    adbExecSafe("-s", serial, "shell", "ip -o -4 addr 2>/dev/null"),
+  ]);
+
+  let storageRaw = dfRes.stdout;
+  if (!storageRaw) {
+    const rootRes = await adbExecSafe("-s", serial, "shell", "df", "-k", "/");
+    storageRaw = rootRes.stdout;
+  }
+  if (propRes.code !== 0 && !propRes.stdout) {
+    throw new Error(propRes.stderr || "读取设备信息失败");
+  }
+
+  const data = {
+    serial,
+    ...parseDeviceStats(
+      {
+        props: propRes.stdout,
+        storage: storageRaw,
+        battery: batteryRes.stdout,
+        memory: memRes.stdout,
+        cpu: cpuRes.stdout,
+        network: netRes.stdout,
+      },
+      serial,
+    ),
+    updatedAt: Date.now(),
+  };
+  deviceStatsCache.set(serial, { at: Date.now(), data });
+  return { ...data, cached: false };
+}
+
+// ---------------------------------------------------------------------------
 // IPC handlers
 // ---------------------------------------------------------------------------
 
@@ -1199,6 +1406,7 @@ ipcMain.handle(CHANNELS.adbPair, async (event, device, password) => {
 ipcMain.handle(CHANNELS.adbDisconnect, async (_, rawSerial) => {
   const serial = normalizeDisconnectSerial(rawSerial);
   stopScrcpy(serial);
+  deviceStatsCache.delete(serial);
   return disconnectTransport(serial);
 });
 
@@ -1242,6 +1450,9 @@ ipcMain.handle(CHANNELS.adbClearData, (_, serial, pkg) => clearAppData(serial, p
 ipcMain.handle(CHANNELS.adbUninstallApp, (_, serial, pkg) => uninstallApp(serial, pkg));
 ipcMain.handle(CHANNELS.adbAppInfo, (_, serial, pkg) => getAppInfo(serial, pkg));
 ipcMain.handle(CHANNELS.adbExportApk, (_, serial, pkg) => exportApk(serial, pkg));
+
+// 设备信息：型号 / 系统 / 存储 / 电量 / 网络 / CPU / 内存（force=true 跳过缓存）
+ipcMain.handle(CHANNELS.adbGetDeviceStats, (_, serial, force) => getDeviceStats(serial, force === true));
 
 // 通过 scrcpy 启动应用镜像窗口（渲染层只传 { serial, packageName, label, config }，CLI 在主进程构造）
 ipcMain.handle(CHANNELS.scrcpyStart, (_, options) => startScrcpy(options));

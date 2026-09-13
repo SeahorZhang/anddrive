@@ -1,5 +1,6 @@
 <script setup>
 import AppList from './AppList.vue'
+import DeviceStats from './DeviceStats.vue'
 
 const props = defineProps({
   device: {
@@ -26,6 +27,7 @@ const deviceTitle = computed(() => {
         <span class="truncate">{{ device.displayAddress || device.address }}</span>
       </div>
     </div>
+    <DeviceStats :serial="device.address" />
     <AppList :address="device.address" />
   </div>
 </template>

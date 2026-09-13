@@ -19,6 +19,7 @@ const {
   uninstallApp,
   getAppInfo,
   exportApk,
+  getDeviceStats,
 } = window.electronAPI.adb;
 
 const { startScrcpy, platform } = window.electronAPI;
@@ -90,6 +91,9 @@ export const getAppInfoApi = (serial, packageName) => getAppInfo(serial, package
 
 // 导出应用 APK 到用户选择的目录
 export const exportApkApi = (serial, packageName) => exportApk(serial, packageName);
+
+// 读取设备信息（型号 / 系统 / 存储 / 电量 / 网络 / CPU / 内存），force 跳过缓存
+export const getDeviceStatsApi = (serial, force = false) => getDeviceStats(serial, force);
 
 // 通过 scrcpy 启动应用镜像窗口
 export const startScrcpyApi = (options) => startScrcpy(options);

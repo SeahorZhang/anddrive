@@ -20,6 +20,9 @@ export const CHANNELS = {
   adbAppInfo: 'adb:getAppInfo',
   adbExportApk: 'adb:exportApk',
 
+  /** 设备信息面板（electron/adb.js）。 */
+  adbGetDeviceStats: 'adb:getDeviceStats',
+
   /** Payload is a ScrcpyRequest (shared/types.js). */
   scrcpyStart: 'start_scrcpy',
   scrcpyList: 'scrcpy:list',

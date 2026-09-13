@@ -21,6 +21,7 @@
 | 2026-09-14 | 初稿，建立 P0–P3 分级 |
 | 2026-09-14 | P1-2 应用操作菜单完成（右键菜单、危险操作确认、IPC 落位） |
 | 2026-09-14 | P1-3 scrcpy 参数配置与多窗口管理完成（参数表单、会话列表、生命周期） |
+| 2026-09-14 | P1-5 设备信息面板完成（getprop/df/battery 采集、缓存与刷新、首页可展开） |
 
 ---
 
@@ -36,6 +37,7 @@
 | 应用列表（两阶段） | `electron/adb.js:740`、`src/components/home/AppList.vue:76` | 先包名/标签，再按 20 个/批补齐图标 |
 | 图标缓存 | `electron/adb.js:370` | 90 天快照、7 天图标刷新、原子写入 |
 | scrcpy 启动与多窗口 | `electron/adb.js` `startScrcpy` / `scrcpyProcesses`、`src/components/ScrcpySessions.vue` | 参数可配（分辨率/码率/fps/编码/音频/息屏/置顶/全屏），会话列表聚焦与关闭 |
+| 设备信息面板 | `electron/adb.js` `getDeviceStats`、`src/components/home/DeviceStats.vue` | 型号/系统/存储/电量/网络/CPU/内存，30s 缓存与手动刷新 |
 | Helper 自动安装/升级 | `electron/adb.js:642` `ensureLatestHelper` | 版本不一致时 `adb install -r` |
 | 应用列表缓存秒开 | `electron/adb.js:866` | `getCachedApps` 先渲染缓存 |
 | macOS 权限面板 | `electron/permissions.js`、`src/components/Settings.vue` | 本地网络/辅助功能/完全磁盘访问 |
@@ -186,13 +188,14 @@
 - **涉及模块**：新增 `electron/mru.js`、`electron/adb.js`、`src/components/home/AppList.vue`。
 - **验收标准**：重启后最近使用的应用仍在首位。
 
-### [ ] P1-5 设备信息面板
+### [x] P1-5 设备信息面板
 
 - **目标**：连接后掌握设备关键状态。
 - **功能点**：
   - 展示型号、品牌、Android 版本、存储占用、电量、Wi‑Fi/IP、CPU/内存。
   - 数据来自 `adb shell getprop`、`df`、`dumpsys battery` 等，带缓存与刷新。
 - **涉及模块**：`src/components/home/index.vue`、`electron/adb.js`（新增 `adb:getDeviceStats`）。
+- **实现位置**：`electron/adb.js`（`parseDeviceStats` 纯解析、`getDeviceStats` 并行采集 getprop/df/dumpsys battery/meminfo/loadavg/ip，30s 缓存 + force 刷新 + 断开清缓存 + `adb:getDeviceStats`）、`electron/ipcContract.js` / `electron/preload.js` / `src/api/index.js`（`getDeviceStatsApi`）、`src/components/home/DeviceStats.vue`（可展开面板、刷新、存储进度条）、`src/components/home/index.vue`（挂载）、`tests/electron/deviceStats.test.js`。
 - **验收标准**：首页可展开查看，刷新不阻塞应用列表。
 
 ---

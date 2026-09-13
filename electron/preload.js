@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     uninstallApp: (serial, packageName) => invoke(CHANNELS.adbUninstallApp, serial, packageName),
     getAppInfo: (serial, packageName) => invoke(CHANNELS.adbAppInfo, serial, packageName),
     exportApk: (serial, packageName) => invoke(CHANNELS.adbExportApk, serial, packageName),
+    getDeviceStats: (serial, force) => invoke(CHANNELS.adbGetDeviceStats, serial, force),
   },
   permissions: {
     getStatus: () => invoke(CHANNELS.permissionsStatus),
