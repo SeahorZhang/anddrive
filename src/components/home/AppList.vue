@@ -10,6 +10,8 @@ import {
   deleteAppCacheApi,
   startScrcpyApi,
 } from '@/api'
+import { notify, notifyError } from '@/composables/useNotifications'
+import { isHelperSetupError, readableError } from '@/utils/errors'
 
 const props = defineProps({
   address: String,
@@ -51,26 +53,52 @@ function patchIcons(fetched) {
 }
 
 async function installHelper() {
+  const id = notify.loading('正在安装 Helper…', { key: 'helper-install' })
   try {
-    const stdout = await installHelperApi(props.address)
-    console.log(8, stdout)
-
+    await installHelperApi(props.address)
+    notify.update(id, { type: 'success', message: 'Helper 安装成功' })
     // 获取app列表
     await getAppList()
-  } catch (e) {
-    console.log(e)
+  } catch (error) {
+    notify.update(id, { type: 'error', message: readableError(error, '安装 Helper 失败') })
   }
 }
 
 async function uninstallHelper() {
-  const { code, stderr, stdout } = await uninstallHelperApi(props.address)
-  console.log(1, code, stderr, stdout)
-  apps.value = []
+  try {
+    await uninstallHelperApi(props.address)
+    apps.value = []
+    notify.success('已从手机卸载 Helper')
+  } catch (error) {
+    notifyError(error, { title: '卸载 Helper 失败' })
+  }
 }
 
 async function clearCache() {
-  await deleteAppCacheApi(props.address)
-  await getAppList()
+  try {
+    await deleteAppCacheApi(props.address)
+    await getAppList()
+    notify.success('缓存已清除，已重新加载')
+  } catch (error) {
+    notifyError(error, { title: '清除缓存失败' })
+  }
+}
+
+/** 列表加载失败时给出可读提示与下一步操作。 */
+function reportLoadError(error) {
+  if (isHelperSetupError(error)) {
+    notify.error(readableError(error, '设备上未找到 Helper'), {
+      key: 'helper-setup',
+      title: 'Helper 未就绪',
+      action: { label: '安装 Helper', handler: installHelper },
+    })
+    return
+  }
+  notifyError(error, {
+    key: 'app-list',
+    title: '读取应用列表失败',
+    action: { label: '重试', handler: getAppList },
+  })
 }
 
 async function getAppList() {
@@ -89,17 +117,22 @@ async function getAppList() {
     // 第一阶段：包名 + 名称（快，无图标），带上缓存里的图标
     apps.value = await loadInstalledAppsApi(props.address)
   } catch (error) {
-    console.log('获取app列表失败', error?.message)
+    reportLoadError(error)
     return
   } finally {
     loading.value = false
   }
 
-  // 第二阶段：只有图标缺失或过期的才拉取，每批 20 个、3 路并发补齐
+  await loadIcons()
+}
+
+// 第二阶段：只有图标缺失或过期的才拉取，每批 20 个、3 路并发补齐
+async function loadIcons() {
   const pending = apps.value.filter(needsIcon).map((app) => app.packageName)
   if (pending.length === 0) return
 
   let cursor = 0
+  let failedBatches = 0
   async function worker() {
     while (cursor < pending.length) {
       const group = pending.slice(cursor, cursor + ICON_BATCH_SIZE)
@@ -107,7 +140,8 @@ async function getAppList() {
       try {
         patchIcons(await getAppIconsApi(props.address, group))
       } catch (error) {
-        console.log('图标批次失败', error?.message)
+        failedBatches += 1
+        console.warn('图标批次失败：', readableError(error))
       }
     }
   }
@@ -117,6 +151,14 @@ async function getAppList() {
       worker,
     ),
   )
+
+  if (failedBatches > 0) {
+    notify.error(`有 ${failedBatches} 批应用图标加载失败`, {
+      key: 'app-icons',
+      title: '图标加载不完整',
+      action: { label: '重试', handler: loadIcons },
+    })
+  }
 }
 
 getAppList()
@@ -129,7 +171,7 @@ async function launchApp(app) {
       label: app.label,
     })
   } catch (error) {
-    console.error('launchApp failed:', error)
+    notifyError(error, { title: `启动 ${app.label} 失败` })
   }
 }
 </script>
@@ -138,23 +180,13 @@ async function launchApp(app) {
   <div class="flex min-h-0 flex-1 flex-col">
     <div class="mb-3 flex items-center gap-2">
       <div class="relative flex h-8 min-w-0 flex-1 items-center">
-        <Icon
-          icon="lucide:search"
-          :width="14"
-          :height="14"
-          class="pointer-events-none absolute left-2.5 text-black/35"
-        />
-        <input
-          v-model="searchText"
-          type="text"
-          placeholder="搜索应用"
-          class="h-full w-full rounded-[8px] bg-black/[0.05] pr-8 pl-8 text-[12px] text-black/80 transition-colors outline-none placeholder:text-black/30 focus:bg-black/[0.07] focus:ring-2 focus:ring-[#007aff]/35"
-        />
-        <button
-          v-if="searchText"
+        <Icon icon="lucide:search" :width="14" :height="14"
+          class="pointer-events-none absolute left-2.5 text-black/35" />
+        <input v-model="searchText" type="text" placeholder="搜索应用"
+          class="h-full w-full rounded-[8px] bg-black/[0.05] pr-8 pl-8 text-[12px] text-black/80 transition-colors outline-none placeholder:text-black/30 focus:bg-black/[0.07] focus:ring-2 focus:ring-[#007aff]/35" />
+        <button v-if="searchText"
           class="absolute right-2 flex size-4 cursor-pointer items-center justify-center rounded-full bg-black/20 text-white transition-colors hover:bg-black/35"
-          @click="searchText = ''"
-        >
+          @click="searchText = ''">
           <Icon icon="lucide:x" :width="10" :height="10" />
         </button>
       </div>
@@ -163,38 +195,22 @@ async function launchApp(app) {
         <div class="flex items-center gap-0.5 rounded-[9px] bg-black/[0.05] p-0.5">
           <TooltipRoot>
             <TooltipTrigger as-child>
-              <BaseButton
-                icon="lucide:download"
-                icon-only
-                :disabled="loading"
-                @click="installHelper"
-              />
+              <BaseButton icon="lucide:download" icon-only :disabled="loading" @click="installHelper" />
             </TooltipTrigger>
             <TooltipPortal>
-              <TooltipContent
-                :side-offset="8"
-                side="bottom"
-                class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg"
-              >
+              <TooltipContent :side-offset="8" side="bottom"
+                class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg">
                 安装 Helper 到手机
               </TooltipContent>
             </TooltipPortal>
           </TooltipRoot>
           <TooltipRoot>
             <TooltipTrigger as-child>
-              <BaseButton
-                icon="lucide:trash-2"
-                icon-only
-                :disabled="loading"
-                @click="uninstallHelper"
-              />
+              <BaseButton icon="lucide:trash-2" icon-only :disabled="loading" @click="uninstallHelper" />
             </TooltipTrigger>
             <TooltipPortal>
-              <TooltipContent
-                :side-offset="8"
-                side="bottom"
-                class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg"
-              >
+              <TooltipContent :side-offset="8" side="bottom"
+                class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg">
                 从手机卸载 Helper
               </TooltipContent>
             </TooltipPortal>
@@ -204,11 +220,8 @@ async function launchApp(app) {
               <BaseButton icon="lucide:eraser" icon-only :disabled="loading" @click="clearCache" />
             </TooltipTrigger>
             <TooltipPortal>
-              <TooltipContent
-                :side-offset="8"
-                side="bottom"
-                class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg"
-              >
+              <TooltipContent :side-offset="8" side="bottom"
+                class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg">
                 清除缓存并重新加载
               </TooltipContent>
             </TooltipPortal>
@@ -219,57 +232,33 @@ async function launchApp(app) {
 
     <ScrollAreaRoot class="min-h-0 flex-1">
       <ScrollAreaViewport
-        class="h-full w-full rounded-[14px] border border-white/70 bg-white/55 shadow-[0_1px_3px_rgba(0,0,0,0.05)]"
-      >
+        class="h-full w-full rounded-[14px] border border-white/70 bg-white/55 shadow-[0_1px_3px_rgba(0,0,0,0.05)]">
         <div class="p-2.5">
-          <div
-            v-if="loading && apps.length === 0"
-            class="flex flex-col items-center justify-center gap-3 py-16 text-black/35"
-          >
-            <span
-              class="size-5 animate-spin rounded-full border-2 border-black/15 border-t-black/45"
-            />
+          <div v-if="loading && apps.length === 0"
+            class="flex flex-col items-center justify-center gap-3 py-16 text-black/35">
+            <span class="size-5 animate-spin rounded-full border-2 border-black/15 border-t-black/45" />
             <span class="text-[12px]">正在读取应用列表…</span>
           </div>
 
-          <div
-            v-else-if="filteredApps.length > 0"
-            class="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-1"
-          >
-            <button
-              v-for="app in filteredApps"
-              :key="app.packageName"
-              type="button"
-              title="点击启动"
+          <div v-else-if="filteredApps.length > 0" class="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-1">
+            <button v-for="app in filteredApps" :key="app.packageName" type="button" title="点击启动"
               class="group flex cursor-pointer flex-col items-center gap-1.5 rounded-[12px] p-2 transition-colors outline-none hover:bg-black/[0.05] focus-visible:bg-black/[0.05] active:bg-black/[0.09]"
-              @click="launchApp(app)"
-            >
-              <img
-                v-if="app.iconUrl"
-                :src="app.iconUrl"
-                class="pointer-events-none size-11 rounded-[11px] shadow-[0_1px_3px_rgba(0,0,0,0.14)]"
-              />
-              <div
-                v-else
-                class="pointer-events-none flex size-11 items-center justify-center rounded-[11px] bg-black/[0.06] text-black/25"
-              >
+              @click="launchApp(app)">
+              <img v-if="app.iconUrl" :src="app.iconUrl"
+                class="pointer-events-none size-11 rounded-[11px] shadow-[0_1px_3px_rgba(0,0,0,0.14)]" />
+              <div v-else
+                class="pointer-events-none flex size-11 items-center justify-center rounded-[11px] bg-black/[0.06] text-black/25">
                 <Icon icon="lucide:package" :width="20" :height="20" />
               </div>
-              <span
-                class="pointer-events-none w-full truncate text-center text-[11px] leading-tight text-black/70"
-              >
+              <span class="pointer-events-none w-full truncate text-center text-[11px] leading-tight text-black/70">
                 {{ app.label }}
               </span>
             </button>
           </div>
 
           <div v-else class="flex flex-col items-center justify-center gap-3 py-16 text-black/35">
-            <Icon
-              :icon="apps.length === 0 ? 'lucide:package' : 'lucide:search'"
-              :width="28"
-              :height="28"
-              class="text-black/20"
-            />
+            <Icon :icon="apps.length === 0 ? 'lucide:package' : 'lucide:search'" :width="28" :height="28"
+              class="text-black/20" />
             <span class="text-[12px]">
               {{ apps.length === 0 ? '手机中暂无应用' : '没有找到匹配的应用' }}
             </span>

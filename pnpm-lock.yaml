@@ -22,6 +22,10 @@ overrides:
 importers:
 
   .:
+    dependencies:
+      vue-sonner:
+        specifier: ^2.0.9
+        version: 2.0.9
     devDependencies:
       '@eslint/js':
         specifier: ^10.0.1
@@ -70,7 +74,7 @@ importers:
         version: 17.11.0
       motion-v:
         specifier: ^2.3.0
-        version: 2.3.0(@vueuse/core@14.4.0(vue@3.6.0-rc.8(@typescript/typescript6@6.0.2)))(vue@3.6.0-rc.8(@typescript/typescript6@6.0.2))
+        version: 2.3.0(@vueuse/core@14.4.0(vue@3.6.0-rc.8(@typescript/typescript6@6.0.2)))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vue@3.6.0-rc.8(@typescript/typescript6@6.0.2))
       npm-run-all2:
         specifier: ^9.0.2
         version: 9.0.3
@@ -2243,6 +2247,15 @@ packages:
     resolution: {integrity: sha512-WuyALRjWPDGtt/wzJiadO5AXY+8hZ80hVpe6MyivgraREW751X3SbhRvG3eLKOYN+8VEvqLcf3wdnt44Z4S4SA==}
     engines: {node: '>=10'}
 
+  react-dom@19.3.0:
+    resolution: {integrity: sha512-JDk8dgif51OjFoDE70+OT9ICyYr+69HlmihNwp1+Nsfbna3t5sIiCa9ZJktDmQ4/1b/rn26hIAR2uYXDMr5r0Q==}
+    peerDependencies:
+      react: ^19.3.0
+
+  react@19.3.0:
+    resolution: {integrity: sha512-E8LUcbtBWt20bbl2YoHfx4ZDBdxVTfOKtCZn9cDSJ4l6/nuoApcpIBcj47t2wZoVX8g2ZHuMHbiShgCR1T5Sog==}
+    engines: {node: '>=0.10.0'}
+
   read-binary-file-arch@1.0.6:
     resolution: {integrity: sha512-BNg9EN3DD3GsDXX7Aa8O4p92sryjkmzYYgmgTAc6CA4uGLEDzFfxOxugu21akOxpcXHiEgsYkC6nPsQvLLLmEg==}
     hasBin: true
@@ -2308,6 +2321,9 @@ packages:
   sax@1.6.1:
     resolution: {integrity: sha512-42tBVwLWnaQvW5zc4HbZrTuWccECCZfBi92FDuwtqxasH+JbPB3/FOKb1m222K42R4WxuxzzMsTswfzgtSu64Q==}
     engines: {node: '>=11.0.0'}
+
+  scheduler@0.28.0:
+    resolution: {integrity: sha512-juorfCmIkIw8tT+p5BXSm6PJjQF/ycEYmKyzURCIt/RaZIhL+PulbQ9Yu2z1HdOJDdqDTlxA1+xKBmHXJsczAw==}
 
   scule@1.3.0:
     resolution: {integrity: sha512-6FtHJEvt+pVMIB9IBY+IcCJ6Z5f1iQnytgyfKMhDKgmzYG+TeH/wx1y3l27rshSbLiSanrR9ffZDrEsmjlQF2g==}
@@ -2698,6 +2714,20 @@ packages:
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
     peerDependencies:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
+
+  vue-sonner@2.0.9:
+    resolution: {integrity: sha512-i6BokNlNDL93fpzNxN/LZSn6D6MzlO+i3qXt6iVZne3x1k7R46d5HlFB4P8tYydhgqOrRbIZEsnRd3kG7qGXyw==}
+    peerDependencies:
+      '@nuxt/kit': ^4.0.3
+      '@nuxt/schema': ^4.0.3
+      nuxt: ^4.0.3
+    peerDependenciesMeta:
+      '@nuxt/kit':
+        optional: true
+      '@nuxt/schema':
+        optional: true
+      nuxt:
+        optional: true
 
   vue@3.6.0-rc.8:
     resolution: {integrity: sha512-9TU0oX/NWj9L4BHWKHXCeyMKmHqQoDLw+olIuqk07tryw0a8sCpmZrEmLps2vBiuRNknskDwcOupooe9J5P3aQ==}
@@ -4112,11 +4142,14 @@ snapshots:
       hasown: 2.0.4
       mime-types: 2.1.35
 
-  framer-motion@12.43.0:
+  framer-motion@12.43.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0):
     dependencies:
       motion-dom: 12.43.0
       motion-utils: 12.39.0
       tslib: 2.8.1
+    optionalDependencies:
+      react: 19.3.0
+      react-dom: 19.3.0(react@19.3.0)
 
   fs-extra@10.1.0:
     dependencies:
@@ -4552,10 +4585,10 @@ snapshots:
 
   motion-utils@12.39.0: {}
 
-  motion-v@2.3.0(@vueuse/core@14.4.0(vue@3.6.0-rc.8(@typescript/typescript6@6.0.2)))(vue@3.6.0-rc.8(@typescript/typescript6@6.0.2)):
+  motion-v@2.3.0(@vueuse/core@14.4.0(vue@3.6.0-rc.8(@typescript/typescript6@6.0.2)))(react-dom@19.3.0(react@19.3.0))(react@19.3.0)(vue@3.6.0-rc.8(@typescript/typescript6@6.0.2)):
     dependencies:
       '@vueuse/core': 14.4.0(vue@3.6.0-rc.8(@typescript/typescript6@6.0.2))
-      framer-motion: 12.43.0
+      framer-motion: 12.43.0(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       hey-listen: 1.0.8
       motion-dom: 12.43.0
       motion-utils: 12.39.0
@@ -4790,6 +4823,15 @@ snapshots:
 
   quick-lru@5.1.1: {}
 
+  react-dom@19.3.0(react@19.3.0):
+    dependencies:
+      react: 19.3.0
+      scheduler: 0.28.0
+    optional: true
+
+  react@19.3.0:
+    optional: true
+
   read-binary-file-arch@1.0.6(supports-color@7.2.0):
     dependencies:
       debug: 4.4.3(supports-color@7.2.0)
@@ -4886,6 +4928,9 @@ snapshots:
       truncate-utf8-bytes: 1.0.2
 
   sax@1.6.1: {}
+
+  scheduler@0.28.0:
+    optional: true
 
   scule@1.3.0: {}
 
@@ -5224,6 +5269,8 @@ snapshots:
       semver: 7.8.5
     transitivePeerDependencies:
       - supports-color
+
+  vue-sonner@2.0.9: {}
 
   vue@3.6.0-rc.8(@typescript/typescript6@6.0.2):
     dependencies:

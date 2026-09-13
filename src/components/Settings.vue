@@ -7,6 +7,7 @@ import {
   requestPermissionApi,
   openPermissionSettingsApi,
 } from '@/api'
+import { notifyError } from '@/composables/useNotifications'
 
 function formatTime(value) {
   const date = new Date(value)
@@ -68,7 +69,7 @@ async function refreshPermissions() {
   try {
     permissionStatus.value = await getPermissionStatusApi()
   } catch (e) {
-    console.error('读取系统权限状态失败：', e)
+    notifyError(e, { title: '读取系统权限状态失败' })
   }
 }
 
@@ -85,7 +86,7 @@ async function requestPermission(permission) {
       (permission.id === 'accessibility' && status !== 'granted')
     if (needsSettings) await openPermissionSettingsApi(permission.id)
   } catch (e) {
-    console.error('申请系统权限失败：', e)
+    notifyError(e, { title: '申请系统权限失败' })
   } finally {
     busyId.value = ''
   }
@@ -95,7 +96,7 @@ async function openPermissionSettings(permission) {
   try {
     await openPermissionSettingsApi(permission.id)
   } catch (e) {
-    console.error('打开系统设置失败：', e)
+    notifyError(e, { title: '打开系统设置失败' })
   }
 }
 
@@ -114,34 +115,25 @@ onMounted(refreshPermissions)
     <section v-if="isMac">
       <div class="mb-1.5 flex items-center justify-between px-1">
         <span class="text-[11px] font-medium text-black/40">系统权限</span>
-        <button
-          class="cursor-pointer text-[11px] text-[#007aff] outline-none hover:underline"
-          @click="refreshPermissions"
-        >
+        <button class="cursor-pointer text-[11px] text-[#007aff] outline-none hover:underline"
+          @click="refreshPermissions">
           刷新
         </button>
       </div>
       <div
-        class="divide-y divide-black/[0.06] overflow-hidden rounded-[12px] border border-black/[0.06] bg-white/70 shadow-[0_1px_2px_rgba(0,0,0,0.04)] backdrop-blur"
-      >
+        class="divide-y divide-black/[0.06] overflow-hidden rounded-[12px] border border-black/[0.06] bg-white/70 shadow-[0_1px_2px_rgba(0,0,0,0.04)] backdrop-blur">
         <div v-for="row in permissionRows" :key="row.id" class="flex items-center gap-3 px-4 py-3">
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-1.5">
               <span class="text-[13px] text-black/70">{{ row.label }}</span>
-              <span
-                :class="statusClass(row.status)"
-                class="rounded-full px-1.5 py-0.5 text-[10px] leading-none font-medium"
-              >
+              <span :class="statusClass(row.status)"
+                class="rounded-full px-1.5 py-0.5 text-[10px] leading-none font-medium">
                 {{ STATUS_TEXT[row.status] }}
               </span>
             </div>
             <div class="mt-1 text-[11px] text-black/40">{{ row.description }}</div>
           </div>
-          <BaseButton
-            variant="secondary"
-            :loading="busyId === row.id"
-            @click="handlePermissionAction(row)"
-          >
+          <BaseButton variant="secondary" :loading="busyId === row.id" @click="handlePermissionAction(row)">
             {{ row.status === 'granted' ? '设置' : row.status === 'denied' ? '去设置' : '授权' }}
           </BaseButton>
         </div>
