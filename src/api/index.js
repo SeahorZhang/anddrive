@@ -35,6 +35,14 @@ const {
 
 const { get: getFavorites, toggle: toggleFavorite } = window.electronAPI.favorites;
 
+const { get: getScrcpyConfig, set: setScrcpyConfig } = window.electronAPI.scrcpyConfig;
+
+const {
+  create: createShortcut,
+  reveal: revealShortcut,
+  onMirrorResult,
+} = window.electronAPI.shortcuts;
+
 export const isMac = platform === 'darwin';
 
 export const connectApi = (address) => connect(address);
@@ -124,3 +132,18 @@ export const getFavoritesApi = (serial) => getFavorites(serial);
 
 // 切换收藏状态，返回更新后的收藏列表
 export const toggleFavoriteApi = (serial, packageName) => toggleFavorite(serial, packageName);
+
+// 在桌面创建 `.adr` 投屏快捷方式
+export const createAppShortcutApi = (payload) => createShortcut(payload);
+
+// 在访达中定位快捷方式
+export const revealShortcutApi = (filePath) => revealShortcut(filePath);
+
+// 订阅快捷方式唤起投屏的结果，返回取消订阅函数
+export const onMirrorResultApi = (callback) => onMirrorResult(callback);
+
+// 读取 scrcpy 全局默认参数（主进程持久化），返回 { config, stored }
+export const getScrcpyConfigApi = () => getScrcpyConfig();
+
+// 保存 scrcpy 全局默认参数，返回归一化后的结果
+export const setScrcpyConfigApi = (config) => setScrcpyConfig(config);

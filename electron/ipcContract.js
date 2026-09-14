@@ -38,4 +38,15 @@ export const CHANNELS = {
   /** 应用收藏（electron/favorites.js）。 */
   favoritesGet: 'favorites:get',
   favoritesToggle: 'favorites:toggle',
+
+  /** scrcpy 全局默认参数（electron/scrcpyConfig.js，持久化在主进程）。 */
+  scrcpyConfigGet: 'scrcpyConfig:get',
+  scrcpyConfigSet: 'scrcpyConfig:set',
+
+  /** 桌面投屏快捷方式（electron/shortcut.js）。 */
+  shortcutCreate: 'shortcut:create',
+  shortcutReveal: 'shortcut:reveal',
+
+  /** 快捷方式唤起投屏的结果（主进程 → 渲染层）。 */
+  mirrorResult: 'mirror:result',
 }

@@ -17,6 +17,8 @@ import {
   uninstallAppApi,
   getAppInfoApi,
   exportApkApi,
+  createAppShortcutApi,
+  revealShortcutApi,
 } from '@/api'
 import { notify, notifyError } from '@/composables/useNotifications'
 import { useFavorites } from '@/composables/useFavorites'
@@ -274,6 +276,29 @@ async function exportAppApk(app) {
   })
 }
 
+/** 在桌面生成 `.adr` 投屏快捷方式，双击由系统交给 AndDrive 打开并投屏 */
+async function sendToDesktop(app) {
+  await withBusy(app, async () => {
+    try {
+      // 不写入当时的参数快照：快捷方式唤起时主进程会用最新全局参数。
+      const result = await createAppShortcutApi({
+        address: props.address,
+        packageName: app.packageName,
+        label: app.label,
+      })
+      notify.success(`已在桌面创建「${result.name}」`, {
+        title: '桌面快捷方式已创建',
+        action: {
+          label: '在访达中显示',
+          handler: () => revealShortcutApi(result.path),
+        },
+      })
+    } catch (error) {
+      notifyError(error, { title: `创建 ${app.label} 快捷方式失败` })
+    }
+  })
+}
+
 const infoVisible = ref(false)
 const appInfo = ref(null)
 
@@ -489,6 +514,10 @@ function confirmUninstall(app) {
                       <ContextMenuItem :class="MENU_ITEM_CLASS" @select="exportAppApk(app)">
                         <Icon icon="lucide:download" :width="13" :height="13" class="shrink-0 text-black/40" />
                         导出 APK
+                      </ContextMenuItem>
+                      <ContextMenuItem :class="MENU_ITEM_CLASS" @select="sendToDesktop(app)">
+                        <Icon icon="lucide:monitor-down" :width="13" :height="13" class="shrink-0 text-black/40" />
+                        发送到桌面
                       </ContextMenuItem>
                       <ContextMenuSeparator class="my-1 h-px bg-black/[0.06]" />
                       <ContextMenuItem :class="[MENU_ITEM_CLASS, MENU_ITEM_DANGER_CLASS]"

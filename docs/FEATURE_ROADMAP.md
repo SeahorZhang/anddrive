@@ -22,6 +22,10 @@
 | 2026-09-14 | P1-2 应用操作菜单完成（右键菜单、危险操作确认、IPC 落位） |
 | 2026-09-14 | P1-3 scrcpy 参数配置与多窗口管理完成（参数表单、会话列表、生命周期） |
 | 2026-09-14 | P1-5 设备信息面板完成（getprop/df/battery 采集、缓存与刷新、首页可展开） |
+| 2026-09-14 | 新增桌面投屏快捷方式：桌面 `.app`（带图标）经 `anddrive://` 唤起 AndDrive 投屏 |
+| 2026-09-14 | 桌面快捷方式改为 `.adr` 后缀文件，由系统文件关联默认交给 AndDrive 打开（`.anddrive` 已被 AndroMeld 占用） |
+| 2026-09-14 | 快捷方式重构：纯逻辑拆分至 `shortcutCore.js`；dev 文件关联改用手工 `.app` bundle（shell 脚本 launcher），去掉 osacompile/PlistBuddy/codesign 链路；唤起队列按解析结果去重 |
+| 2026-09-14 | 修复快捷方式参数过期：scrcpy 全局参数持久化迁至主进程（`electron/scrcpyConfig.js`，userData JSON），快捷方式不再嵌入创建时的参数快照，唤起时始终用最新全局参数（含置顶）；渲染层 localStorage 旧数据自动迁移 |
 
 ---
 
@@ -38,6 +42,8 @@
 | 图标缓存 | `electron/adb.js:370` | 90 天快照、7 天图标刷新、原子写入 |
 | scrcpy 启动与多窗口 | `electron/adb.js` `startScrcpy` / `scrcpyProcesses`、`src/components/ScrcpySessions.vue` | 参数可配（分辨率/码率/fps/编码/音频/息屏/置顶/全屏），会话列表聚焦与关闭 |
 | 设备信息面板 | `electron/adb.js` `getDeviceStats`、`src/components/home/DeviceStats.vue` | 型号/系统/存储/电量/网络/CPU/内存，30s 缓存与手动刷新 |
+| 桌面投屏快捷方式 | `electron/shortcutCore.js`（纯逻辑）、`electron/shortcut.js`、`electron/main.js` `open-file`、`src/components/home/AppList.vue` | 生成 `.adr` 快捷方式文件，系统按文件关联交给 AndDrive 打开并投屏，纳入会话管理；dev 模式由手工 `.app` bundle 提供文件关联；投屏参数唤起时取主进程最新全局配置 |
+| scrcpy 全局参数持久化 | `electron/scrcpyConfig.js`、`src/composables/useScrcpyPreferences.js` | 参数存主进程 userData/scrcpy-config.json，渲染层经 IPC 读写，冷启动唤起投屏也能拿到最新参数 |
 | Helper 自动安装/升级 | `electron/adb.js:642` `ensureLatestHelper` | 版本不一致时 `adb install -r` |
 | 应用列表缓存秒开 | `electron/adb.js:866` | `getCachedApps` 先渲染缓存 |
 | macOS 权限面板 | `electron/permissions.js`、`src/components/Settings.vue` | 本地网络/辅助功能/完全磁盘访问 |

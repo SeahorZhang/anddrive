@@ -9,6 +9,7 @@ import {
   getConnectedDeviceApi,
   getDeviceStateApi,
   reconnectApi,
+  onMirrorResultApi,
 } from "@/api";
 import { readableError } from "@/utils/errors";
 import { notify, notifyError } from "@/composables/useNotifications";
@@ -16,6 +17,7 @@ import { autoReconnect } from "@/composables/useConnectionPreferences";
 import {
   startScrcpySessionPolling,
   stopScrcpySessionPolling,
+  refreshScrcpySessions,
 } from "@/composables/useScrcpySessions";
 
 const DISCOVERY_INTERVAL_MS = 1000;
@@ -42,6 +44,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let lostDevice = null;
 /** 启动后若发现已有连接则自动接管；用户主动断开后不再自动接管 */
 let autoAdopt = true;
+/** 快捷方式唤起投屏结果的取消订阅函数 */
+let disposeMirrorResult = null;
 
 // ---------------------------------------------------------------------------
 // 连接健康检查
@@ -230,10 +234,19 @@ onMounted(() => {
   connect();
   discoverLoop();
   startScrcpySessionPolling();
+  disposeMirrorResult = onMirrorResultApi((result) => {
+    if (result.ok) {
+      notify.success(`已从桌面快捷方式启动 ${result.label}`, { title: "镜像已开启" });
+      refreshScrcpySessions();
+    } else {
+      notify.error(result.message || "启动投屏失败", { title: `启动 ${result.label} 失败` });
+    }
+  });
 });
 
 onUnmounted(() => {
   stopScrcpySessionPolling();
+  disposeMirrorResult?.();
 });
 
 function connectDevice(target) {
@@ -287,5 +300,5 @@ function closeSettings() {
   <AddDevice v-else-if="pageType === 'addDevice'" v-model="deviceDialogVisible" />
   <AddDeviceDialog v-model="deviceDialogVisible" @paired="connectTo" />
 
-  <Toaster position="top-right" theme="light" rich-colors close-button :offset="12" :visible-toasts="4" />
+  <Toaster position="top-right" theme="light" :offset="12" :visible-toasts="4" />
 </template>

@@ -68,6 +68,11 @@ export default defineConfig(({ command }) => {
   const isServe = command === "serve";
   const isBuild = command === "build";
   const sourcemap = isServe || !!process.env.VSCODE_DEBUG;
+  const define = {
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+    __APP_CHANNEL__: JSON.stringify(isServe ? "dev" : appChannel),
+    __APP_VERSION__: JSON.stringify(appVersion),
+  };
 
   return {
     plugins: [
@@ -93,6 +98,7 @@ export default defineConfig(({ command }) => {
           input: "electron/main.js",
           plugins: [notBundle()],
           options: {
+            define: { ...define },
             build: {
               sourcemap,
               minify: isBuild,
@@ -103,6 +109,7 @@ export default defineConfig(({ command }) => {
           input: "electron/preload.js",
           plugins: [notBundle()],
           options: {
+            define: { ...define },
             build: {
               sourcemap: sourcemap ? "inline" : undefined,
               minify: isBuild,
@@ -116,11 +123,7 @@ export default defineConfig(({ command }) => {
         "@": fileURLToPath(new URL("./src", import.meta.url)),
       },
     },
-    define: {
-      __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
-      __APP_CHANNEL__: JSON.stringify(isServe ? "dev" : appChannel),
-      __APP_VERSION__: JSON.stringify(appVersion),
-    },
+    define,
     clearScreen: false,
   };
 });

@@ -44,4 +44,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
     get: (serial) => invoke(CHANNELS.favoritesGet, serial),
     toggle: (serial, packageName) => invoke(CHANNELS.favoritesToggle, serial, packageName),
   },
+  scrcpyConfig: {
+    get: () => invoke(CHANNELS.scrcpyConfigGet),
+    set: (config) => invoke(CHANNELS.scrcpyConfigSet, config),
+  },
+  shortcuts: {
+    create: (payload) => invoke(CHANNELS.shortcutCreate, payload),
+    reveal: (filePath) => invoke(CHANNELS.shortcutReveal, filePath),
+    onMirrorResult: (callback) => {
+      const listener = (_event, payload) => callback(payload);
+      ipcRenderer.on(CHANNELS.mirrorResult, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.mirrorResult, listener);
+    },
+  },
 });

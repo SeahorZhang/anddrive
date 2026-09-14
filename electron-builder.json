@@ -4,6 +4,23 @@
   "asar": true,
   "productName": "AndDrive",
   "afterPack": "scripts/after-pack.js",
+  "protocols": [
+    {
+      "name": "AndDrive Mirror",
+      "schemes": [
+        "anddrive"
+      ]
+    }
+  ],
+  "fileAssociations": [
+    {
+      "ext": "adr",
+      "name": "AndDrive Mirror",
+      "description": "AndDrive 投屏快捷方式",
+      "mimeType": "application/x-anddrive-mirror",
+      "role": "Viewer"
+    }
+  ],
   "electronLanguages": [
     "zh-CN",
     "en-US"
