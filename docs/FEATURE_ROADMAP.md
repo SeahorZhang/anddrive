@@ -26,6 +26,9 @@
 | 2026-09-14 | 桌面快捷方式改为 `.adr` 后缀文件，由系统文件关联默认交给 AndDrive 打开（`.anddrive` 已被 AndroMeld 占用） |
 | 2026-09-14 | 快捷方式重构：纯逻辑拆分至 `shortcutCore.js`；dev 文件关联改用手工 `.app` bundle（shell 脚本 launcher），去掉 osacompile/PlistBuddy/codesign 链路；唤起队列按解析结果去重 |
 | 2026-09-14 | 修复快捷方式参数过期：scrcpy 全局参数持久化迁至主进程（`electron/scrcpyConfig.js`，userData JSON），快捷方式不再嵌入创建时的参数快照，唤起时始终用最新全局参数（含置顶）；渲染层 localStorage 旧数据自动迁移 |
+| 2026-09-14 | 镜像窗口与桌面快捷方式使用对应应用图标：scrcpy 经 `SCRCPY_ICON_DIR/scrcpy.png` 设窗口（macOS 为 Dock）图标，`.adr` 文件在创建时用 NSWorkspace 写入自定义 Finder 图标 |
+| 2026-09-14 | 消除镜像启动时 Dock 先闪通用图标：macOS 上把 scrcpy 包进按图标缓存的 `.app` bundle（`electron/scrcpyApp.js`，二进制硬链接），使进程出现即带应用图标 |
+| 2026-09-14 | 图标观感对齐系统：Android 全出血方形图标经 `electron/iconImage.js` 合成到 1024 画布（约 10% 留白 + 圆角），避免比 macOS 其他图标大一圈；镜像窗口、桌面快捷方式共用该结果 |
 
 ---
 
@@ -42,7 +45,8 @@
 | 图标缓存 | `electron/adb.js:370` | 90 天快照、7 天图标刷新、原子写入 |
 | scrcpy 启动与多窗口 | `electron/adb.js` `startScrcpy` / `scrcpyProcesses`、`src/components/ScrcpySessions.vue` | 参数可配（分辨率/码率/fps/编码/音频/息屏/置顶/全屏），会话列表聚焦与关闭 |
 | 设备信息面板 | `electron/adb.js` `getDeviceStats`、`src/components/home/DeviceStats.vue` | 型号/系统/存储/电量/网络/CPU/内存，30s 缓存与手动刷新 |
-| 桌面投屏快捷方式 | `electron/shortcutCore.js`（纯逻辑）、`electron/shortcut.js`、`electron/main.js` `open-file`、`src/components/home/AppList.vue` | 生成 `.adr` 快捷方式文件，系统按文件关联交给 AndDrive 打开并投屏，纳入会话管理；dev 模式由手工 `.app` bundle 提供文件关联；投屏参数唤起时取主进程最新全局配置 |
+| 桌面投屏快捷方式 | `electron/shortcutCore.js`（纯逻辑）、`electron/shortcut.js`、`electron/main.js` `open-file`、`src/components/home/AppList.vue` | 生成 `.adr` 快捷方式文件（含应用图标，并设为 Finder 图标），系统按文件关联交给 AndDrive 打开并投屏，纳入会话管理；dev 模式由手工 `.app` bundle 提供文件关联；投屏参数唤起时取主进程最新全局配置 |
+| scrcpy 窗口图标 | `electron/scrcpyApp.js`、`electron/adb.js` | macOS 上 scrcpy 以带图标的 `.app` bundle 启动（按图标缓存、硬链接二进制），Dock 从出现即用应用图标；并以 `SCRCPY_ICON_DIR` 设定窗口图标 |
 | scrcpy 全局参数持久化 | `electron/scrcpyConfig.js`、`src/composables/useScrcpyPreferences.js` | 参数存主进程 userData/scrcpy-config.json，渲染层经 IPC 读写，冷启动唤起投屏也能拿到最新参数 |
 | Helper 自动安装/升级 | `electron/adb.js:642` `ensureLatestHelper` | 版本不一致时 `adb install -r` |
 | 应用列表缓存秒开 | `electron/adb.js:866` | `getCachedApps` 先渲染缓存 |

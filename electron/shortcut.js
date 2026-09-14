@@ -13,11 +13,14 @@
 
 import { app, ipcMain, shell } from "electron";
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import { CHANNELS } from "./ipcContract.js";
 import { normalizePackageName } from "./adb.js";
+import { composeMacosIconPng, iconPngBuffer, sanitizeIcon } from "./iconImage.js";
+import { pathExists } from "./fsUtil.js";
 import {
   MIRROR_FILE_EXTENSION,
   buildShortcutContent,
@@ -52,14 +55,14 @@ export async function readShortcutFile(filePath) {
 
 /**
  * 在桌面创建 / 覆盖一个 `.adr` 投屏快捷方式。
- * @param {{ address?: unknown, packageName?: unknown, label?: unknown }} payload
+ * @param {{ address?: unknown, packageName?: unknown, label?: unknown, iconUrl?: unknown }} payload
  * @returns {Promise<{ path: string, name: string }>}
  */
 export async function createAppShortcut(payload) {
   const serial = sanitizeSerial(payload?.address);
   const packageName = normalizePackageName(payload?.packageName);
   const label = sanitizeLabel(payload?.label) || packageName;
-  const request = { serial, packageName, label };
+  const request = { serial, packageName, label, iconUrl: sanitizeIcon(payload?.iconUrl) };
 
   const name = sanitizeShortcutName(label, packageName);
   const filePath = path.join(app.getPath("desktop"), `${name}.${MIRROR_FILE_EXTENSION}`);
@@ -68,21 +71,52 @@ export async function createAppShortcut(payload) {
   // 触碰时间戳，让 Finder 立即刷新新文件。
   const now = new Date();
   await fs.utimes(filePath, now, now);
+
+  await setShortcutFileIcon(filePath, request.iconUrl);
   return { path: filePath, name };
+}
+
+// ---------------------------------------------------------------------------
+// Finder 文件图标
+//
+// macOS 没有设置自定义文件图标的内置命令，借 osascript 调用 AppKit 的
+// NSWorkspace.setIcon 写入图标资源；失败只记日志，不影响快捷方式本身的创建。
+// ---------------------------------------------------------------------------
+
+const SET_FILE_ICON_SCRIPT = `use framework "AppKit"
+on run argv
+	set img to current application's NSImage's alloc()'s initWithContentsOfFile:(item 1 of argv)
+	if img is missing value then error "cannot load icon"
+	current application's NSWorkspace's sharedWorkspace()'s setIcon:img forFile:(item 2 of argv) options:0
+end run`;
+
+const OSASCRIPT = "/usr/bin/osascript";
+
+async function setShortcutFileIcon(filePath, iconUrl) {
+  if (process.platform !== "darwin") return;
+
+  const rawPng = iconPngBuffer(iconUrl);
+  if (!rawPng) return;
+  const png = (await composeMacosIconPng(rawPng)) || rawPng;
+  const pngPath = path.join(
+    app.getPath("userData"),
+    "shortcut-icons",
+    `${randomBytes(8).toString("hex")}.png`,
+  );
+  try {
+    await fs.mkdir(path.dirname(pngPath), { recursive: true });
+    await fs.writeFile(pngPath, png);
+    await execFileAsync(OSASCRIPT, ["-e", SET_FILE_ICON_SCRIPT, pngPath, filePath]);
+  } catch (error) {
+    console.warn("AndDrive: 设置快捷方式图标失败：", error?.message || error);
+  } finally {
+    await fs.rm(pngPath, { force: true }).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------------------
 // 文件关联（macOS 开发模式）
 // ---------------------------------------------------------------------------
-
-async function pathExists(target) {
-  try {
-    await fs.access(target);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 /** dev launcher 的可执行脚本：把 `.adr` 文件转交给 Electron dev 实例。 */
 function launcherScript(exePath, projectPath, devServerUrl) {

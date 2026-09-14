@@ -11,7 +11,18 @@ import {
   normalizeScrcpyConfig,
   currentScrcpyConfig,
 } from "./scrcpyConfig.js";
+import { resolveScrcpyExecutable, pruneScrcpyAppBundles } from "./scrcpyApp.js";
+import {
+  composeMacosIconPng,
+  iconPngBuffer,
+  scrcpyIconDir,
+  pruneIconCache,
+  sanitizeIcon,
+} from "./iconImage.js";
 import helperVersion from "../resources/helper-app.version.json";
+
+// 图标校验在 ./iconImage.js，这里转发导出保持既有引用。
+export { sanitizeIcon };
 
 // 归一化逻辑在 ./scrcpyConfig.js（主进程参数持久化），这里转发导出保持既有引用。
 export { DEFAULT_SCRCPY_CONFIG, normalizeScrcpyConfig };
@@ -30,6 +41,7 @@ function resourcesBase() {
 const adbPath = () => path.join(resourcesBase(), "adb", "mac", "adb");
 const helperApkPath = () => path.join(resourcesBase(), "helper-app.apk");
 const scrcpyPath = () => path.join(resourcesBase(), "scrcpy", "scrcpy");
+const scrcpyServerPath = () => path.join(resourcesBase(), "scrcpy", "scrcpy-server");
 
 // ---------------------------------------------------------------------------
 // ADB 执行
@@ -444,19 +456,33 @@ export function stopScrcpy(serial) {
 
 /**
  * Launch a scrcpy mirror window with a single command line.
- * @param {{ serial: string, packageName: string, label: string, config?: unknown }} request
+ * @param {{ serial: string, packageName: string, label: string, config?: unknown, iconUrl?: string }} request
  * @returns {Promise<import('../shared/types.js').ScrcpySession>}
  */
-function startScrcpy(request) {
+async function startScrcpy(request) {
   const args = buildScrcpyArgs(request);
   const serial = assertSerial(request.serial);
   const packageName = normalizePackageName(request.packageName);
+  const iconPng = await composeMacosIconPng(iconPngBuffer(request.iconUrl));
+  void pruneScrcpyAppBundles();
+  void pruneIconCache();
+  // macOS 走带图标的 bundle（避免 Dock 先闪通用图标），其余平台用原始二进制；
+  // SCRCPY_ICON_DIR 让 scrcpy 把窗口图标设为应用图标。
+  const [iconDir, bundleExecutable] = await Promise.all([
+    iconPng ? scrcpyIconDir(iconPng) : null,
+    resolveScrcpyExecutable({
+      binaryPath: scrcpyPath(),
+      serverPath: scrcpyServerPath(),
+      iconPng,
+      label: request.label,
+    }),
+  ]);
+  const executable = bundleExecutable || scrcpyPath();
   return new Promise((resolve, reject) => {
-    const child = spawn(scrcpyPath(), args, {
-      stdio: "ignore",
-      // 打包的 adb 不在 PATH 上，scrcpy 通过 ADB 环境变量定位它；server 与可执行文件同目录自动找到。
-      env: { ...process.env, ADB: adbPath() },
-    });
+    // 打包的 adb 不在 PATH 上，scrcpy 通过 ADB 环境变量定位它；server 与可执行文件同目录自动找到。
+    const env = { ...process.env, ADB: adbPath() };
+    if (iconDir) env.SCRCPY_ICON_DIR = iconDir;
+    const child = spawn(executable, args, { stdio: "ignore", env });
 
     const session = {
       id: `scrcpy-${++scrcpySessionSeq}`,
@@ -510,6 +536,7 @@ export async function launchMirror(request) {
     serial: target,
     packageName,
     label: request?.label,
+    iconUrl: request?.iconUrl,
     config: currentScrcpyConfig(),
   });
 }
@@ -572,22 +599,10 @@ const CACHE_TMP_MAX_AGE_MS = 60 * 60 * 1000;
 const MAX_SNAPSHOT_BYTES = 32 * 1024 * 1024;
 const MAX_DEVICE_CACHES = 20;
 const MAX_APPS = 5000;
-const MAX_ICON_BYTES = 512 * 1024;
-const PNG_DATA_URL_PREFIX = "data:image/png;base64,";
 
 /** @param {unknown} value */
 function validTimestamp(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
-}
-
-/** @param {unknown} iconUrl */
-export function sanitizeIcon(iconUrl) {
-  if (iconUrl == null) return null;
-  if (typeof iconUrl !== "string" || !iconUrl.startsWith(PNG_DATA_URL_PREFIX)) return null;
-  const encoded = iconUrl.slice(PNG_DATA_URL_PREFIX.length);
-  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return null;
-  if (Buffer.byteLength(encoded, "base64") > MAX_ICON_BYTES) return null;
-  return iconUrl;
 }
 
 /** @param {unknown} value */

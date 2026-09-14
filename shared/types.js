@@ -41,6 +41,7 @@
  * @property {string} packageName
  * @property {string} label
  * @property {ScrcpyConfig} [config]
+ * @property {string} [iconUrl] 应用图标（PNG data URL），用作镜像窗口图标
  */
 
 /**

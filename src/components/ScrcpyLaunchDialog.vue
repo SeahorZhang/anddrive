@@ -16,6 +16,7 @@ const props = defineProps({
   serial: { type: String, default: '' },
   packageName: { type: String, default: '' },
   label: { type: String, default: '' },
+  iconUrl: { type: String, default: '' },
 })
 
 /** 单次启动草稿：打开时从全局默认复制，修改只影响本次启动。 */
@@ -48,6 +49,7 @@ async function launch() {
       serial: props.serial,
       packageName: props.packageName,
       label: props.label,
+      iconUrl: props.iconUrl || undefined,
       config: { ...draft },
     })
     if (saveAsDefault.value) Object.assign(scrcpyConfig, draft)

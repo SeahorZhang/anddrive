@@ -96,6 +96,16 @@ describe('shortcut file', () => {
     expect(parsed).toEqual(request)
   })
 
+  it('round-trips the app icon url', () => {
+    const request = {
+      serial: '192.168.1.5:5555',
+      packageName: 'com.example.app',
+      label: '示例应用',
+      iconUrl: 'data:image/png;base64,iVBORw0KGgo=',
+    }
+    expect(parseShortcutContent(buildShortcutContent(request))).toEqual(request)
+  })
+
   it('only accepts json-wrapped content', () => {
     const url = 'anddrive://mirror?address=a&package=com.a.b'
     expect(parseShortcutContent(JSON.stringify({ type: 'anddrive-mirror-shortcut', url }))).toEqual(

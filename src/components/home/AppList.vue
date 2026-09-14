@@ -214,6 +214,7 @@ async function launchApp(app) {
       serial: props.address,
       packageName: app.packageName,
       label: app.label,
+      iconUrl: app.iconUrl || undefined,
       config: { ...scrcpyConfig },
     })
     await refreshScrcpySessions()
@@ -285,6 +286,7 @@ async function sendToDesktop(app) {
         address: props.address,
         packageName: app.packageName,
         label: app.label,
+        iconUrl: app.iconUrl || undefined,
       })
       notify.success(`已在桌面创建「${result.name}」`, {
         title: '桌面快捷方式已创建',
@@ -558,6 +560,7 @@ function confirmUninstall(app) {
     <AppInfoDialog v-model="infoVisible" :info="appInfo" />
 
     <ScrcpyLaunchDialog v-model="launchDialogVisible" :serial="props.address"
-      :package-name="launchTarget?.packageName || ''" :label="launchTarget?.label || ''" />
+      :package-name="launchTarget?.packageName || ''" :label="launchTarget?.label || ''"
+      :icon-url="launchTarget?.iconUrl || ''" />
   </div>
 </template>
