@@ -38,10 +38,10 @@ function resourcesBase() {
   return app.isPackaged ? process.resourcesPath : path.join(__dirname, "..", "resources");
 }
 
-const adbPath = () => path.join(resourcesBase(), "adb", "mac", "adb");
+export const adbPath = () => path.join(resourcesBase(), "adb", "mac", "adb");
 const helperApkPath = () => path.join(resourcesBase(), "helper-app.apk");
 const scrcpyPath = () => path.join(resourcesBase(), "scrcpy", "scrcpy");
-const scrcpyServerPath = () => path.join(resourcesBase(), "scrcpy", "scrcpy-server");
+export const scrcpyServerPath = () => path.join(resourcesBase(), "scrcpy", "scrcpy-server");
 
 // ---------------------------------------------------------------------------
 // ADB 执行
@@ -49,7 +49,7 @@ const scrcpyServerPath = () => path.join(resourcesBase(), "scrcpy", "scrcpy-serv
 
 let serverStarted = false;
 
-async function ensureServer() {
+export async function ensureServer() {
   if (serverStarted) return;
   await new Promise((resolve, reject) => {
     execFile(adbPath(), ["start-server"], (err) => {
@@ -452,6 +452,38 @@ function stopScrcpyProcesses(serial) {
  */
 export function stopScrcpy(serial) {
   stopScrcpyProcesses(serial);
+}
+
+/**
+ * 设备级清理钩子：断开连接或退出时执行（自研镜像会话等）。
+ * 放在这里是为了让 adb.js 不用反向依赖 mirror 模块。
+ * @type {Set<(serial?: string) => unknown>}
+ */
+const deviceTeardownHooks = new Set();
+
+/**
+ * 注册设备清理钩子，返回取消函数。
+ * @param {(serial?: string) => unknown} hook
+ */
+export function onDeviceTeardown(hook) {
+  deviceTeardownHooks.add(hook);
+  return () => deviceTeardownHooks.delete(hook);
+}
+
+/**
+ * 执行所有清理钩子；无 serial 表示整体退出。等待异步钩子完成。
+ * @param {string} [serial]
+ */
+export async function runDeviceTeardown(serial) {
+  await Promise.all(
+    [...deviceTeardownHooks].map(async (hook) => {
+      try {
+        await hook(serial);
+      } catch (error) {
+        console.warn("AndDrive: 设备清理钩子失败：", error?.message || error);
+      }
+    }),
+  );
 }
 
 /**
@@ -1397,10 +1429,11 @@ ipcMain.handle(CHANNELS.adbPair, async (event, device, password) => {
   return adbExec("pair", device.address, password);
 });
 
-// 断开设备：先停掉该设备的 scrcpy 镜像，再断开无线 ADB 传输
+// 断开设备：先停掉该设备的 scrcpy 镜像与自研镜像会话，再断开无线 ADB 传输
 ipcMain.handle(CHANNELS.adbDisconnect, async (_, rawSerial) => {
   const serial = normalizeDisconnectSerial(rawSerial);
   stopScrcpy(serial);
+  await runDeviceTeardown(serial);
   deviceStatsCache.delete(serial);
   return disconnectTransport(serial);
 });

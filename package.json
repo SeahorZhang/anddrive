@@ -14,6 +14,7 @@
     "cert:export": "bash scripts/export-signing-cert.sh",
     "cert:install": "bash scripts/install-signing-cert.sh",
     "download-adb": "bash scripts/download-adb.sh",
+    "mirror:spike": "node scripts/mirror-spike.mjs",
     "preview": "vite preview",
     "lint": "run-s lint:oxlint lint:eslint",
     "lint:oxlint": "oxlint .",
@@ -64,6 +65,12 @@
     "node": "^22.18.0 || >=24.12.0"
   },
   "dependencies": {
+    "@yume-chan/adb": "3.0.0-beta.2",
+    "@yume-chan/adb-scrcpy": "3.0.0-beta.2",
+    "@yume-chan/adb-server-node-tcp": "3.0.0-beta.2",
+    "@yume-chan/scrcpy": "3.0.0-beta.2",
+    "@yume-chan/scrcpy-decoder-webcodecs": "3.0.0-beta.2",
+    "@yume-chan/stream-extra": "3.0.0-beta.2",
     "vue-sonner": "^2.0.9"
   }
 }

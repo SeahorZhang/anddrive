@@ -2,7 +2,7 @@
 import { Icon } from '@iconify/vue'
 import BaseButton from './BaseButton.vue'
 import ScrcpyConfigFields from './ScrcpyConfigFields.vue'
-import { startScrcpyApi } from '@/api'
+import { startScrcpyApi, startMirrorApi } from '@/api'
 import { readableError } from '@/utils/errors'
 import { notify } from '@/composables/useNotifications'
 import { refreshScrcpySessions } from '@/composables/useScrcpySessions'
@@ -22,6 +22,7 @@ const props = defineProps({
 /** 单次启动草稿：打开时从全局默认复制，修改只影响本次启动。 */
 const draft = reactive({ ...SCRCPY_DEFAULTS })
 const saveAsDefault = ref(false)
+const nativeEngine = ref(false)
 const launching = ref(false)
 const error = ref('')
 
@@ -29,6 +30,7 @@ watch(modelValue, (open) => {
   if (!open) return
   Object.assign(draft, scrcpyConfig)
   saveAsDefault.value = false
+  nativeEngine.value = false
   error.value = ''
 })
 
@@ -45,13 +47,15 @@ async function launch() {
   launching.value = true
   error.value = ''
   try {
-    await startScrcpyApi({
+    const payload = {
       serial: props.serial,
       packageName: props.packageName,
       label: props.label,
       iconUrl: props.iconUrl || undefined,
       config: { ...draft },
-    })
+    }
+    if (nativeEngine.value) await startMirrorApi(payload)
+    else await startScrcpyApi(payload)
     if (saveAsDefault.value) Object.assign(scrcpyConfig, draft)
     await refreshScrcpySessions()
     notify.success(`已启动 ${props.label}`, { title: '镜像已开启' })
@@ -89,6 +93,13 @@ async function launch() {
             <input v-model="saveAsDefault" type="checkbox" class="size-3.5 accent-[#007aff]" />
             同时保存为默认参数
           </label>
+          <label class="mt-2 flex cursor-pointer items-center gap-2 px-1 text-[12px] text-black/60">
+            <input v-model="nativeEngine" type="checkbox" class="size-3.5 accent-[#007aff]" />
+            使用原生渲染引擎（实验）
+          </label>
+          <p v-if="nativeEngine" class="mt-1 px-1 text-[11px] text-black/40">
+            实验引擎支持 H.264 / H.265（需平台硬解），AV1 会自动回落。
+          </p>
         </div>
 
         <div class="flex items-center justify-between gap-2 px-5 pt-1 pb-4">

@@ -24,6 +24,15 @@ const {
 
 const { startScrcpy, platform } = window.electronAPI;
 
+const {
+  start: startMirror,
+  list: listMirror,
+  stop: stopMirror,
+  stopAll: stopAllMirror,
+  focus: focusMirror,
+  onExit: onMirrorExit,
+} = window.electronAPI.mirror;
+
 const { list: listScrcpy, focus: focusScrcpy, stop: stopScrcpy, stopAll: stopAllScrcpy } =
   window.electronAPI.scrcpy;
 
@@ -105,6 +114,24 @@ export const getDeviceStatsApi = (serial, force = false) => getDeviceStats(seria
 
 // 通过 scrcpy 启动应用镜像窗口
 export const startScrcpyApi = (options) => startScrcpy(options);
+
+// 通过自研客户端启动原生镜像窗口（实验）
+export const startMirrorApi = (options) => startMirror(options);
+
+// 运行中的原生镜像会话
+export const listMirrorApi = () => listMirror();
+
+// 关闭指定原生镜像窗口
+export const stopMirrorApi = (id) => stopMirror(id);
+
+// 关闭全部原生镜像窗口
+export const stopAllMirrorApi = () => stopAllMirror();
+
+// 聚焦指定原生镜像窗口
+export const focusMirrorApi = (id) => focusMirror(id);
+
+// 订阅原生镜像意外结束事件，返回取消订阅函数
+export const onMirrorExitApi = (callback) => onMirrorExit(callback);
 
 // 运行中的镜像会话列表
 export const listScrcpyApi = () => listScrcpy();

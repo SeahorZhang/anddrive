@@ -29,6 +29,7 @@
 | 2026-09-14 | 镜像窗口与桌面快捷方式使用对应应用图标：scrcpy 经 `SCRCPY_ICON_DIR/scrcpy.png` 设窗口（macOS 为 Dock）图标，`.adr` 文件在创建时用 NSWorkspace 写入自定义 Finder 图标 |
 | 2026-09-14 | 消除镜像启动时 Dock 先闪通用图标：macOS 上把 scrcpy 包进按图标缓存的 `.app` bundle（`electron/scrcpyApp.js`，二进制硬链接），使进程出现即带应用图标 |
 | 2026-09-14 | 图标观感对齐系统：Android 全出血方形图标经 `electron/iconImage.js` 合成到 1024 画布（约 10% 留白 + 圆角），避免比 macOS 其他图标大一圈；镜像窗口、桌面快捷方式共用该结果 |
+| 2026-09-16 | 新增自研镜像引擎（实验）：Tango 复用 `scrcpy-server`，WebCodecs 解码 + WebGL canvas 渲染，独立镜像窗口、自绘操作栏、输入控制、会话列表接入；现状与剩余待办见 [`NATIVE_MIRROR.md`](NATIVE_MIRROR.md) |
 
 ---
 
@@ -52,6 +53,7 @@
 | 应用列表缓存秒开 | `electron/adb.js:866` | `getCachedApps` 先渲染缓存 |
 | macOS 权限面板 | `electron/permissions.js`、`src/components/Settings.vue` | 本地网络/辅助功能/完全磁盘访问 |
 | Beta 构建与自签名 | `scripts/`、`electron-builder.beta.mjs` | 独立 appId/userData，证书签名 |
+| 自研镜像引擎（实验） | `electron/mirror/`、`src/mirror/`、`docs/NATIVE_MIRROR.md` | Tango + WebCodecs 自绘镜像窗口，输入控制与会话管理已接入；剩余待办见该文档 |
 
 ### 2.2 已知短板
 

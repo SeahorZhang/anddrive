@@ -125,5 +125,13 @@ export default defineConfig(({ command }) => {
     },
     define,
     clearScreen: false,
+    build: {
+      rollupOptions: {
+        input: {
+          index: fileURLToPath(new URL("./index.html", import.meta.url)),
+          mirror: fileURLToPath(new URL("./mirror.html", import.meta.url)),
+        },
+      },
+    },
   };
 });

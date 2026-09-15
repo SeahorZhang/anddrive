@@ -30,6 +30,23 @@ export const CHANNELS = {
   scrcpyStop: 'scrcpy:stop',
   scrcpyStopAll: 'scrcpy:stopAll',
 
+  /** 自研镜像客户端（electron/mirror/session.js）。 */
+  mirrorStart: 'mirror:start',
+  mirrorList: 'mirror:list',
+  mirrorStop: 'mirror:stop',
+  mirrorStopAll: 'mirror:stopAll',
+  mirrorFocus: 'mirror:focus',
+
+  /** 镜像窗口的初始化与视频包（主进程 → 渲染层）。 */
+  mirrorInit: 'mirror:init',
+  mirrorVideo: 'mirror:video',
+  mirrorError: 'mirror:error',
+  /** 镜像会话意外结束（主进程 → 主窗口）。 */
+  mirrorExit: 'mirror:exit',
+
+  /** 镜像窗口的输入控制（渲染层 → 主进程，fire-and-forget）。 */
+  mirrorControl: 'mirror:control',
+
   /** macOS 系统权限（electron/permissions.js）。 */
   permissionsStatus: 'permissions:getStatus',
   permissionsRequest: 'permissions:request',

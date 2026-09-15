@@ -34,6 +34,17 @@ pnpm dev
 
 配对二维码需要设备开启“无线调试 → 使用二维码配对设备”。如果设备已经配对，可直接启动应用并等待自动发现。
 
+### 自研镜像引擎（实验）
+
+除 scrcpy 原生窗口外，项目内还有一个实验性的自研客户端：复用随包的 `scrcpy-server`，用 Tango（`@yume-chan`）建立连接与读取视频流，视频包经 IPC 送到每个会话独立的镜像窗口，由 WebCodecs 解码、canvas 渲染，右侧操作栏由应用自绘。在「启动镜像」对话框勾选「使用原生渲染引擎（实验）」开启。
+
+- 仅 macOS（Apple Silicon），解码依赖 Chromium WebCodecs；H.264 / H.265 可用，AV1 会自动回落到 H.264。
+- 服务端参数由 `electron/mirror/options.js` 映射；窗口置顶 / 全屏 / 息屏由 Electron 与会话处理。
+- 支持触控 / 滚轮 / 键盘输入，右侧操作栏提供返回、主屏、最近任务、通知栏、旋转、音量、电源。
+- 暂不支持复制粘贴与中文输入法注入（`Cmd` 组合键保留给系统与应用）。
+- 无界面协议调试：`pnpm mirror:spike <serial> [h264|h265] [raw-out] [秒数]`，可把裸码流写文件后用 `ffprobe` 检查。
+- 现状与剩余待办见 [`docs/NATIVE_MIRROR.md`](docs/NATIVE_MIRROR.md)。
+
 ## 检查、测试与构建
 
 ```sh

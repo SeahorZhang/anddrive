@@ -1,14 +1,44 @@
 <script setup>
 import { Icon } from '@iconify/vue'
 import BaseButton from './BaseButton.vue'
-import { focusScrcpyApi, stopScrcpyApi, stopAllScrcpyApi } from '@/api'
+import {
+  focusScrcpyApi,
+  stopScrcpyApi,
+  stopAllScrcpyApi,
+  focusMirrorApi,
+  stopMirrorApi,
+  stopAllMirrorApi,
+} from '@/api'
 import { notify, notifyError } from '@/composables/useNotifications'
-import { scrcpySessions, refreshScrcpySessions } from '@/composables/useScrcpySessions'
+import { scrcpySessions, mirrorSessions, refreshScrcpySessions } from '@/composables/useScrcpySessions'
 
 const busyId = ref('')
 const busyAll = ref(false)
 
+const total = computed(() => scrcpySessions.value.length + mirrorSessions.value.length)
+
 async function focusSession(session) {
+  try {
+    await focusMirrorApi(session.id)
+  } catch (error) {
+    notifyError(error, { title: '聚焦镜像窗口失败' })
+  }
+}
+
+async function closeSession(session) {
+  busyId.value = session.id
+  try {
+    await stopMirrorApi(session.id)
+    await refreshScrcpySessions()
+    notify.success(`已关闭 ${session.label} 镜像`)
+  } catch (error) {
+    notifyError(error, { title: '关闭镜像窗口失败' })
+  } finally {
+    busyId.value = ''
+  }
+}
+
+async function focusScrcpySession(session) {
   try {
     await focusScrcpyApi(session.id)
   } catch (error) {
@@ -16,7 +46,7 @@ async function focusSession(session) {
   }
 }
 
-async function closeSession(session) {
+async function closeScrcpySession(session) {
   busyId.value = session.id
   try {
     await stopScrcpyApi(session.id)
@@ -32,7 +62,7 @@ async function closeSession(session) {
 async function closeAll() {
   busyAll.value = true
   try {
-    await stopAllScrcpyApi()
+    await Promise.all([stopAllScrcpyApi(), stopAllMirrorApi()])
     await refreshScrcpySessions()
     notify.success('已关闭全部镜像窗口')
   } catch (error) {
@@ -53,10 +83,10 @@ function elapsed(startedAt) {
 </script>
 
 <template>
-  <PopoverRoot v-if="scrcpySessions.length">
+  <PopoverRoot v-if="total">
     <PopoverTrigger as-child>
       <BaseButton icon="lucide:monitor-play" :title="'运行中的镜像窗口'">
-        <span class="ml-0.5 text-[11px] tabular-nums">{{ scrcpySessions.length }}</span>
+        <span class="ml-0.5 text-[11px] tabular-nums">{{ total }}</span>
       </BaseButton>
     </PopoverTrigger>
     <PopoverPortal>
@@ -65,7 +95,7 @@ function elapsed(startedAt) {
         <div class="flex items-center justify-between px-3.5 pt-2.5 pb-1.5">
           <span class="text-[12px] font-semibold text-[#1d1d1f]">
             运行中镜像
-            <span class="ml-1 text-[11px] font-normal text-black/40">{{ scrcpySessions.length }}</span>
+            <span class="ml-1 text-[11px] font-normal text-black/40">{{ total }}</span>
           </span>
           <button class="cursor-pointer text-[11px] text-[#007aff] outline-none hover:underline"
             :disabled="busyAll || !!busyId" @click="closeAll">
@@ -73,6 +103,36 @@ function elapsed(startedAt) {
           </button>
         </div>
         <div class="max-h-64 overflow-y-auto px-1.5 pb-1.5">
+          <div v-for="session in mirrorSessions" :key="session.id"
+            class="group flex items-center gap-2 rounded-[10px] px-2 py-1.5 hover:bg-black/[0.04]">
+            <div
+              class="flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-gradient-to-b from-[#30d158] to-[#248a3d] text-white">
+              <Icon icon="lucide:app-window" :width="14" :height="14" />
+            </div>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-1.5">
+                <span class="truncate text-[12px] text-black/75">{{ session.label }}</span>
+                <span class="shrink-0 rounded-full bg-black/[0.06] px-1.5 py-0.5 text-[10px] leading-none text-black/45">
+                  {{ session.codecName }} · 原生
+                </span>
+              </div>
+              <div class="truncate text-[10px] text-black/40">
+                {{ session.packageName }} · {{ elapsed(session.startedAt) }}
+              </div>
+            </div>
+            <button title="聚焦窗口"
+              class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-black/40 outline-none hover:bg-black/[0.06] hover:text-black/70"
+              @click="focusSession(session)">
+              <Icon icon="lucide:app-window" :width="13" :height="13" />
+            </button>
+            <button title="关闭窗口" :disabled="busyId === session.id"
+              class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-black/40 outline-none hover:bg-[#ff3b30]/10 hover:text-[#ff3b30] disabled:opacity-40"
+              @click="closeSession(session)">
+              <Icon v-if="busyId !== session.id" icon="lucide:x" :width="13" :height="13" />
+              <span v-else class="size-3 animate-spin rounded-full border-[1.5px] border-black/20 border-t-black/50" />
+            </button>
+          </div>
+
           <div v-for="session in scrcpySessions" :key="session.id"
             class="group flex items-center gap-2 rounded-[10px] px-2 py-1.5 hover:bg-black/[0.04]">
             <div
@@ -87,12 +147,12 @@ function elapsed(startedAt) {
             </div>
             <button title="聚焦窗口"
               class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-black/40 outline-none hover:bg-black/[0.06] hover:text-black/70"
-              @click="focusSession(session)">
+              @click="focusScrcpySession(session)">
               <Icon icon="lucide:app-window" :width="13" :height="13" />
             </button>
             <button title="关闭窗口" :disabled="busyId === session.id"
               class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-black/40 outline-none hover:bg-[#ff3b30]/10 hover:text-[#ff3b30] disabled:opacity-40"
-              @click="closeSession(session)">
+              @click="closeScrcpySession(session)">
               <Icon v-if="busyId !== session.id" icon="lucide:x" :width="13" :height="13" />
               <span v-else class="size-3 animate-spin rounded-full border-[1.5px] border-black/20 border-t-black/50" />
             </button>

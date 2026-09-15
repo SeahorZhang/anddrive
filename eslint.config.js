@@ -47,7 +47,7 @@ export default defineConfig([
       'electron/**/*.{js,mjs}',
       'shared/**/*.js',
       'tests/**/*.js',
-      'scripts/**/*.js',
+      'scripts/**/*.{js,mjs}',
     ],
     languageOptions: {
       globals: {

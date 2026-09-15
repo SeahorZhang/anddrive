@@ -10,6 +10,7 @@ import {
   getDeviceStateApi,
   reconnectApi,
   onMirrorResultApi,
+  onMirrorExitApi,
 } from "@/api";
 import { readableError } from "@/utils/errors";
 import { notify, notifyError } from "@/composables/useNotifications";
@@ -46,6 +47,8 @@ let lostDevice = null;
 let autoAdopt = true;
 /** 快捷方式唤起投屏结果的取消订阅函数 */
 let disposeMirrorResult = null;
+/** 原生镜像意外结束的取消订阅函数 */
+let disposeMirrorExit = null;
 
 // ---------------------------------------------------------------------------
 // 连接健康检查
@@ -242,11 +245,16 @@ onMounted(() => {
       notify.error(result.message || "启动投屏失败", { title: `启动 ${result.label} 失败` });
     }
   });
+  disposeMirrorExit = onMirrorExitApi((result) => {
+    notify.error(result.message || "镜像已结束", { title: `${result.label} 镜像已结束` });
+    refreshScrcpySessions();
+  });
 });
 
 onUnmounted(() => {
   stopScrcpySessionPolling();
   disposeMirrorResult?.();
+  disposeMirrorExit?.();
 });
 
 function connectDevice(target) {

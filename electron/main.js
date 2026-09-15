@@ -2,7 +2,7 @@
 import { app, BrowserWindow } from "electron";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { stopScrcpy, launchMirror } from "./adb.js";
+import { stopScrcpy, launchMirror, runDeviceTeardown } from "./adb.js";
 import {
   MIRROR_SCHEME,
   parseMirrorUrl,
@@ -13,6 +13,7 @@ import { readShortcutFile, ensureFileAssociation } from "./shortcut.js";
 import { loadScrcpyConfig } from "./scrcpyConfig.js";
 import "./permissions.js";
 import "./favorites.js";
+import "./mirror/session.js";
 import { CHANNELS } from "./ipcContract.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -155,7 +156,22 @@ app.whenReady().then(async () => {
   if (startupMirrorArg) enqueueMirrorArg(startupMirrorArg);
   drainMirrorArgs();
 });
-app.on("before-quit", () => stopScrcpy());
+// 退出前先杀掉镜像进程；等待异步清理（最多 TEARDOWN_TIMEOUT_MS）再真正退出，
+// 防止清理钩子卡住导致无法退出。
+let teardownDone = false;
+const TEARDOWN_TIMEOUT_MS = 3000;
+app.on("before-quit", (event) => {
+  if (teardownDone) return;
+  event.preventDefault();
+  stopScrcpy();
+  void Promise.race([
+    runDeviceTeardown(),
+    new Promise((resolve) => setTimeout(resolve, TEARDOWN_TIMEOUT_MS)),
+  ]).finally(() => {
+    teardownDone = true;
+    app.quit();
+  });
+});
 app.on("window-all-closed", () => {
   win = null;
 });

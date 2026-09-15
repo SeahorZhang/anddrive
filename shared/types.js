@@ -55,4 +55,16 @@
  * @property {number} startedAt
  */
 
+/**
+ * 自研客户端镜像会话快照（无独立窗口 pid，窗口由主进程持有）。
+ * @typedef {object} MirrorSession
+ * @property {string} id
+ * @property {string} serial
+ * @property {string} packageName
+ * @property {string} label
+ * @property {number} startedAt
+ * @property {number} codec
+ * @property {string} codecName
+ */
+
 export {}
