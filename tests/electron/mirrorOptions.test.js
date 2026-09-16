@@ -37,11 +37,12 @@ describe('mapNewDisplay', () => {
 })
 
 describe('buildMirrorOptions', () => {
-  it('maps defaults to a video-only, control-enabled session', () => {
+  it('maps defaults to a video+audio, control-enabled session', () => {
     const options = buildMirrorOptions(undefined)
     expect(options).toMatchObject({
       video: true,
-      audio: false,
+      audio: true,
+      audioCodec: 'opus',
       control: true,
       sendStreamMeta: true,
       videoCodec: 'h265',
@@ -67,8 +68,9 @@ describe('buildMirrorOptions', () => {
     expect(buildMirrorOptions({ newDisplay: 'device' }).newDisplay).toBe('')
   })
 
-  it('never lets audio through', () => {
-    expect(buildMirrorOptions({ audio: true }).audio).toBe(false)
+  it('always requests opus audio for scrcpy 4.0', () => {
+    expect(buildMirrorOptions({ audio: false }).audio).toBe(true)
+    expect(buildMirrorOptions(undefined).audioCodec).toBe('opus')
   })
 
   it('overrides the codec when the native engine requests it', () => {

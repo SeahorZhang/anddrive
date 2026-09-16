@@ -2,11 +2,11 @@
 import { Icon } from '@iconify/vue'
 import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { useMirrorInput } from './useMirrorInput.js'
+import { bootstrap, dispose as disposeSession } from './session.js'
 
-// 镜像窗口：视频包从主进程经 IPC 送来，用 WebCodecs 解码后画在 canvas 上。
+// 镜像窗口（渲染层直连）：adb/scrcpy 全在本进程内由 Tango 官方库建立，
+// 视频包直接写 WebCodecs 解码器、音频包直接播放，主进程不参与帧路径。
 // 渲染走 Tango 的 AutoCanvasRenderer：优先 WebGL（GPU），GPU 不可用时回落 2D。
-// canvas 按显示尺寸出图（canvasSize: display），窗口比视频小时可省填充开销。
-// 指针 / 滚轮 / 键盘与右侧操作栏都通过 useMirrorInput 发送控制消息。
 
 const webglSupported = WebGLVideoFrameRenderer.isSupported
 console.info(`[mirror] WebGL 渲染可用：${webglSupported}`)
@@ -29,6 +29,13 @@ const hud = reactive({
   rendered: 0,
   skipRender: 0,
   gl: webglSupported ? 'Y' : 'N',
+  audioPackets: 0,
+  audioPlayed: 0,
+  audioQueue: 0,
+  audioDecoded: 0,
+  audioState: '-',
+  audioTime: 0,
+  audioIssue: '-',
 })
 
 const renderer = shallowRef(null)
@@ -38,8 +45,6 @@ let disposeRendererType = null
 let disposeSizeChanged = null
 let hostResize = null
 let statsTimer = null
-
-const sessionId = computed(() => meta.value?.id || '')
 
 /** 操作栏按钮 → 控制动作（见 electron/mirror/control.js）。 */
 const actions = [
@@ -62,7 +67,7 @@ function getVideoSize() {
   return { width: canvas.width, height: canvas.height }
 }
 
-const { runAction } = useMirrorInput({ target: canvasHost, sessionId, getVideoSize })
+const { runAction } = useMirrorInput({ target: canvasHost, getVideoSize })
 
 const title = computed(() => meta.value?.label || meta.value?.packageName || '镜像')
 
@@ -105,6 +110,7 @@ function startDecoder(info) {
     })
     decoder.value = videoDecoder
     writer = videoDecoder.writable.getWriter()
+    flushPending()
     disposeSizeChanged = videoDecoder.sizeChanged(() => syncCanvasBox())
     attachCanvas()
     status.value = ''
@@ -130,11 +136,15 @@ function startDecoder(info) {
 }
 
 function onPacket(packet) {
-  if (!writer) return
   if (packet.type === 'configuration') hud.configs += 1
   else if (packet.type === 'data') {
     hud.packets += 1
     hud.bytes += packet.data?.byteLength || 0
+  }
+  if (!writer) {
+    // 解码器在 meta 到达时创建；期间到达的包先缓冲。
+    pendingPackets.push(packet)
+    return
   }
   const mapped =
     packet.type === 'session'
@@ -147,7 +157,7 @@ function onPacket(packet) {
       : {
           type: packet.type,
           keyframe: packet.keyframe,
-          pts: packet.pts ?? undefined,
+          pts: packet.pts != null ? Number(packet.pts) : undefined,
           data: packet.data instanceof Uint8Array ? packet.data : new Uint8Array(packet.data),
         }
   writer.write(mapped).catch((error) => {
@@ -157,42 +167,73 @@ function onPacket(packet) {
   })
 }
 
-function onWindowMessage(event) {
-  if (event.source !== window) return
-  const message = event.data
-  if (!message || typeof message !== 'object') return
-  if (message.__anddriveMirror === 'init') {
-    meta.value = message.payload
-    startDecoder(message.payload)
-  } else if (message.__anddriveMirror === 'packet') {
-    onPacket(message.payload)
-  }
+let pendingPackets = []
+
+/** dev 场景下看音频包分布；正式版只有计数。 */
+const debugAudio = import.meta.env.DEV
+  ? (packet) => console.info('[mirror] audio', packet.type, packet.data?.byteLength ?? '')
+  : null
+
+function flushPending() {
+  if (!writer || !pendingPackets.length) return
+  const pending = pendingPackets
+  pendingPackets = []
+  for (const packet of pending) onPacket(packet)
 }
 
-let disposeError = null
+/**
+ * 直连会话接线：meta 到达时建解码器；包到达保持原序喂入。
+ */
+async function booted() {
+  await bootstrap({
+    video: onPacket,
+    audio: (packet) => {
+      hud.audioPackets += 1
+      debugAudio(packet)
+    },
+    audioStats: ({ played, queue, decoded, time, state }) => {
+      hud.audioPlayed = played
+      hud.audioQueue = queue
+      hud.audioDecoded = decoded
+      hud.audioState = state
+      hud.audioTime = time ?? 0
+    },
+    hooks: {
+      onMeta: (info) => {
+        meta.value = info
+        startDecoder(info)
+      },
+      onAudioError: (message) => {
+        hud.audioIssue = message
+        console.warn('[mirror] audio:', message)
+      },
+    },
+  }).then(() => {
+    status.value = ''
+  }).catch((error) => {
+    status.value = `镜像连接失败：${error?.message || error}`
+  })
+}
 
 onMounted(() => {
-  window.addEventListener('message', onWindowMessage)
   hostResize = new ResizeObserver(() => syncCanvasBox())
   if (canvasHost.value) hostResize.observe(canvasHost.value)
-  disposeError = window.electronAPI?.mirror?.onError?.(({ message }) => {
-    status.value = message || '镜像已中断'
-  })
+  void booted()
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('message', onWindowMessage)
   if (statsTimer) clearInterval(statsTimer)
   hostResize?.disconnect()
   disposeSizeChanged?.()
   disposeRendererType?.()
-  disposeError?.()
   try {
     writer?.releaseLock()
   } catch {
     // 忽略释放失败
   }
+  writer = null
   decoder.value?.dispose()
+  void disposeSession()
 })
 </script>
 
@@ -218,6 +259,8 @@ onBeforeUnmount(() => {
           class="pointer-events-none absolute bottom-2 left-2 rounded bg-black/60 px-2 py-1 font-mono text-[10px] leading-tight text-white/60">
           gl={{ hud.gl }} {{ hud.renderer }}/{{ hud.type }} shown={{ hud.frames }} draw={{ hud.rendered }} skipDraw={{ hud.skipRender }}
           q={{ hud.queue }} skipDec={{ hud.skipped }} reset={{ hud.resets }} packets={{ hud.packets }} bytes={{ hud.bytes }}
+          audio={{ hud.audioPackets }} ap={{ hud.audioPlayed }} asq={{ hud.audioQueue }} ad={{ hud.audioDecoded }}
+          atime={{ Math.round(hud.audioTime * 10) / 10 }} astate={{ hud.audioState }} {{ hud.audioIssue }}
         </div>
       </div>
 

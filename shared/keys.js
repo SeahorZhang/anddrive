@@ -1,25 +1,28 @@
 // 主进程（输入控制映射）与渲染层（DOM 键盘映射）共用的 Android 键值常量。
+// 键值与 metaState 位来自 Tango 官方常量（@yume-chan/scrcpy 的 android 模块），
+// 这里只维护应用层语义命名与 DOM 键映射。
 
-/** 常用 android.view.KeyEvent 键值。 */
+import { AndroidKeyCode, AndroidKeyEventMeta } from "@yume-chan/scrcpy";
+
+/** 常用 android.view.KeyEvent 键值（Tango `AndroidKeyCode` 的应用语义别名）。 */
 export const KEY_CODES = {
-  home: 3,
-  back: 4,
-  arrowUp: 19,
-  arrowDown: 20,
-  arrowLeft: 21,
-  arrowRight: 22,
-  volumeUp: 24,
-  volumeDown: 25,
-  power: 26,
-  tab: 61,
-  space: 62,
-  enter: 66,
-  backspace: 67,
-  pageUp: 92,
-  pageDown: 93,
-  escape: 111,
-  del: 112,
-  appSwitch: 187,
+  home: AndroidKeyCode.AndroidHome,
+  back: AndroidKeyCode.AndroidBack,
+  arrowUp: AndroidKeyCode.ArrowUp,
+  arrowDown: AndroidKeyCode.ArrowDown,
+  arrowLeft: AndroidKeyCode.ArrowLeft,
+  arrowRight: AndroidKeyCode.ArrowRight,
+  volumeUp: AndroidKeyCode.VolumeUp,
+  volumeDown: AndroidKeyCode.VolumeDown,
+  power: AndroidKeyCode.Power,
+  tab: AndroidKeyCode.Tab,
+  space: AndroidKeyCode.Space,
+  enter: AndroidKeyCode.Enter,
+  backspace: AndroidKeyCode.Backspace,
+  pageUp: AndroidKeyCode.PageUp,
+  pageDown: AndroidKeyCode.PageDown,
+  del: AndroidKeyCode.Delete,
+  appSwitch: AndroidKeyCode.AndroidAppSwitch,
 };
 
 /** DOM `KeyboardEvent.key` → Android 键值；未列出的可打印字符走文本注入。 */
@@ -28,6 +31,7 @@ export const KEYBOARD_KEYS = {
   Backspace: KEY_CODES.backspace,
   Tab: KEY_CODES.tab,
   ' ': KEY_CODES.space,
+  // Esc 映射为返回键（桌面习惯）。
   Escape: KEY_CODES.back,
   Delete: KEY_CODES.del,
   ArrowUp: KEY_CODES.arrowUp,
@@ -38,5 +42,5 @@ export const KEYBOARD_KEYS = {
   PageDown: KEY_CODES.pageDown,
 };
 
-/** android.view.KeyEvent metaState 位。 */
-export const KEY_META = { shift: 0x01, alt: 0x02, ctrl: 0x1000, meta: 0x10000 };
+/** android.view.KeyEvent metaState 位（Tango `AndroidKeyEventMeta` 官方值）。 */
+export const KEY_META = AndroidKeyEventMeta;

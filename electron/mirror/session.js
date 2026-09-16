@@ -1,17 +1,17 @@
 import { BrowserWindow, ipcMain } from "electron";
 import path from "node:path";
 import { CHANNELS } from "../ipcContract.js";
-import { onDeviceTeardown } from "../adb.js";
-import { acquireDeviceAdb, pushScrcpyServer, releaseDeviceAdb, startScrcpyClient, codecName } from "./client.js";
+import { ensureServer, onDeviceTeardown, scrcpyServerPath } from "../adb.js";
 import { resolveRuntimePrefs } from "./options.js";
-import { applyControl } from "./control.js";
 
 // ---------------------------------------------------------------------------
-// 自研镜像会话（mirror）
+// 自研镜像会话（mirror，渲染层直连形态）
 //
-// 每个会话一个独立 Electron 窗口：视频包经 IPC 送到渲染层，由 WebCodecs
-// 解码并画在 canvas 上；右侧操作栏是窗口内自绘 UI。
-// 会话只存在于主进程，渲染层通过 IPC 拿快照。
+// 主进程只负责：创建镜像窗口（nodeIntegration 直连）、提供启动参数（渲染层
+// invoke 拉取）、维护会话记录（渲染层 ready/exit 时上报）以及断开设备 /
+// 退出时的销毁。
+// adb 连接（官方 @yume-chan/adb-server-node-tcp）、scrcpy 会话、解码与
+// 输入控制在渲染层内完成：帧数据不再经过主进程的任何一层。
 // ---------------------------------------------------------------------------
 
 /** @type {Map<string, MirrorSession>} */
@@ -25,37 +25,21 @@ let sessionSeq = 0;
  * @property {string} packageName
  * @property {string} label
  * @property {number} startedAt
- * @property {number} codec
+ * @property {number | null} codec
+ * @property {string | null} codecName
+ * @property {boolean} hasAudio
  * @property {import("electron").BrowserWindow | null} win
- * @property {{ close(): Promise<void> } | null} client
- * @property {boolean} stopped
- * @property {boolean} begin
+ * @property {Record<string, unknown> | null} pendingInit
  */
-
-function preloadPath() {
-  return path.join(process.env.APP_ROOT, "dist-electron/preload.mjs");
-}
-
-/** 页面就绪后发一次初始化信息，并开始转发视频流（保证只执行一次）。 */
-function beginVideo(session, video) {
-  if (session.begin) return;
-  session.begin = true;
-  session.win?.webContents.send(CHANNELS.mirrorInit, {
-    id: session.id,
-    label: session.label,
-    packageName: session.packageName,
-    codec: session.codec,
-    codecName: codecName(session.codec),
-    width: video.width,
-    height: video.height,
-  });
-  void pumpVideo(session, video.stream);
-}
 
 function loadMirrorPage(win) {
   const devServer = process.env.VITE_DEV_SERVER_URL;
   if (devServer) return win.loadURL(`${devServer}/mirror.html`);
   return win.loadFile(path.join(process.env.APP_ROOT, "dist", "mirror.html"));
+}
+
+function preloadPath() {
+  return path.join(process.env.APP_ROOT, "dist-electron/preload.mjs");
 }
 
 function createMirrorWindow(session, prefs) {
@@ -70,59 +54,26 @@ function createMirrorWindow(session, prefs) {
     show: false,
     alwaysOnTop: prefs.alwaysOnTop,
     fullscreen: prefs.fullscreen,
-    webPreferences: { preload: preloadPath(), backgroundThrottling: false },
+    // 直连形态：Video/Control/audio 在渲染层直连 adb，需要 node 的 ipc 与
+    // 同源 socket；自定义页面无第三方内容，安全边界等同于主进程代码。
+    webPreferences: {
+      preload: preloadPath(),
+      nodeIntegration: true,
+      contextIsolation: false,
+      sandbox: false,
+      autoplayPolicy: "no-user-gesture-required",
+      backgroundThrottling: false,
+    },
   });
   win.once("ready-to-show", () => win.show());
   void loadMirrorPage(win);
+  win.on("closed", () => void stopMirrorSession(session.id));
+
   // DevTools 对视频窗口性能影响很大，默认不自动打开，需要时用环境变量开启。
   if (process.env.ANDRIVE_MIRROR_DEVTOOLS === "1") {
     win.webContents.openDevTools({ mode: "detach" });
   }
   return win;
-}
-
-/**
- * 把 Tango 媒体包转成可结构化克隆的普通对象。
- * `data` 直接传 Uint8Array：结构化克隆按 byteOffset/byteLength 复制视图范围，
- * 不要再自己 slice（`Buffer.slice()` 会共享内存池，曾导致 Annex B 数据错位）。
- */
-function encodePacket(packet) {
-  if (packet.type === "configuration") {
-    return { type: "configuration", data: packet.data };
-  }
-  if (packet.type === "session") {
-    return {
-      type: "session",
-      isClientResize: packet.isClientResize === true,
-      width: packet.width,
-      height: packet.height,
-    };
-  }
-  return {
-    type: "data",
-    keyframe: packet.keyframe === true,
-    pts: packet.pts,
-    data: packet.data,
-  };
-}
-
-/** 读取视频流并转发到渲染层；会话结束/窗口关闭时退出。 */
-async function pumpVideo(session, stream) {
-  const reader = stream.getReader();
-  try {
-    while (!session.stopped) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const contents = session.win?.webContents;
-      if (!contents || contents.isDestroyed()) break;
-      contents.send(CHANNELS.mirrorVideo, encodePacket(value));
-    }
-  } catch (error) {
-    if (session.stopped) return;
-    const message = error?.message || "视频流已中断";
-    console.warn(`[mirror] ${session.id} 视频流异常：`, message);
-    session.win?.webContents.send(CHANNELS.mirrorError, { id: session.id, message });
-  }
 }
 
 function snapshot(session) {
@@ -132,27 +83,28 @@ function snapshot(session) {
     packageName: session.packageName,
     label: session.label,
     startedAt: session.startedAt,
-    codec: session.codec,
-    codecName: codecName(session.codec),
+    codec: session.codec ?? 0,
+    codecName: session.codecName ?? "unknown",
+    hasAudio: session.hasAudio ?? false,
   };
 }
 
 /** 会话被用户 / 断开流程之外的意外退出时，通知主窗口。 */
-function notifyExit(session) {
-  const payload = {
-    id: session.id,
-    label: session.label,
-    packageName: session.packageName,
-    message: "scrcpy 服务意外退出，镜像已结束",
-  };
+function notifyExit(payload) {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (win === session.win || win.isDestroyed()) continue;
-    win.webContents.send(CHANNELS.mirrorExit, payload);
+    if (win.isDestroyed()) continue;
+    if (win === payload.win) continue;
+    win.webContents.send(CHANNELS.mirrorExit, {
+      id: payload.id,
+      label: payload.label,
+      packageName: payload.packageName,
+      message: payload.message || "scrcpy 服务意外退出，镜像已结束",
+    });
   }
 }
 
 /**
- * 启动一次原生镜像会话。
+ * 启动一个原生镜像窗口；连接/解码由渲染层完成，主进程轻手笔画。
  * @param {{ serial: string, packageName: string, label?: string, config?: unknown }} request
  */
 export async function startMirrorSession(request) {
@@ -161,67 +113,54 @@ export async function startMirrorSession(request) {
   if (!serial) throw new Error("设备序列号无效");
   if (!packageName) throw new Error("应用包名无效");
   const label = typeof request?.label === "string" && request.label.trim() ? request.label.trim() : packageName;
+  await ensureServer();
+  const serverPath = scrcpyServerPath();
   const prefs = resolveRuntimePrefs(request?.config);
 
-  const adb = await acquireDeviceAdb(serial);
-  let client = null;
+  /** @type {MirrorSession} */
+  const session = {
+    id: `mirror-${++sessionSeq}`,
+    serial,
+    packageName,
+    label,
+    startedAt: Date.now(),
+    codec: null,
+    codecName: null,
+    hasAudio: false,
+    win: null,
+    pendingInit: null,
+  };
+  sessions.set(session.id, session);
+
   try {
-    await pushScrcpyServer(adb);
-    client = await startScrcpyClient({ adb, config: request?.config });
-    const video = await client.videoStream;
-    if (!video) throw new Error("scrcpy 未返回视频流");
-
-    /** @type {MirrorSession} */
-    const session = {
-      id: `mirror-${++sessionSeq}`,
-      serial,
-      packageName,
-      label,
-      startedAt: Date.now(),
-      codec: video.metadata.codec,
-      win: null,
-      client,
-      stopped: false,
-      begin: false,
-    };
-    sessions.set(session.id, session);
     session.win = createMirrorWindow(session, prefs);
-
-    session.win.webContents.on("did-finish-load", () => beginVideo(session, video));
-    // 页面可能在 server 启动完成前就已加载完，此时事件已经错过，直接补发。
-    if (!session.win.webContents.isLoading()) beginVideo(session, video);
-
-    session.win.on("closed", () => void stopMirrorSession(session.id));
-    client.exited
-      .then(() => {
-        if (!session.stopped) notifyExit(session);
-        void stopMirrorSession(session.id);
-      })
-      .catch(() => {});
-
-    // 启动目标应用（控制通道），并同步息屏等运行时偏好。
-    const controller = client.controller;
-    await controller?.startApp(packageName).catch(() => {});
-    if (prefs.turnScreenOff) await controller?.setDisplayPower(false).catch(() => {});
-
-    console.log(`[mirror] ${session.id} 已启动 ${label}（${codecName(session.codec)}）`);
-    return snapshot(session);
   } catch (error) {
-    await client?.close().catch(() => {});
-    releaseDeviceAdb(serial);
+    sessions.delete(session.id);
     throw error;
   }
+
+  // 页面主动 invoke 拉取启动参数（避免 did-finish-load 时序竞态）。
+  session.pendingInit = {
+    id: session.id,
+    serial,
+    label,
+    packageName,
+    serverPath,
+    config: request?.config ?? null,
+  };
+
+  return { id: session.id, serial, packageName, label, startedAt: session.startedAt };
 }
 
 /** @param {string} id */
 export async function stopMirrorSession(id) {
   const session = sessions.get(id);
-  if (!session || session.stopped) return false;
-  session.stopped = true;
+  if (!session) return false;
   sessions.delete(id);
-  if (session.win && !session.win.isDestroyed()) session.win.close();
-  await session.client?.close().catch(() => {});
-  releaseDeviceAdb(session.serial);
+  if (session.win && !session.win.isDestroyed()) {
+    // 渲染层在 beforeunload 里停掉 scrcpy 会话；窗口关闭兜底。
+    session.win.close();
+  }
   return true;
 }
 
@@ -249,26 +188,38 @@ export function focusMirrorSession(id) {
 // ---------------------------------------------------------------------------
 
 ipcMain.handle(CHANNELS.mirrorStart, (_, options) => startMirrorSession(options));
+ipcMain.handle(CHANNELS.mirrorInitGet, (event) => {
+  for (const session of sessions.values()) {
+    if (session.win === BrowserWindow.fromWebContents(event.sender)) return session.pendingInit;
+  }
+  return null;
+});
 ipcMain.handle(CHANNELS.mirrorList, () => listMirrorSessions());
 ipcMain.handle(CHANNELS.mirrorStop, (_, id) => stopMirrorSession(id));
 ipcMain.handle(CHANNELS.mirrorStopAll, () => stopAllMirrorSessions());
 ipcMain.handle(CHANNELS.mirrorFocus, (_, id) => focusMirrorSession(id));
 
-// 输入控制：fire-and-forget，避免高频触控事件走 invoke 往返。
-ipcMain.on(CHANNELS.mirrorControl, (_event, message) => {
-  const session = sessions.get(message?.id);
-  if (!session || session.stopped) return;
-  const controller = session.client?.controller;
-  if (!controller) return;
-  void applyControl(controller, message).catch((error) => {
-    console.warn(`[mirror] 控制消息失败（${message?.kind}）：`, error?.message || error);
-  });
+/**
+ * 渲染层状态上报：ready（回填快照字段）、exit（意外退出 → 通知主窗口）。
+ * @param {Record<string, unknown>} payload
+ */
+ipcMain.on(CHANNELS.mirrorState, (_event, payload) => {
+  const session = payload?.id ? sessions.get(String(payload.id)) : null;
+  if (!session) return;
+  if (payload.kind === "ready") {
+    session.codec = Number(payload.codec) || null;
+    session.codecName = typeof payload.codecName === "string" ? payload.codecName : null;
+    session.hasAudio = payload.hasAudio === true;
+  } else if (payload.kind === "exit") {
+    notifyExit({ ...payload, label: session.label, packageName: session.packageName, win: session.win });
+    sessions.delete(session.id);
+  }
 });
 
-// 断开设备或退出时，结束对应设备的自研镜像会话。
+// 断开设备或退出时，结束对应设备的自研镜像会话（直接关窗口）。
 onDeviceTeardown((serial) => {
   const ids = [...sessions.values()]
-    .filter((session) => !serial || session.serial === serial)
-    .map((session) => session.id);
+    .filter((s) => !serial || s.serial === serial)
+    .map((s) => s.id);
   return Promise.all(ids.map((id) => stopMirrorSession(id)));
 });

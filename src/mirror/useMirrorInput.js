@@ -1,18 +1,17 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import { KEYBOARD_KEYS, KEY_META } from '../../shared/keys.js'
+import { sendControl } from './session.js'
 
 /**
- * 镜像窗口输入：把指针 / 滚轮 / 键盘事件翻成控制消息发给主进程。
- * 坐标按 canvas 的 `object-fit: contain` 反算出视频像素坐标。
+ * 镜像窗口输入：把指针 / 滚轮 / 键盘事件翻成控制消息，直接写
+ * 本进程内的 control socket（直连形态，不经过主进程）。
  */
-export function useMirrorInput({ target, sessionId, getVideoSize }) {
+export function useMirrorInput({ target, getVideoSize }) {
   let pointerActive = false
   let activePointerId = null
 
   function send(message) {
-    const id = sessionId.value
-    if (!id) return
-    window.electronAPI?.mirror?.control?.({ id, ...message })
+    sendControl(message)
   }
 
   function clamp(value, min, max) {
@@ -80,10 +79,10 @@ export function useMirrorInput({ target, sessionId, getVideoSize }) {
 
   function metaState(event) {
     let state = 0
-    if (event.shiftKey) state |= KEY_META.shift
-    if (event.altKey) state |= KEY_META.alt
-    if (event.ctrlKey) state |= KEY_META.ctrl
-    if (event.metaKey) state |= KEY_META.meta
+    if (event.shiftKey) state |= KEY_META.Shift
+    if (event.altKey) state |= KEY_META.Alt
+    if (event.ctrlKey) state |= KEY_META.Ctrl
+    if (event.metaKey) state |= KEY_META.Meta
     return state
   }
 

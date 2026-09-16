@@ -19,7 +19,7 @@ import {
   pruneIconCache,
   sanitizeIcon,
 } from "./iconImage.js";
-import helperVersion from "../resources/helper-app.version.json";
+import helperVersion from "../resources/helper-app.version.json" with { type: "json" };
 
 // 图标校验在 ./iconImage.js，这里转发导出保持既有引用。
 export { sanitizeIcon };

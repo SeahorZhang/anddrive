@@ -1,10 +1,10 @@
-import { normalizeScrcpyConfig } from "../scrcpyConfig.js";
+import { normalizeScrcpyConfig } from "../../shared/scrcpyConfig.js";
 
 // ---------------------------------------------------------------------------
 // ScrcpyConfig → scrcpy-server 参数（自研客户端）
 //
 // 纯映射，不依赖 Electron / Tango：这里只产出 scrcpy 4.0 的选项对象，
-// 由 electron/mirror/client.js 包成 `AdbScrcpyOptions4_0` 交给 Tango。
+// 直连形态下由 src/mirror/connect.js 包成 `AdbScrcpyOptions4_0` 交给 Tango。
 // 字段名对应 @yume-chan/scrcpy 的 ScrcpyOptions4_0.Init。
 // ---------------------------------------------------------------------------
 
@@ -49,7 +49,9 @@ export function buildMirrorOptions(input, overrides = {}) {
   /** @type {Record<string, unknown>} */
   const options = {
     video: true,
-    audio: false,
+    // scrcpy 4.0 的音频仅支持 Opus（`ScrcpyAudioCodec.Opus`），WebCodecs 可解。
+    audio: true,
+    audioCodec: 'opus',
     control: true,
     sendStreamMeta: true,
     videoCodec: config.videoCodec,

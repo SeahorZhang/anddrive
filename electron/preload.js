@@ -3,17 +3,19 @@ import { CHANNELS } from "./ipcContract.js";
 
 const invoke = (channel, ...args) => ipcRenderer.invoke(channel, ...args);
 
-// 镜像窗口：主进程用普通 IPC 送初始信息与视频包。带 ArrayBuffer 的消息经
-// contextBridge 转发会走结构化克隆，这里直接在 preload 里转到页面主世界。
-function forwardToPage(channel, kind) {
-  ipcRenderer.on(channel, (_event, payload) => {
-    window.postMessage({ __anddriveMirror: kind, payload }, "*");
-  });
-}
-forwardToPage(CHANNELS.mirrorInit, "init");
-forwardToPage(CHANNELS.mirrorVideo, "packet");
 
-contextBridge.exposeInMainWorld("electronAPI", {
+// 直连形态的镜像窗口（contextIsolation 关闭）直接用 ipcRenderer 收发，
+// 只有隔离窗口才需要 contextBridge 暴露。
+const expose = (name, api) => {
+  if (process.contextIsolated) contextBridge.exposeInMainWorld(name, api);
+  else {
+    window[name] = api;
+    // 直连镜像窗口（非隔离）直接使用 ipcRenderer。
+    window.__anddriveIpc = ipcRenderer;
+  }
+};
+
+expose("electronAPI", {
   platform: process.platform,
   startScrcpy: (options) => invoke(CHANNELS.scrcpyStart, options),
   mirror: {
@@ -22,12 +24,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
     stop: (id) => invoke(CHANNELS.mirrorStop, id),
     stopAll: () => invoke(CHANNELS.mirrorStopAll),
     focus: (id) => invoke(CHANNELS.mirrorFocus, id),
-    control: (message) => ipcRenderer.send(CHANNELS.mirrorControl, message),
-    onError: (callback) => {
-      const listener = (_event, payload) => callback(payload);
-      ipcRenderer.on(CHANNELS.mirrorError, listener);
-      return () => ipcRenderer.removeListener(CHANNELS.mirrorError, listener);
-    },
     onExit: (callback) => {
       const listener = (_event, payload) => callback(payload);
       ipcRenderer.on(CHANNELS.mirrorExit, listener);

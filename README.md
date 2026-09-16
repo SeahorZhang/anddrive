@@ -36,7 +36,7 @@ pnpm dev
 
 ### 自研镜像引擎（实验）
 
-除 scrcpy 原生窗口外，项目内还有一个实验性的自研客户端：复用随包的 `scrcpy-server`，用 Tango（`@yume-chan`）建立连接与读取视频流，视频包经 IPC 送到每个会话独立的镜像窗口，由 WebCodecs 解码、canvas 渲染，右侧操作栏由应用自绘。在「启动镜像」对话框勾选「使用原生渲染引擎（实验）」开启。
+除 scrcpy 原生窗口外，项目内还有一个实验性的自研客户端：复用随包的 `scrcpy-server`，用 Tango（`@yume-chan`）建立连接与读取视频流，除了画面还转发声音：scrcpy-server 的 Opus 音频经 WebCodecs 解码后用 AudioContext 排程播放，设备侧音频不可用时自动降级为纯画面。整个客户端用 Tango（`@yume-chan`）官方库在镜像窗口内**直连** adb（`nodeIntegration`），帧数据不跨进程，右侧操作栏由应用自绘。在「启动镜像」对话框勾选「使用原生渲染引擎（实验）」开启；架构与约束详见 [`docs/NATIVE_MIRROR.md`](docs/NATIVE_MIRROR.md)。
 
 - 仅 macOS（Apple Silicon），解码依赖 Chromium WebCodecs；H.264 / H.265 可用，AV1 会自动回落到 H.264。
 - 服务端参数由 `electron/mirror/options.js` 映射；窗口置顶 / 全屏 / 息屏由 Electron 与会话处理。

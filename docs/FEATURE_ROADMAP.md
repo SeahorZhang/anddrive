@@ -30,6 +30,8 @@
 | 2026-09-14 | 消除镜像启动时 Dock 先闪通用图标：macOS 上把 scrcpy 包进按图标缓存的 `.app` bundle（`electron/scrcpyApp.js`，二进制硬链接），使进程出现即带应用图标 |
 | 2026-09-14 | 图标观感对齐系统：Android 全出血方形图标经 `electron/iconImage.js` 合成到 1024 画布（约 10% 留白 + 圆角），避免比 macOS 其他图标大一圈；镜像窗口、桌面快捷方式共用该结果 |
 | 2026-09-16 | 新增自研镜像引擎（实验）：Tango 复用 `scrcpy-server`，WebCodecs 解码 + WebGL canvas 渲染，独立镜像窗口、自绘操作栏、输入控制、会话列表接入；现状与剩余待办见 [`NATIVE_MIRROR.md`](NATIVE_MIRROR.md) |
+| 2026-09-16 | 自研镜像引擎转发声音：scrcpy 4.0 仅支持的 Opus 经 WebCodecs `AudioDecoder` 解码、AudioContext 排程播放（preskip 裁剪、落后丢帧），音频不可用自动降级纯画面 |
+| 2026-09-16 | 自研镜像引擎改为渲染层直连：镜像窗口 `nodeIntegration`，adb/scrcpy 全用 Tango 官方库（`@yume-chan/adb-server-node-tcp` + `adb-scrcpy`）在本进程建立，去掉主进程 per-packet 转发（曾临时用 ws 桥方案，后被官方 connector 取代） |
 
 ---
 

@@ -131,6 +131,20 @@ export default defineConfig(({ command }) => {
           index: fileURLToPath(new URL("./index.html", import.meta.url)),
           mirror: fileURLToPath(new URL("./mirror.html", import.meta.url)),
         },
+        external: ["electron"],
+        output: {
+          advancedChunks: {
+            groups: [
+              // 三方/共享模块独立 chunk，确保镜像页不会 import 主页入口
+              // chunk（否则主页 createApp 的顶层挂载在镜像页执行）。
+              { name: "vendor", test: /node_modules/ },
+              {
+                name: "mirror-support",
+                test: /electron\/(mirror|ipcContract)|shared\/(keys|scrcpyConfig)/,
+              },
+            ],
+          },
+        },
       },
     },
   };
