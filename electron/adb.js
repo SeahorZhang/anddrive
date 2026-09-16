@@ -11,21 +11,14 @@ import {
   normalizeScrcpyConfig,
   currentScrcpyConfig,
 } from "./scrcpyConfig.js";
-import { resolveScrcpyExecutable, pruneScrcpyAppBundles } from "./scrcpyApp.js";
-import {
-  composeMacosIconPng,
-  iconPngBuffer,
-  scrcpyIconDir,
-  pruneIconCache,
-  sanitizeIcon,
-} from "./iconImage.js";
+import { sanitizeIcon } from "./iconImage.js";
 import helperVersion from "../resources/helper-app.version.json" with { type: "json" };
-
-// 图标校验在 ./iconImage.js，这里转发导出保持既有引用。
-export { sanitizeIcon };
 
 // 归一化逻辑在 ./scrcpyConfig.js（主进程参数持久化），这里转发导出保持既有引用。
 export { DEFAULT_SCRCPY_CONFIG, normalizeScrcpyConfig };
+
+// 图标校验在 ./iconImage.js，应用列表缓存也用它，这里转发导出保持既有引用。
+export { sanitizeIcon };
 
 // ---------------------------------------------------------------------------
 // 资源路径
@@ -40,7 +33,6 @@ function resourcesBase() {
 
 export const adbPath = () => path.join(resourcesBase(), "adb", "mac", "adb");
 const helperApkPath = () => path.join(resourcesBase(), "helper-app.apk");
-const scrcpyPath = () => path.join(resourcesBase(), "scrcpy", "scrcpy");
 export const scrcpyServerPath = () => path.join(resourcesBase(), "scrcpy", "scrcpy-server");
 
 // ---------------------------------------------------------------------------
@@ -347,7 +339,7 @@ async function getConnectedDevice() {
  * @param {string} serial
  * @returns {Promise<"device" | "offline" | "unauthorized" | "absent">}
  */
-async function getDeviceState(serial) {
+export async function getDeviceState(serial) {
   if (typeof serial !== "string" || !serial) return "absent";
   await ensureServer();
   return parseAdbDevices(await adbExec("devices")).get(serial) || "absent";
@@ -378,7 +370,7 @@ async function resolveReconnectAddress(serial) {
  * @param {string} serial
  * @returns {Promise<{ online: boolean, address?: string, reason?: string }>}
  */
-async function reconnectDevice(serial) {
+export async function reconnectDevice(serial) {
   if (typeof serial !== "string" || !serial) return { online: false, reason: "no-serial" };
   if ((await getDeviceState(serial)) === "device") return { online: true, address: serial };
 
@@ -391,234 +383,6 @@ async function reconnectDevice(serial) {
     return { online: false, reason: result.stderr || result.stdout || "connect-failed" };
   }
   return { online: true, address };
-}
-
-// ---------------------------------------------------------------------------
-// scrcpy 镜像窗口
-// ---------------------------------------------------------------------------
-
-/**
- * 由领域参数构建 scrcpy 命令行（主进程内构造，渲染层不接触 CLI）。
- * @param {{ serial: string, packageName: string, label: string, config?: unknown }} request
- * @returns {string[]}
- */
-export function buildScrcpyArgs(request) {
-  const serial = assertSerial(request?.serial);
-  const packageName = normalizePackageName(request?.packageName);
-  const label =
-    typeof request?.label === "string" && request.label.trim()
-      ? request.label.trim().slice(0, 200)
-      : packageName;
-  const config = normalizeScrcpyConfig(request?.config);
-
-  const args = ["-s", serial];
-  if (config.newDisplay === "device") args.push("--new-display");
-  else if (config.newDisplay !== "off") args.push(`--new-display=${config.newDisplay}`);
-  args.push(`--start-app=${packageName}`);
-
-  if (config.screenMode === "keepActive") args.push("--keep-active");
-  else if (config.screenMode === "turnOff") args.push("--stay-awake", "--turn-screen-off");
-
-  args.push(`--video-codec=${config.videoCodec}`);
-  args.push("--max-fps", String(config.maxFps));
-  args.push("-b", config.bitRate);
-  if (!config.audio) args.push("--no-audio");
-  if (config.alwaysOnTop) args.push("--always-on-top");
-  if (config.fullscreen) args.push("--fullscreen");
-  args.push("--window-x=auto", "--window-y=auto", `--window-title=${label}`);
-  return args;
-}
-
-/** child process → ScrcpySession。会话仅存活于主进程，渲染层只拿快照。 */
-const scrcpyProcesses = new Map();
-let scrcpySessionSeq = 0;
-
-/** @param {string} serial */
-function stopScrcpyProcesses(serial) {
-  let stopped = 0;
-  for (const [child, info] of scrcpyProcesses) {
-    if (serial && info.serial !== serial) continue;
-    child.kill("SIGKILL");
-    scrcpyProcesses.delete(child);
-    stopped += 1;
-  }
-  return stopped;
-}
-
-/**
- * Kill running mirror processes. With a serial only that device's mirrors die;
- * without one everything is stopped (quit / disconnect-all paths).
- * @param {string} [serial]
- */
-export function stopScrcpy(serial) {
-  stopScrcpyProcesses(serial);
-}
-
-/**
- * 设备级清理钩子：断开连接或退出时执行（自研镜像会话等）。
- * 放在这里是为了让 adb.js 不用反向依赖 mirror 模块。
- * @type {Set<(serial?: string) => unknown>}
- */
-const deviceTeardownHooks = new Set();
-
-/**
- * 注册设备清理钩子，返回取消函数。
- * @param {(serial?: string) => unknown} hook
- */
-export function onDeviceTeardown(hook) {
-  deviceTeardownHooks.add(hook);
-  return () => deviceTeardownHooks.delete(hook);
-}
-
-/**
- * 执行所有清理钩子；无 serial 表示整体退出。等待异步钩子完成。
- * @param {string} [serial]
- */
-export async function runDeviceTeardown(serial) {
-  await Promise.all(
-    [...deviceTeardownHooks].map(async (hook) => {
-      try {
-        await hook(serial);
-      } catch (error) {
-        console.warn("AndDrive: 设备清理钩子失败：", error?.message || error);
-      }
-    }),
-  );
-}
-
-/**
- * Launch a scrcpy mirror window with a single command line.
- * @param {{ serial: string, packageName: string, label: string, config?: unknown, iconUrl?: string }} request
- * @returns {Promise<import('../shared/types.js').ScrcpySession>}
- */
-async function startScrcpy(request) {
-  const args = buildScrcpyArgs(request);
-  const serial = assertSerial(request.serial);
-  const packageName = normalizePackageName(request.packageName);
-  const iconPng = await composeMacosIconPng(iconPngBuffer(request.iconUrl));
-  void pruneScrcpyAppBundles();
-  void pruneIconCache();
-  // macOS 走带图标的 bundle（避免 Dock 先闪通用图标），其余平台用原始二进制；
-  // SCRCPY_ICON_DIR 让 scrcpy 把窗口图标设为应用图标。
-  const [iconDir, bundleExecutable] = await Promise.all([
-    iconPng ? scrcpyIconDir(iconPng) : null,
-    resolveScrcpyExecutable({
-      binaryPath: scrcpyPath(),
-      serverPath: scrcpyServerPath(),
-      iconPng,
-      label: request.label,
-    }),
-  ]);
-  const executable = bundleExecutable || scrcpyPath();
-  return new Promise((resolve, reject) => {
-    // 打包的 adb 不在 PATH 上，scrcpy 通过 ADB 环境变量定位它；server 与可执行文件同目录自动找到。
-    const env = { ...process.env, ADB: adbPath() };
-    if (iconDir) env.SCRCPY_ICON_DIR = iconDir;
-    const child = spawn(executable, args, { stdio: "ignore", env });
-
-    const session = {
-      id: `scrcpy-${++scrcpySessionSeq}`,
-      pid: child.pid ?? null,
-      serial,
-      packageName,
-      label: typeof request.label === "string" && request.label.trim() ? request.label.trim() : packageName,
-      startedAt: Date.now(),
-    };
-    scrcpyProcesses.set(child, session);
-
-    child.once("spawn", () => resolve({ ...session }));
-    child.once("error", (error) => {
-      scrcpyProcesses.delete(child);
-      reject(error);
-    });
-    child.once("exit", () => {
-      scrcpyProcesses.delete(child);
-    });
-  });
-}
-
-/**
- * 运行中的镜像会话快照（按启动顺序）。
- * @returns {import('../shared/types.js').ScrcpySession[]}
- */
-function listScrcpySessions() {
-  return [...scrcpyProcesses.values()].map((session) => ({ ...session }));
-}
-
-/**
- * 桌面快捷方式唤起投屏：设备不在线时先尝试重连，再启动镜像。
- * 投屏参数取当前全局默认（userData/scrcpy-config.json），设置页改过即生效。
- * @param {{ serial: string, packageName: string, label?: string }} request
- * @returns {Promise<import('../shared/types.js').ScrcpySession>}
- */
-export async function launchMirror(request) {
-  const requested = assertSerial(request?.serial);
-  const packageName = normalizePackageName(request?.packageName);
-  await ensureServer();
-
-  let target = requested;
-  if ((await getDeviceState(requested)) !== "device") {
-    const result = await reconnectDevice(requested);
-    if (!result.online || !result.address) {
-      throw new Error("设备未连接，请先在 AndDrive 中连接设备");
-    }
-    target = result.address;
-  }
-  return startScrcpy({
-    serial: target,
-    packageName,
-    label: request?.label,
-    iconUrl: request?.iconUrl,
-    config: currentScrcpyConfig(),
-  });
-}
-
-/**
- * 结束指定会话。
- * @param {unknown} id
- */
-function stopScrcpySession(id) {
-  if (typeof id !== "string" || !id) throw new Error("镜像会话无效");
-  for (const [child, info] of scrcpyProcesses) {
-    if (info.id !== id) continue;
-    child.kill("SIGKILL");
-    scrcpyProcesses.delete(child);
-    return true;
-  }
-  throw new Error("镜像会话不存在或已关闭");
-}
-
-/** 结束全部镜像会话，返回关闭数量。 */
-function stopAllScrcpySessions() {
-  return stopScrcpyProcesses();
-}
-
-/**
- * 将指定会话窗口置前。macOS 上通过 System Events 按进程 pid 聚焦，
- * 需要「辅助功能」权限；其他平台为无操作成功。
- * @param {unknown} id
- */
-function focusScrcpySession(id) {
-  if (typeof id !== "string" || !id) throw new Error("镜像会话无效");
-  const session = [...scrcpyProcesses.values()].find((item) => item.id === id);
-  if (!session) throw new Error("镜像会话不存在或已关闭");
-  if (process.platform !== "darwin" || !Number.isInteger(session.pid)) return true;
-
-  const script = [
-    'tell application "System Events"',
-    `  set targetProcess to first process whose unix id is ${session.pid}`,
-    "  set frontmost of targetProcess to true",
-    "  try",
-    '    perform action "AXRaise" of first window of targetProcess',
-    "  end try",
-    "end tell",
-  ].join("\n");
-  return new Promise((resolve, reject) => {
-    execFile("osascript", ["-e", script], (error, _stdout, stderr) => {
-      if (error) reject(new Error(stderr?.trim() || "聚焦镜像窗口失败，请在系统设置中授予辅助功能权限"));
-      else resolve(true);
-    });
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1429,10 +1193,41 @@ ipcMain.handle(CHANNELS.adbPair, async (event, device, password) => {
   return adbExec("pair", device.address, password);
 });
 
-// 断开设备：先停掉该设备的 scrcpy 镜像与自研镜像会话，再断开无线 ADB 传输
+/**
+ * 设备级清理钩子：断开连接或退出时执行（自研镜像会话等）。：断开连接或退出时执行（自研镜像会话等）。
+ * 放在这里是为了让 adb.js 不用反向依赖 mirror 模块。
+ * @type {Set<(serial?: string) => unknown>}
+ */
+const deviceTeardownHooks = new Set();
+
+/**
+ * 注册设备清理钩子，返回取消函数。
+ * @param {(serial?: string) => unknown} hook
+ */
+export function onDeviceTeardown(hook) {
+  deviceTeardownHooks.add(hook);
+  return () => deviceTeardownHooks.delete(hook);
+}
+
+/**
+ * 执行所有清理钩子；无 serial 表示整体退出。等待异步钩子完成。
+ * @param {string} [serial]
+ */
+export async function runDeviceTeardown(serial) {
+  await Promise.all(
+    [...deviceTeardownHooks].map(async (hook) => {
+      try {
+        await hook(serial);
+      } catch (error) {
+        console.warn("AndDrive: 设备清理钩子失败：", error?.message || error);
+      }
+    }),
+  );
+}
+
+// 断开设备：先停掉该设备的镜像会话，再断开无线 ADB 传输
 ipcMain.handle(CHANNELS.adbDisconnect, async (_, rawSerial) => {
   const serial = normalizeDisconnectSerial(rawSerial);
-  stopScrcpy(serial);
   await runDeviceTeardown(serial);
   deviceStatsCache.delete(serial);
   return disconnectTransport(serial);
@@ -1481,12 +1276,3 @@ ipcMain.handle(CHANNELS.adbExportApk, (_, serial, pkg) => exportApk(serial, pkg)
 
 // 设备信息：型号 / 系统 / 存储 / 电量 / 网络 / CPU / 内存（force=true 跳过缓存）
 ipcMain.handle(CHANNELS.adbGetDeviceStats, (_, serial, force) => getDeviceStats(serial, force === true));
-
-// 通过 scrcpy 启动应用镜像窗口（渲染层只传 { serial, packageName, label, config }，CLI 在主进程构造）
-ipcMain.handle(CHANNELS.scrcpyStart, (_, options) => startScrcpy(options));
-
-// 运行中镜像会话：列表 / 聚焦 / 关闭单个 / 关闭全部
-ipcMain.handle(CHANNELS.scrcpyList, () => listScrcpySessions());
-ipcMain.handle(CHANNELS.scrcpyFocus, (_, id) => focusScrcpySession(id));
-ipcMain.handle(CHANNELS.scrcpyStop, (_, id) => stopScrcpySession(id));
-ipcMain.handle(CHANNELS.scrcpyStopAll, () => stopAllScrcpySessions());

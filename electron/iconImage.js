@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import { onceAsync, pathExists, pruneStaleEntries } from "./fsUtil.js";
+import { pathExists } from "./fsUtil.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,17 +15,14 @@ const execFileAsync = promisify(execFile);
 // - 校验/解码；
 // - macOS 风格合成（Android 图标是铺满画布的方形，直接当 macOS 图标会填满整个
 //   Dock 磁贴、看起来比系统图标大一圈，这里补上系统规范的留白与圆角）；
-// - scrcpy 需要的图标目录（`SCRCPY_ICON_DIR/scrcpy.png`）。
 // 合成结果按原图内容哈希缓存，只算一次。
 // ---------------------------------------------------------------------------
 
 const OSASCRIPT = "/usr/bin/osascript";
 const SIPS = "/usr/bin/sips";
 const CACHE_DIR = "icon-cache";
-const SCRCPY_ICON_FILENAME = "scrcpy.png";
 const MAX_ICON_BYTES = 512 * 1024;
 const PNG_DATA_URL_PREFIX = "data:image/png;base64,";
-const PRUNE_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
 const COMPOSE_SCRIPT = `use framework "AppKit"
 use scripting additions
@@ -52,7 +49,6 @@ end run`;
 
 const cacheRoot = () => path.join(app.getPath("userData"), CACHE_DIR);
 const composedDir = () => path.join(cacheRoot(), "composed");
-const scrcpyIconRoot = () => path.join(cacheRoot(), "scrcpy");
 
 /** 校验图标 data URL；非法返回 null。 */
 export function sanitizeIcon(iconUrl) {
@@ -116,26 +112,3 @@ export async function composeMacosIconPng(iconPng) {
     return iconPng;
   }
 }
-
-/**
- * scrcpy 读取 `SCRCPY_ICON_DIR/scrcpy.png` 作为窗口图标。按内容缓存目录，跨会话复用。
- * @param {Buffer} iconPng
- * @returns {Promise<string>} 图标目录
- */
-export async function scrcpyIconDir(iconPng) {
-  const dir = path.join(scrcpyIconRoot(), iconHash(iconPng));
-  const file = path.join(dir, SCRCPY_ICON_FILENAME);
-  if (!(await pathExists(file))) {
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(file, iconPng);
-  }
-  return dir;
-}
-
-/** 清理长期未用到的图标缓存；进程内只跑一次。 */
-export const pruneIconCache = onceAsync(async () => {
-  await Promise.all([
-    pruneStaleEntries(composedDir(), PRUNE_AGE_MS),
-    pruneStaleEntries(scrcpyIconRoot(), PRUNE_AGE_MS),
-  ]);
-});

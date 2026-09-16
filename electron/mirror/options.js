@@ -24,23 +24,17 @@ export function parseBitRate(value) {
 }
 
 /**
- * 「虚拟显示器」映射：`off` 不建虚拟显示，`device` 用设备原分辨率（空值），
- * 其余形如 `1920x1080/320` 直接透传。
- * @param {string} newDisplay
- * @returns {string | undefined}
+ * 未提供窗口尺寸时的虚拟显示兜底（`<宽>x<高>/<dpi>`）。正常路径下
+ * `src/mirror/connect.js` 会按窗口尺寸 × devicePixelRatio 计算并覆盖它。
  */
-export function mapNewDisplay(newDisplay) {
-  if (newDisplay === "off") return undefined;
-  if (newDisplay === "device") return "";
-  return newDisplay;
-}
+const DEFAULT_NEW_DISPLAY = "1280x960/160";
 
 /**
  * 把归一化后的投屏参数映射为 scrcpy 4.0 server 选项对象。
  * 只覆盖作用于「服务端」的字段；置顶 / 全屏等窗口行为由 Electron 窗口负责，
  * 息屏等运行时控制后续通过控制消息下发。
  * @param {unknown} input
- * @param {{ videoCodec?: string }} [overrides]
+ * @param {{ videoCodec?: string, newDisplay?: string }} [overrides]
  * @returns {Record<string, unknown>}
  */
 export function buildMirrorOptions(input, overrides = {}) {
@@ -59,8 +53,11 @@ export function buildMirrorOptions(input, overrides = {}) {
     maxFps: config.maxFps,
   };
 
-  const newDisplay = mapNewDisplay(config.newDisplay);
-  if (newDisplay !== undefined) options.newDisplay = newDisplay;
+  // 恒定创建虚拟显示并开启 flex display（scrcpy `--flex-display` / -x）：虚拟
+  // 显示初始按窗口尺寸创建，之后窗口变化由客户端用官方 `resizeDisplay` 控制消息
+  // 驱动重排。服务端 `requestResize` 对非 flex 显示直接抛错，所以必须打开它。
+  options.newDisplay = overrides.newDisplay || DEFAULT_NEW_DISPLAY;
+  options.flexDisplay = true;
 
   if (config.screenMode === "keepActive") options.keepActive = true;
   else if (config.screenMode === "turnOff") options.stayAwake = true;

@@ -23,13 +23,6 @@ export const CHANNELS = {
   /** 设备信息面板（electron/adb.js）。 */
   adbGetDeviceStats: 'adb:getDeviceStats',
 
-  /** Payload is a ScrcpyRequest (shared/types.js). */
-  scrcpyStart: 'start_scrcpy',
-  scrcpyList: 'scrcpy:list',
-  scrcpyFocus: 'scrcpy:focus',
-  scrcpyStop: 'scrcpy:stop',
-  scrcpyStopAll: 'scrcpy:stopAll',
-
   /** 自研镜像客户端（electron/mirror/session.js）。 */
   mirrorStart: 'mirror:start',
   mirrorList: 'mirror:list',

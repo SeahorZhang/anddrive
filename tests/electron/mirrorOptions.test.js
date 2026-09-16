@@ -9,7 +9,6 @@ vi.mock('electron', () => ({
 const {
   buildMirrorOptions,
   parseBitRate,
-  mapNewDisplay,
   resolveNativeCodec,
   resolveRuntimePrefs,
 } = await import('../../electron/mirror/options.js')
@@ -28,14 +27,6 @@ describe('parseBitRate', () => {
   })
 })
 
-describe('mapNewDisplay', () => {
-  it('maps off to undefined and device to the empty value', () => {
-    expect(mapNewDisplay('off')).toBeUndefined()
-    expect(mapNewDisplay('device')).toBe('')
-    expect(mapNewDisplay('1920x1080/320')).toBe('1920x1080/320')
-  })
-})
-
 describe('buildMirrorOptions', () => {
   it('maps defaults to a video+audio, control-enabled session', () => {
     const options = buildMirrorOptions(undefined)
@@ -48,24 +39,28 @@ describe('buildMirrorOptions', () => {
       videoCodec: 'h265',
       videoBitRate: 24_000_000,
       maxFps: 60,
-      newDisplay: '1920x1080/320',
+      newDisplay: '1280x960/160',
+      flexDisplay: true,
       keepActive: true,
     })
   })
 
-  it('drops newDisplay when disabled and maps screen modes', () => {
-    const off = buildMirrorOptions({ newDisplay: 'off', screenMode: 'normal' })
-    expect('newDisplay' in off).toBe(false)
-    expect('keepActive' in off).toBe(false)
-    expect('stayAwake' in off).toBe(false)
+  it('always creates a flex virtual display and maps screen modes', () => {
+    const normal = buildMirrorOptions({ screenMode: 'normal' })
+    expect(normal.flexDisplay).toBe(true)
+    expect(normal.newDisplay).toBe('1280x960/160')
+    expect('keepActive' in normal).toBe(false)
+    expect('stayAwake' in normal).toBe(false)
 
     const turnOff = buildMirrorOptions({ screenMode: 'turnOff' })
     expect(turnOff.stayAwake).toBe(true)
     expect('keepActive' in turnOff).toBe(false)
   })
 
-  it('keeps the device-sized virtual display as an empty option', () => {
-    expect(buildMirrorOptions({ newDisplay: 'device' }).newDisplay).toBe('')
+  it('uses the newDisplay override from the renderer', () => {
+    const options = buildMirrorOptions(undefined, { newDisplay: '920x1800/320' })
+    expect(options.newDisplay).toBe('920x1800/320')
+    expect(options.flexDisplay).toBe(true)
   })
 
   it('always requests opus audio for scrcpy 4.0', () => {

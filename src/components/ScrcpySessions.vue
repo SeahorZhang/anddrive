@@ -1,21 +1,14 @@
 <script setup>
 import { Icon } from '@iconify/vue'
 import BaseButton from './BaseButton.vue'
-import {
-  focusScrcpyApi,
-  stopScrcpyApi,
-  stopAllScrcpyApi,
-  focusMirrorApi,
-  stopMirrorApi,
-  stopAllMirrorApi,
-} from '@/api'
+import { focusMirrorApi, stopMirrorApi, stopAllMirrorApi } from '@/api'
 import { notify, notifyError } from '@/composables/useNotifications'
-import { scrcpySessions, mirrorSessions, refreshScrcpySessions } from '@/composables/useScrcpySessions'
+import { mirrorSessions, refreshScrcpySessions } from '@/composables/useScrcpySessions'
 
 const busyId = ref('')
 const busyAll = ref(false)
 
-const total = computed(() => scrcpySessions.value.length + mirrorSessions.value.length)
+const total = computed(() => mirrorSessions.value.length)
 
 async function focusSession(session) {
   try {
@@ -38,31 +31,10 @@ async function closeSession(session) {
   }
 }
 
-async function focusScrcpySession(session) {
-  try {
-    await focusScrcpyApi(session.id)
-  } catch (error) {
-    notifyError(error, { title: '聚焦镜像窗口失败' })
-  }
-}
-
-async function closeScrcpySession(session) {
-  busyId.value = session.id
-  try {
-    await stopScrcpyApi(session.id)
-    await refreshScrcpySessions()
-    notify.success(`已关闭 ${session.label} 镜像`)
-  } catch (error) {
-    notifyError(error, { title: '关闭镜像窗口失败' })
-  } finally {
-    busyId.value = ''
-  }
-}
-
 async function closeAll() {
   busyAll.value = true
   try {
-    await Promise.all([stopAllScrcpyApi(), stopAllMirrorApi()])
+    await stopAllMirrorApi()
     await refreshScrcpySessions()
     notify.success('已关闭全部镜像窗口')
   } catch (error) {
@@ -133,30 +105,6 @@ function elapsed(startedAt) {
             </button>
           </div>
 
-          <div v-for="session in scrcpySessions" :key="session.id"
-            class="group flex items-center gap-2 rounded-[10px] px-2 py-1.5 hover:bg-black/[0.04]">
-            <div
-              class="flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-gradient-to-b from-[#5ac8fa] to-[#007aff] text-white">
-              <Icon icon="lucide:smartphone" :width="14" :height="14" />
-            </div>
-            <div class="min-w-0 flex-1">
-              <div class="truncate text-[12px] text-black/75">{{ session.label }}</div>
-              <div class="truncate text-[10px] text-black/40">
-                {{ session.packageName }} · {{ elapsed(session.startedAt) }}
-              </div>
-            </div>
-            <button title="聚焦窗口"
-              class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-black/40 outline-none hover:bg-black/[0.06] hover:text-black/70"
-              @click="focusScrcpySession(session)">
-              <Icon icon="lucide:app-window" :width="13" :height="13" />
-            </button>
-            <button title="关闭窗口" :disabled="busyId === session.id"
-              class="flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-full text-black/40 outline-none hover:bg-[#ff3b30]/10 hover:text-[#ff3b30] disabled:opacity-40"
-              @click="closeScrcpySession(session)">
-              <Icon v-if="busyId !== session.id" icon="lucide:x" :width="13" :height="13" />
-              <span v-else class="size-3 animate-spin rounded-full border-[1.5px] border-black/20 border-t-black/50" />
-            </button>
-          </div>
         </div>
       </PopoverContent>
     </PopoverPortal>

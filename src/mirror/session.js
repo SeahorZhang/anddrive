@@ -43,20 +43,20 @@ export async function bootstrap(apply) {
       player.push(packet)
     },
     onMeta: (meta) => apply.hooks.onMeta?.(meta),
-    onEnded: () => {
+    onEnded: (detail) => {
       // server 端自发退出（设备断开 / server 异常）。
-      if (!window.__anddriveMirrorId) return;
+      if (!window.__anddriveMirrorId) return
       ipcRenderer.send(CHANNELS.mirrorState, {
         id: info.id,
         kind: "exit",
-        message: "scrcpy 服务意外退出，镜像已结束",
-      });
-      window.close();
+        message: `scrcpy 服务意外退出，镜像已结束${detail ? `：${detail}` : ""}`,
+      })
+      window.close()
     },
-  });
+  })
 }
 
-/** 操作栏按钮 / 触控 / 键盘 → 直接写本进程内的 control socket。 */
+/** 触控 / 键盘 → 直接写本进程内的 control socket。 */
 export function sendControl(message) {
   const controller = getController();
   if (!controller) return;

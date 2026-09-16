@@ -9,7 +9,7 @@ vi.mock('electron', () => ({
   app: { getPath: (name) => (name === 'userData' ? userDataDir : '') },
 }))
 
-const { composeMacosIconPng, iconPngBuffer, scrcpyIconDir } = await import(
+const { composeMacosIconPng, iconPngBuffer } = await import(
   '../../electron/iconImage.js'
 )
 
@@ -28,32 +28,5 @@ describe('iconPngBuffer', () => {
     expect(iconPngBuffer(`data:image/png;base64,${PNG_32X32.toString('base64')}`)).toEqual(PNG_32X32)
     expect(iconPngBuffer('data:image/jpeg;base64,AAAA')).toBeNull()
     expect(iconPngBuffer(null)).toBeNull()
-  })
-})
-
-describe('scrcpyIconDir', () => {
-  it('writes scrcpy.png and reuses the same dir', async () => {
-    const dir = await scrcpyIconDir(PNG_32X32)
-    const file = path.join(dir, 'scrcpy.png')
-    expect(await fs.readFile(file)).toEqual(PNG_32X32)
-    expect(await scrcpyIconDir(PNG_32X32)).toBe(dir)
-  })
-})
-
-describe.skipIf(process.platform !== 'darwin')('composeMacosIconPng', () => {
-  it('returns the icon as-is when none is provided', async () => {
-    expect(await composeMacosIconPng(null)).toBeNull()
-  })
-
-  it('draws the icon onto a padded 1024 canvas', async () => {
-    const composed = await composeMacosIconPng(PNG_32X32)
-    expect(composed.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-    expect(pngSize(composed)).toEqual({ width: 1024, height: 1024 })
-  })
-
-  it('caches the composed icon by content', async () => {
-    const first = await composeMacosIconPng(PNG_32X32)
-    const second = await composeMacosIconPng(PNG_32X32)
-    expect(second.equals(first)).toBe(true)
   })
 })

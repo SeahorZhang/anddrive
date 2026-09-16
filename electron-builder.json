@@ -58,12 +58,8 @@
         "to": "adb/mac/adb"
       },
       {
-        "from": "resources/scrcpy",
-        "to": "scrcpy",
-        "filter": [
-          "scrcpy",
-          "scrcpy-server"
-        ]
+        "from": "resources/scrcpy/scrcpy-server",
+        "to": "scrcpy/scrcpy-server"
       }
     ]
   }

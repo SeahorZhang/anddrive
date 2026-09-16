@@ -17,7 +17,6 @@ const expose = (name, api) => {
 
 expose("electronAPI", {
   platform: process.platform,
-  startScrcpy: (options) => invoke(CHANNELS.scrcpyStart, options),
   mirror: {
     start: (options) => invoke(CHANNELS.mirrorStart, options),
     list: () => invoke(CHANNELS.mirrorList),
@@ -29,12 +28,6 @@ expose("electronAPI", {
       ipcRenderer.on(CHANNELS.mirrorExit, listener);
       return () => ipcRenderer.removeListener(CHANNELS.mirrorExit, listener);
     },
-  },
-  scrcpy: {
-    list: () => invoke(CHANNELS.scrcpyList),
-    focus: (id) => invoke(CHANNELS.scrcpyFocus, id),
-    stop: (id) => invoke(CHANNELS.scrcpyStop, id),
-    stopAll: () => invoke(CHANNELS.scrcpyStopAll),
   },
   adb: {
     connect: (address) => invoke("adb:connect", address),

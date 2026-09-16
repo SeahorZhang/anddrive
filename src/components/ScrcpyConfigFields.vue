@@ -14,14 +14,6 @@ const emit = defineEmits(['change'])
 const SELECT_CLASS =
   'h-7 max-w-[190px] cursor-pointer rounded-[7px] border border-black/10 bg-white px-2 text-[12px] text-black/70 outline-none disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-[#007aff]/40'
 
-const NEW_DISPLAY_OPTIONS = [
-  { value: '1920x1080/320', label: '1920 × 1080（默认）' },
-  { value: '1280x720/320', label: '1280 × 720' },
-  { value: '2560x1440/320', label: '2560 × 1440' },
-  { value: '1080x2340/320', label: '1080 × 2340（竖屏）' },
-  { value: 'device', label: '跟随设备分辨率' },
-  { value: 'off', label: '不创建虚拟显示' },
-]
 const BIT_RATE_OPTIONS = ['8M', '16M', '24M', '32M']
 const FPS_OPTIONS = [30, 60, 90, 120]
 const CODEC_OPTIONS = [
@@ -44,19 +36,6 @@ function update(key, value) {
   <div
     class="divide-y divide-black/[0.06] overflow-hidden rounded-[12px] border border-black/[0.06] bg-white/70 shadow-[0_1px_2px_rgba(0,0,0,0.04)] backdrop-blur"
   >
-    <div class="flex items-center gap-3 px-4 py-2.5">
-      <div class="min-w-0 flex-1">
-        <div class="text-[13px] text-black/70">虚拟显示分辨率</div>
-        <div class="mt-0.5 text-[11px] text-black/40">应用在独立虚拟显示中运行，不影响手机当前画面</div>
-      </div>
-      <select :class="SELECT_CLASS" :value="props.config.newDisplay" :disabled="disabled"
-        @change="update('newDisplay', $event.target.value)">
-        <option v-for="option in NEW_DISPLAY_OPTIONS" :key="option.value" :value="option.value">
-          {{ option.label }}
-        </option>
-      </select>
-    </div>
-
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
         <div class="text-[13px] text-black/70">视频码率</div>

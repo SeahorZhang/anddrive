@@ -13,6 +13,7 @@ vi.mock('electron', () => ({
 const {
   DEFAULT_SCRCPY_CONFIG,
   normalizeScrcpyConfig,
+  computeDisplayMetrics,
   loadScrcpyConfig,
   saveScrcpyConfig,
   currentScrcpyConfig,
@@ -31,7 +32,6 @@ describe('normalizeScrcpyConfig', () => {
   it('keeps valid overrides', () => {
     expect(
       normalizeScrcpyConfig({
-        newDisplay: '1280x720/240',
         bitRate: '8M',
         maxFps: 90,
         videoCodec: 'av1',
@@ -39,9 +39,10 @@ describe('normalizeScrcpyConfig', () => {
         screenMode: 'turnOff',
         alwaysOnTop: true,
         fullscreen: true,
+        engine: 'native',
+        tablet: true,
       }),
     ).toEqual({
-      newDisplay: '1280x720/240',
       bitRate: '8M',
       maxFps: 90,
       videoCodec: 'av1',
@@ -49,6 +50,38 @@ describe('normalizeScrcpyConfig', () => {
       screenMode: 'turnOff',
       alwaysOnTop: true,
       fullscreen: true,
+      engine: 'native',
+      tablet: true,
+    })
+  })
+
+  it('drops removed legacy fields (newDisplay / renderFit / flex)', () => {
+    expect(
+      normalizeScrcpyConfig({ newDisplay: '1920x1080/320', renderFit: 'unscaled', flex: true }),
+    ).toEqual({ ...DEFAULT_SCRCPY_CONFIG })
+  })
+})
+
+describe('computeDisplayMetrics', () => {
+  it('keeps 1dp = 1px and scales by devicePixelRatio', () => {
+    expect(computeDisplayMetrics(460, 900)).toEqual({ width: 460, height: 900, dpi: 160 })
+    expect(computeDisplayMetrics(460, 900, { pixelRatio: 2 })).toEqual({
+      width: 920,
+      height: 1800,
+      dpi: 320,
+    })
+    expect(computeDisplayMetrics(460, 900, { pixelRatio: 0 })).toEqual({
+      width: 460,
+      height: 900,
+      dpi: 160,
+    })
+  })
+
+  it('applies the 1.5x tablet zoom on top of the pixel ratio', () => {
+    expect(computeDisplayMetrics(800, 600, { tablet: true, pixelRatio: 2 })).toEqual({
+      width: 2400,
+      height: 1800,
+      dpi: 320,
     })
   })
 })

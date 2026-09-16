@@ -11,7 +11,6 @@ const requiredResources = [
   'resources/helper-app.apk',
   'resources/helper-app.version.json',
   'resources/adb/mac/adb',
-  'resources/scrcpy/scrcpy',
   'resources/scrcpy/scrcpy-server',
 ]
 

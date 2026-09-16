@@ -29,10 +29,7 @@ export default async function afterPack(context) {
   }
   requireFile(path.join(resources, 'helper-app.apk'))
 
-  const scrcpyPath = path.join(resources, 'scrcpy', 'scrcpy')
-  requireFile(scrcpyPath)
   requireFile(path.join(resources, 'scrcpy', 'scrcpy-server'))
-  chmodSync(scrcpyPath, 0o755)
 
   const adbPath = path.join(resources, 'adb', 'mac', 'adb')
   requireFile(adbPath)

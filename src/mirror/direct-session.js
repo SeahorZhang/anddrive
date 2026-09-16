@@ -1,12 +1,13 @@
 import { CHANNELS } from "../../electron/ipcContract.js";
 import { getServerClient, acquireDeviceAdb, startScrcpy, codecName } from "./connect.js";
+import { computeDisplayMetrics, normalizeScrcpyConfig } from "../../shared/scrcpyConfig.js";
 
 // ---------------------------------------------------------------------------
 // 直连会话（每窗口一个 scrcpy client）：adb/scrcpy 全用 Tango 官方库建立
 // 于本进程；视频/音频/控制流不跨进程。音频失败自动降级纯画面。
 // ---------------------------------------------------------------------------
 
-const current = { client: null, info: null };
+const current = { client: null, info: null, resizeObserver: null, stopping: false };
 
 /**
  * @param {Record<string, unknown>} info mirror:initGet 的启动参数
@@ -25,6 +26,28 @@ export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket,
 
   const video = await client.videoStream;
   if (!video) throw new Error("scrcpy 未返回视频流");
+
+  // 采集 scrcpy server 的 stdout（stderr 会并入），异常退出时可供排查/上报。
+  const serverErrors = new Set();
+  try {
+    const outputReader = client.output.getReader();
+    void (async () => {
+      try {
+        for (;;) {
+          const { done, value } = await outputReader.read();
+          if (done) break;
+          if (/error|error:|exception|fail/i.test(value)) {
+            serverErrors.add(value);
+            console.warn(`[mirror] server: ${value}`);
+          }
+        }
+      } catch {
+        // 流结束
+      }
+    })();
+  } catch {
+    // output 不可用不影响会话
+  }
 
   // 音频失败只降级为纯画面（scrcpy 4.0 仅支持 Opus）。
   let audioConfigured = false;
@@ -55,17 +78,42 @@ export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket,
   // scrcpy server 自行退出（设备断开 / 进程被杀）→ 通知主进程并关窗。
   client.exited
     .then(() => {
-      if (current.client) onEnded();
+      if (current.client && !current.stopping) {
+        const detail = [...serverErrors].slice(-4).join(" / ");
+        onEnded(detail);
+      }
     })
     .catch(() => {});
 
-  void pumpLoop(video.stream, onVideoPacket, onEnded);
+  void pumpLoop(video.stream, onVideoPacket, (detail) => onEnded(detail));
 
   const controller = client.controller;
   await controller?.startApp(info.packageName).catch(() => {});
   if (info.prefs?.turnScreenOff) {
     await controller?.setDisplayPower(false).catch(() => {});
   }
+
+  // 虚拟显示跟随窗口（scrcpy `--flex-display` / -x 语义）：官方 resizeDisplay
+  // 控制消息驱动，窗口一变化虚拟显示即按窗口尺寸重排（排版随之变化）。
+  // 尺寸乘 devicePixelRatio（Retina 上按物理像素采样更清晰）+ 平板 1.5x。
+  //
+  // 尺寸来自 documentElement（视口）的 ResizeObserver，而不是 window 的
+  // `resize` 事件 + innerWidth：macOS 上窗口被系统缩放/吸附时，resize 事件
+  // 可能滞后甚至不触发，innerWidth 会读到旧值，导致宽度不跟随。
+  const config = normalizeScrcpyConfig(info.config);
+  const resize = () => {
+    const display = computeDisplayMetrics(
+      document.documentElement.clientWidth,
+      document.documentElement.clientHeight,
+      { tablet: config.tablet, pixelRatio: window.devicePixelRatio },
+    );
+    if (display.width <= 0 || display.height <= 0) return;
+    controller?.resizeDisplay({ width: display.width, height: display.height }).catch(() => {});
+  };
+  resize();
+  const observer = new ResizeObserver(resize);
+  observer.observe(document.documentElement);
+  current.resizeObserver = observer;
 
   report("ready", {
     codec: video.metadata.codec,
@@ -107,6 +155,11 @@ export function getController() {
 
 /** 关闭当前 scrcpy client（窗口 beforeunload / 主进程 stop 时调用）。 */
 export function stopSession() {
+  current.stopping = true;
+  if (current.resizeObserver) {
+    current.resizeObserver.disconnect();
+    current.resizeObserver = null;
+  }
   if (!current.client) return null;
   const closing = current.client.close?.().catch?.(() => {}) ?? null;
   current.client = null;

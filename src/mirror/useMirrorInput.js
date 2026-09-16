@@ -19,19 +19,18 @@ export function useMirrorInput({ target, getVideoSize }) {
   }
 
   function videoCoords(event) {
-    const el = target.value
     const size = getVideoSize()
-    if (!el || !size?.width || !size?.height) return null
-    const rect = el.getBoundingClientRect()
-    const scale = Math.min(rect.width / size.width, rect.height / size.height)
-    if (!scale) return null
-    const offsetX = (rect.width - size.width * scale) / 2
-    const offsetY = (rect.height - size.height * scale) / 2
+    if (!size?.width || !size?.height) return null
+    // 按实际显示矩形（canvas 节点）换算，天然兼容 letterbox/unscaled/stretched。
+    const canvas = target.value?.querySelector?.('canvas')
+    const rect = canvas?.getBoundingClientRect?.()
+    if (!rect?.width || !rect?.height) return null
+    const { width, height } = size
     return {
-      x: clamp((event.clientX - rect.left - offsetX) / scale, 0, size.width),
-      y: clamp((event.clientY - rect.top - offsetY) / scale, 0, size.height),
-      width: size.width,
-      height: size.height,
+      x: clamp((event.clientX - rect.left) * (width / rect.width), 0, width),
+      y: clamp((event.clientY - rect.top) * (height / rect.height), 0, height),
+      width,
+      height,
     }
   }
 
@@ -135,6 +134,4 @@ export function useMirrorInput({ target, getVideoSize }) {
 
   onMounted(attach)
   onBeforeUnmount(detach)
-
-  return { send, runAction: (action) => send({ kind: 'action', action }) }
 }

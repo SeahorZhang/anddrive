@@ -23,7 +23,6 @@
 /**
  * scrcpy 启动参数（渲染层与设置页共用；主进程会再次校验并回落默认值）。
  * @typedef {object} ScrcpyConfig
- * @property {string} newDisplay `--new-display` 值，`device` 原分辨率，`off` 不建虚拟显示
  * @property {string} bitRate 视频码率，如 `24M`
  * @property {number} maxFps 帧率上限
  * @property {string} videoCodec h264 | h265 | av1
@@ -31,6 +30,7 @@
  * @property {string} screenMode keepActive | turnOff | normal
  * @property {boolean} alwaysOnTop 窗口置顶
  * @property {boolean} fullscreen 全屏启动
+ * @property {boolean} tablet 平板模式：虚拟显示按窗口 1.5x 上报
  */
 
 /**

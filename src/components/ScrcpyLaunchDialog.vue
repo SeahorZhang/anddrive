@@ -2,7 +2,7 @@
 import { Icon } from '@iconify/vue'
 import BaseButton from './BaseButton.vue'
 import ScrcpyConfigFields from './ScrcpyConfigFields.vue'
-import { startScrcpyApi, startMirrorApi } from '@/api'
+import { startMirrorApi } from '@/api'
 import { readableError } from '@/utils/errors'
 import { notify } from '@/composables/useNotifications'
 import { refreshScrcpySessions } from '@/composables/useScrcpySessions'
@@ -22,15 +22,15 @@ const props = defineProps({
 /** 单次启动草稿：打开时从全局默认复制，修改只影响本次启动。 */
 const draft = reactive({ ...SCRCPY_DEFAULTS })
 const saveAsDefault = ref(false)
-const nativeEngine = ref(false)
 const launching = ref(false)
+draft.engine = 'native'
+
 const error = ref('')
 
 watch(modelValue, (open) => {
   if (!open) return
   Object.assign(draft, scrcpyConfig)
   saveAsDefault.value = false
-  nativeEngine.value = false
   error.value = ''
 })
 
@@ -54,8 +54,7 @@ async function launch() {
       iconUrl: props.iconUrl || undefined,
       config: { ...draft },
     }
-    if (nativeEngine.value) await startMirrorApi(payload)
-    else await startScrcpyApi(payload)
+    await startMirrorApi(payload)
     if (saveAsDefault.value) Object.assign(scrcpyConfig, draft)
     await refreshScrcpySessions()
     notify.success(`已启动 ${props.label}`, { title: '镜像已开启' })
@@ -93,12 +92,15 @@ async function launch() {
             <input v-model="saveAsDefault" type="checkbox" class="size-3.5 accent-[#007aff]" />
             同时保存为默认参数
           </label>
+          <p class="mt-1 px-1 text-[11px] text-black/40">
+            自研引擎支持 H.264 / H.265（需平台硬解），AV1 会自动回落到 H.264。
+          </p>
           <label class="mt-2 flex cursor-pointer items-center gap-2 px-1 text-[12px] text-black/60">
-            <input v-model="nativeEngine" type="checkbox" class="size-3.5 accent-[#007aff]" />
-            使用原生渲染引擎（实验）
+            <input v-model="draft.tablet" type="checkbox" class="size-3.5 accent-[#007aff]" />
+            平板模式（1.5x 上报，app 更快进双栏布局）
           </label>
-          <p v-if="nativeEngine" class="mt-1 px-1 text-[11px] text-black/40">
-            实验引擎支持 H.264 / H.265（需平台硬解），AV1 会自动回落。
+          <p class="mt-1 px-1 text-[11px] text-black/40">
+            画面始终跟随窗口宽高自动重排；手机 1x，平板 1.5x。app 自身锁定的比例可能需要更大的窗口才会铺满。
           </p>
         </div>
 

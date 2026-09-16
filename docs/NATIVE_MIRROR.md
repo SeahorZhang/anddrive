@@ -9,10 +9,11 @@
 复用随包的 `scrcpy-server`，**整个客户端用 Tango（`@yume-chan`）官方库在渲染进程内直连**：
 adb 走官方 `@yume-chan/adb-server-node-tcp`（镜像窗口启用 `nodeIntegration`），
 scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，视频/音频流
-不再跨进程，由 WebCodecs 解码、WebGL canvas 渲染，右侧操作栏由应用自绘。
+不再跨进程，由 WebCodecs 解码、WebGL canvas 渲染。
 控制协议完全由 Tango 的 `ScrcpyControlMessageWriter` 序列化（应用只做 DOM 事件 → writer 入参的映射）。
 
-在「启动镜像」对话框勾选 **使用原生渲染引擎（实验）** 开启（`src/components/ScrcpyLaunchDialog.vue`）。
+自研引擎是启动镜像的**默认**（`engine: "native"`，`normalizeScrcpyConfig` 校验/持久化）；
+自研引擎唯一可用（原 scrcpy 引擎已删除，2026-09-16）。
 
 主进程只承担：创建镜像窗口、下发启动参数（渲染层 invoke 拉取）、
 维护会话记录（渲染层 ready/exit 上报）与断开/退出时关窗销毁。
@@ -22,9 +23,9 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 | 能力 | 位置 | 说明 |
 | --- | --- | --- |
 | 协议与连接 | `src/mirror/connect.js` | Tango 官方 `AdbServerNodeJsClient` + `AdbScrcpyClient`；push server、`AdbScrcpyOptions4_0`、scid 由官方库直接处理 |
-| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.0 选项；编码回落、窗口/息屏偏好 |
+| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.0 选项；编码回落、窗口/息屏偏好、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口尺寸 × devicePixelRatio × (平板 1.5x)` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`），保持 1dp = 1px 且 Retina 上按物理像素采样 |
 | 会话生命周期 | `electron/mirror/session.js` | 窗口管理、会话记录、断开/退出清理；`src/mirror/session.js` / `direct-session.js` 与官方流的接线 |
-| 输入控制 | `electron/mirror/control.js`、`src/mirror/useMirrorInput.js` | DOM 语义事件映射到官方 writer（`injectTouch/...`），序列化全在 Tango；Android 键值/metaState/纹理动作用官方 `AndroidKeyCode` / `AndroidKeyEventMeta` / `AndroidMotionEventAction` 常量 |
+| 输入控制 | `electron/mirror/control.js`、`src/mirror/useMirrorInput.js` | 单指触控、滚轮、键盘（特殊键 + 文本注入）；序列化全在 Tango（`injectTouch/...`），Android 键值/metaState 用官方 `AndroidKeyCode` / `AndroidKeyEventMeta` / `AndroidMotionEventAction` 常量 |
 | 解码渲染 | `src/mirror/App.vue` | WebCodecs 解码；`AutoCanvasRenderer` 优先 WebGL，按显示尺寸出图；HUD 诊断 |
 | 音频转发 | `src/mirror/audio.js` | scrcpy 4.0 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放；音频不可用时自动降级纯画面；会话表见 `docs/archive` 记录 |
 | 会话管理 UI | `src/composables/useScrcpySessions.js`、`src/components/ScrcpySessions.vue` | 与 scrcpy 会话合并展示，支持聚焦/关闭/全部关闭 |
@@ -54,10 +55,10 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
   - [ ] 本机 → 设备：`Cmd+V` 经 `controller.setClipboard` 下发（跳过 Cmd 组合键放行逻辑，仅拦截粘贴）
   - [ ] 设备 → 本机：订阅 `client.clipboard` 流，写入系统剪贴板
   - 验收：Android 输入框粘贴到本机复制的文本；设备复制后本机可粘贴
-- [ ] **指针习惯补齐**
+- [ ] **指针习惯补齐**（操作栏已在 2026-09-16 移除，鼠标侧手势成为高频操作的主要入口）
   - [ ] 右键 → 返回（`backOrScreenOn`）
   - [ ] 中键 → 主屏
-  - 验收：不依赖操作栏也能完成高频返回/回桌面
+  - 验收：仅用鼠标也能完成高频返回/回桌面
 - [ ] **多指触控 / 捏合缩放**（当前 `pointerId` 固定为 0，仅单指）
   - 验收：地图/图片可双指缩放
 
@@ -70,12 +71,14 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 
 ### P3 引擎收尾
 
+- [x] **虚拟显示跟随窗口**（2026-09-16 完成，2026-09-17 改为默认行为）：恒定 `flexDisplay` 服务端选项 + 官方 `resizeDisplay`，窗口尺寸变化即重排虚拟显示；对话框不再暴露 `newDisplay`/`renderFit`，虚拟显示尺寸按窗口 × devicePixelRatio 计算（Retina 更清晰），平板模式 1.5x（app 更早进入双栏布局）
+
 - [x] **音频转发**（2026-09-16 完成）：scrcpy 4.0 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放，preskip 裁剪、落后丢帧
 - [x] **渲染层直连**（2026-09-16 完成）：镜像窗口 `nodeIntegration` + 官方 Tango 库直连 adb server；去掉主进程 per-packet 转发（曾做 ws 桥方案后替换为官方 connector）
 - [ ] **AV1 支持**：验证平台解码并移出回落名单
 - [ ] **控制错误可见性**：控制失败目前仅 `console.warn`，可上报到会话 UI
 - [ ] **服务端输出采集**：消费 `client.output`，把 scrcpy 报错并入异常退出提示
-- [ ] **移除旧 scrcpy 引擎**：自研引擎达到功能对等且稳定后，删除 `electron/adb.js` 的 `startScrcpy` 路径、`electron/scrcpyApp.js` 与随包 `resources/scrcpy/scrcpy` 二进制（约 8.6MB）
+- [x] **移除旧 scrcpy 引擎**（2026-09-16 完成）：删除 `electron/adb.js` 的 `startScrcpy`/命令行/会话管理路径、`electron/scrcpyApp.js`、随包 `resources/scrcpy/scrcpy` 二进制（8.6MB）、相关 IPC/preload/API/UI；`.adr`/`anddrive://` 唤起改走自研镜像窗口
 
 排查记录（2026-09-16 首次接通）：
 
@@ -91,7 +94,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 
 | HUD 现象 | 结论 |
 | --- | --- |
-| `q` 长期 >0、`reset` 增长 | 解码跟不上：降 `newDisplay` 分辨率 / `maxFps` / 码率，或换 H.264 |
+| `q` 长期 >0、`reset` 增长 | 解码跟不上：缩小镜像窗口 / 降 `maxFps` / 码率，或换 H.264 |
 | `gl=N ... bitmap` | WebGL 被判定为软件渲染，回落 2D |
 | `skipDraw` 增长、`shown` 约等于 `draw` | 同一 vsync 内合并多帧（降延迟的预期行为） |
 | `audio>0` 但 `ad=0` | 音频解码未推进：配置包被守卫拦下或 pts BigInt 未转换（历史上出现过，现为已修复形态） |
@@ -109,7 +112,7 @@ src/mirror/
   connect.js    Tango 官方 库（adb-server-node-tcp / adb-scrcpy）的唯一接入口；module 约束见上
   direct-session.js  会话建立、流泵、scrcpy 退出处理
   session.js    App 访问层（bootstrap / sendControl / dispose）
-  App.vue       解码、渲染、HUD、操作栏
+  App.vue       解码、渲染、HUD
   audio.js      Opus → WebCodecs 解码 → AudioContext 排程播放
   useMirrorInput.js  指针/滚轮/键盘 → 控制消息
 shared/keys.js  Android 键值别名（包装 Tango android 常量，双端共用）

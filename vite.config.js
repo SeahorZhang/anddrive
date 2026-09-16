@@ -75,6 +75,10 @@ export default defineConfig(({ command }) => {
   };
 
   return {
+    // Electron 会拿 env 里的 devServerURL 起窗口；端口被占时 vite 默认会
+    // 静默换端口，而另一实例可能已在旧端口挂着——与其让它连上别的会话，
+    // 不如 fail fast，提示用户清掉残留的 dev 进程。
+    server: isServe ? { strictPort: true } : undefined,
     plugins: [
       offlineIconsPlugin(),
       tailwindcss(),

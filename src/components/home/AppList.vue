@@ -5,13 +5,13 @@ import ConfirmDialog from '../ConfirmDialog.vue'
 import AppInfoDialog from '../AppInfoDialog.vue'
 import ScrcpyLaunchDialog from '../ScrcpyLaunchDialog.vue'
 import {
+  startMirrorApi,
   installHelperApi,
   loadInstalledAppsApi,
   getCachedAppsApi,
   getAppIconsApi,
   uninstallHelperApi,
   deleteAppCacheApi,
-  startScrcpyApi,
   forceStopAppApi,
   clearAppDataApi,
   uninstallAppApi,
@@ -210,7 +210,7 @@ function isBusy(app) {
 
 async function launchApp(app) {
   try {
-    await startScrcpyApi({
+    await startMirrorApi({
       serial: props.address,
       packageName: app.packageName,
       label: app.label,

@@ -2,7 +2,8 @@
 import { app, BrowserWindow } from "electron";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { stopScrcpy, launchMirror, runDeviceTeardown } from "./adb.js";
+import { ensureServer, getDeviceState, reconnectDevice, runDeviceTeardown } from "./adb.js";
+import { startMirrorSession } from "./mirror/session.js";
 import {
   MIRROR_SCHEME,
   parseMirrorUrl,
@@ -10,7 +11,7 @@ import {
   extractShortcutFile,
 } from "./shortcutCore.js";
 import { readShortcutFile, ensureFileAssociation } from "./shortcut.js";
-import { loadScrcpyConfig } from "./scrcpyConfig.js";
+import { loadScrcpyConfig, currentScrcpyConfig } from "./scrcpyConfig.js";
 import "./permissions.js";
 import "./favorites.js";
 import "./mirror/session.js";
@@ -80,11 +81,33 @@ async function resolveMirrorRequest(arg) {
 /** 处理一次投屏唤起请求。 */
 async function handleMirrorArg(request) {
   try {
-    await launchMirror(request);
+    await launchMirrorFromRequest(request);
     notifyMirrorResult(request, { ok: true });
   } catch (error) {
     notifyMirrorResult(request, { ok: false, message: error?.message || "启动投屏失败" });
   }
+}
+
+/**
+ * `.adr` / `anddrive://` 唤起一次自研镜像；设备不在线时先尝试重连，
+ * 参数取当前全局默认（`userData/scrcpy-config.json`）。
+ */
+async function launchMirrorFromRequest(request) {
+  await ensureServer();
+  let address = request.serial;
+  if ((await getDeviceState(request.serial)) !== "device") {
+    const result = await reconnectDevice(request.serial);
+    if (!result.online || !result.address) {
+      throw new Error("设备未连接，请先在 AndDrive 中连接设备");
+    }
+    address = result.address;
+  }
+  await startMirrorSession({
+    serial: address,
+    packageName: request.packageName,
+    label: request.label,
+    config: currentScrcpyConfig(),
+  });
 }
 
 /**
@@ -163,7 +186,6 @@ const TEARDOWN_TIMEOUT_MS = 3000;
 app.on("before-quit", (event) => {
   if (teardownDone) return;
   event.preventDefault();
-  stopScrcpy();
   void Promise.race([
     runDeviceTeardown(),
     new Promise((resolve) => setTimeout(resolve, TEARDOWN_TIMEOUT_MS)),
@@ -175,6 +197,29 @@ app.on("before-quit", (event) => {
 app.on("window-all-closed", () => {
   win = null;
 });
+
+// ---------------------------------------------------------------------------
+// dev 模式退出兜底：vite-plugin-electron 以子进程形式启动 Electron，
+// 终端 Ctrl+C（SIGINT/SIGTERM 交给进程组以外还可能被 Electron 忽略）、或
+// vite 主进程被 SIGKILL 后 Electron 仍在运行。这里统一兜住：
+// - 开发态响应 SIGINT/SIGTERM；
+// - 被孤儿化（父进程死亡、ppid 归 1）时自动退出，避免 dev 环境残留。
+// ---------------------------------------------------------------------------
+
+if (!app.isPackaged) {
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.on(signal, () => {
+      app.exit(0);
+    });
+  }
+  const orphanTimer = setInterval(() => {
+    if (process.ppid === 1) {
+      clearInterval(orphanTimer);
+      app.exit(0);
+    }
+  }, 1000);
+  process.on("exit", () => clearInterval(orphanTimer));
+}
 app.on("second-instance", (_event, commandLine) => {
   const arg = extractShortcutFile(commandLine) || extractMirrorUrl(commandLine);
   if (arg) {
