@@ -36,7 +36,10 @@ export function createScid() {
 
 /**
  * 推送并启动 scrcpy（官方 AdbScrcpyClient / AdbScrcpyOptions4_0 直用）。
+ * 返回启动时**实际用于创建虚拟显示**的尺寸：调用方据此初始化「跟随窗口」的
+ * 请求合并器，避免启动阶段再下发一条完全相同的 resizeDisplay。
  * @param {{ adb: unknown, serverPath: string, config: unknown }} params
+ * @returns {Promise<{ client: unknown, display: { width: number, height: number, dpi: number } }>}
  */
 export async function startScrcpy({ adb, serverPath, config }) {
   const { AdbScrcpyClient, AdbScrcpyOptions4_0 } = req("@yume-chan/adb-scrcpy");
@@ -68,7 +71,8 @@ export async function startScrcpy({ adb, serverPath, config }) {
     ...buildMirrorOptions(config, { videoCodec: codec, newDisplay }),
     scid: createScid(),
   });
-  return AdbScrcpyClient.start(adb, DefaultServerPath, options);
+  const client = await AdbScrcpyClient.start(adb, DefaultServerPath, options);
+  return { client, display };
 }
 
 export function codecName(codec) {

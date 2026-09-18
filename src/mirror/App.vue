@@ -37,6 +37,7 @@ const hud = reactive({
   audioIssue: '-',
   win: '-',
   vid: '-',
+  vidChanges: 0,
 })
 
 const renderer = shallowRef(null)
@@ -115,7 +116,12 @@ function startDecoder(info) {
     decoder.value = videoDecoder
     writer = videoDecoder.writable.getWriter()
     flushPending()
-    disposeSizeChanged = videoDecoder.sizeChanged(() => syncCanvasBox())
+    // 视频尺寸变化次数：虚拟显示被重排/应用重新取向都会让它增长，
+    // 用来判断「画面旋转几下」是客户端 resize 触发的还是设备侧应用自己的行为。
+    disposeSizeChanged = videoDecoder.sizeChanged(() => {
+      hud.vidChanges += 1
+      syncCanvasBox()
+    })
     attachCanvas()
     status.value = ''
 
@@ -256,7 +262,7 @@ onBeforeUnmount(() => {
       class="pointer-events-none absolute bottom-2 left-2 z-10 rounded bg-black/60 px-2 py-1 font-mono text-[10px] leading-tight text-white/60">
       {{ title }} · {{ meta?.codecName }} · {{ fps }} fps
       <br />
-      win={{ hud.win }} vid={{ hud.vid }}
+      win={{ hud.win }} vid={{ hud.vid }} chg={{ hud.vidChanges }}
       <br />
       gl={{ hud.gl }} {{ hud.renderer }}/{{ hud.type }} shown={{ hud.frames }} draw={{ hud.rendered }} skipDraw={{ hud.skipRender }}
       q={{ hud.queue }} skipDec={{ hud.skipped }} reset={{ hud.resets }} packets={{ hud.packets }} bytes={{ hud.bytes }}

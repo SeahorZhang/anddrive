@@ -1,13 +1,32 @@
 import { CHANNELS } from "../../electron/ipcContract.js";
 import { getServerClient, acquireDeviceAdb, startScrcpy, codecName } from "./connect.js";
 import { computeDisplayMetrics, normalizeScrcpyConfig } from "../../shared/scrcpyConfig.js";
+import { createDisplayFollower } from "./displayFollow.js";
 
 // ---------------------------------------------------------------------------
 // 直连会话（每窗口一个 scrcpy client）：adb/scrcpy 全用 Tango 官方库建立
 // 于本进程；视频/音频/控制流不跨进程。音频失败自动降级纯画面。
 // ---------------------------------------------------------------------------
 
-const current = { client: null, info: null, resizeObserver: null, stopping: false };
+const current = {
+  client: null,
+  info: null,
+  resizeObserver: null,
+  follower: null,
+  stopping: false,
+};
+
+/**
+ * 当前窗口对应的虚拟显示尺寸（× devicePixelRatio × 平板 1.5x）。
+ * @param {ReturnType<typeof normalizeScrcpyConfig>} config
+ */
+function viewportDisplay(config) {
+  return computeDisplayMetrics(
+    document.documentElement.clientWidth,
+    document.documentElement.clientHeight,
+    { tablet: config.tablet, pixelRatio: window.devicePixelRatio },
+  );
+}
 
 /**
  * @param {Record<string, unknown>} info mirror:initGet 的启动参数
@@ -20,7 +39,11 @@ const current = { client: null, info: null, resizeObserver: null, stopping: fals
  */
 export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket, onEnded }) {
   const adb = await acquireDeviceAdb(getServerClient(), info.serial);
-  const client = await startScrcpy({ adb, serverPath: info.serverPath, config: info.config });
+  const { client, display: initialDisplay } = await startScrcpy({
+    adb,
+    serverPath: info.serverPath,
+    config: info.config,
+  });
   current.client = client;
   current.info = info;
 
@@ -97,21 +120,25 @@ export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket,
   // 控制消息驱动，窗口一变化虚拟显示即按窗口尺寸重排（排版随之变化）。
   // 尺寸乘 devicePixelRatio（Retina 上按物理像素采样更清晰）+ 平板 1.5x。
   //
+  // 只在尺寸真的变化时才下发：初始尺寸已用于创建虚拟显示（`connect.js` 的
+  // `newDisplay`），启动阶段再补发一条完全相同的请求会让服务端白走一次
+  // `virtualDisplay.resize()` → capture reset；而虚拟显示是
+  // `VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT`，每次配置变更设备上的应用都会
+  // 重新决定方向，表现出来就是镜像画面反复旋转。合并/去重逻辑见
+  // `src/mirror/displayFollow.js`。
+  //
   // 尺寸来自 documentElement（视口）的 ResizeObserver，而不是 window 的
   // `resize` 事件 + innerWidth：macOS 上窗口被系统缩放/吸附时，resize 事件
   // 可能滞后甚至不触发，innerWidth 会读到旧值，导致宽度不跟随。
   const config = normalizeScrcpyConfig(info.config);
-  const resize = () => {
-    const display = computeDisplayMetrics(
-      document.documentElement.clientWidth,
-      document.documentElement.clientHeight,
-      { tablet: config.tablet, pixelRatio: window.devicePixelRatio },
-    );
-    if (display.width <= 0 || display.height <= 0) return;
-    controller?.resizeDisplay({ width: display.width, height: display.height }).catch(() => {});
-  };
-  resize();
-  const observer = new ResizeObserver(resize);
+  const follower = createDisplayFollower({
+    send: (size) => controller?.resizeDisplay({ width: size.width, height: size.height }),
+  });
+  follower.seed(initialDisplay);
+  current.follower = follower;
+
+  // observe() 会立即回调一次当前尺寸：窗口在会话建立期间变过的话，这次就会补上。
+  const observer = new ResizeObserver(() => follower.request(viewportDisplay(config)));
   observer.observe(document.documentElement);
   current.resizeObserver = observer;
 
@@ -159,6 +186,10 @@ export function stopSession() {
   if (current.resizeObserver) {
     current.resizeObserver.disconnect();
     current.resizeObserver = null;
+  }
+  if (current.follower) {
+    current.follower.dispose();
+    current.follower = null;
   }
   if (!current.client) return null;
   const closing = current.client.close?.().catch?.(() => {}) ?? null;
