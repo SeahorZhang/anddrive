@@ -55,12 +55,11 @@ export async function startScrcpy({ adb, serverPath, config }) {
   if (downgraded) {
     console.warn(`[mirror] 自研引擎暂不支持所选编码，改用 ${codec}`);
   }
-  // 初始虚拟显示 = 当前窗口 CSS 尺寸 × devicePixelRatio，dpi 同步乘（1dp = 1 CSS px）：
-  // 编码分辨率与窗口一致，Retina 上按物理像素采样更清晰；之后由 resizeDisplay 跟随。
+  // 初始虚拟显示 = 窗口 CSS × DISPLAY_PIXEL_SCALE（像素倍率与 dpi 一起定，1dp = DISPLAY_ZOOM CSS px）；
+  // 之后由 resizeDisplay 跟随窗口。
   const display = computeDisplayMetrics(
     document.documentElement.clientWidth,
     document.documentElement.clientHeight,
-    { pixelRatio: window.devicePixelRatio },
   );
   const newDisplay = `${display.width}x${display.height}/${display.dpi}`;
   const file = ReadableStream.from(createReadStream(serverPath));

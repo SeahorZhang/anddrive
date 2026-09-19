@@ -15,6 +15,7 @@ const {
   normalizeScrcpyConfig,
   computeDisplayMetrics,
   DISPLAY_BASE_DPI,
+  DISPLAY_PIXEL_SCALE,
   loadScrcpyConfig,
   saveScrcpyConfig,
   currentScrcpyConfig,
@@ -67,24 +68,12 @@ describe('normalizeScrcpyConfig', () => {
 })
 
 describe('computeDisplayMetrics', () => {
-  it('keeps 1dp = 1 CSS px and samples at physical pixels', () => {
-    expect(computeDisplayMetrics(1280, 720)).toEqual({ width: 1280, height: 720, dpi: 160 })
-    expect(computeDisplayMetrics(1280, 720, { pixelRatio: 2 })).toEqual({
-      width: 2560,
-      height: 1440,
-      dpi: 320,
-    })
-    expect(computeDisplayMetrics(1280, 720, { pixelRatio: 0 })).toEqual({
-      width: 1280,
-      height: 720,
-      dpi: 160,
-    })
-  })
-
-  it('no longer clamps dpi to keep smallestWidth under the 600dp threshold', () => {
-    // 旧「小屏模式」会把 dpi 抬到 sw≈599dp 换 app 填满帧；镜像现在只有大屏一种形态，
-    // app 由 padMode 配方送进 pad 横屏，dp 就等于窗口 CSS（短边 720 CSS px → 720dp）。
-    const { width, height, dpi } = computeDisplayMetrics(1280, 720, { pixelRatio: 2 })
+  it('像素与 dpi 都按 DISPLAY_PIXEL_SCALE 走，1dp = 1 CSS px', () => {
+    const { width, height, dpi } = computeDisplayMetrics(1280, 720)
+    expect(width).toBe(Math.round(1280 * DISPLAY_PIXEL_SCALE))
+    expect(height).toBe(Math.round(720 * DISPLAY_PIXEL_SCALE))
+    expect(dpi).toBe(Math.round(DISPLAY_BASE_DPI * DISPLAY_PIXEL_SCALE))
+    // dp 与倍率无关：倍率同时缩放像素与 dpi。
     expect((Math.min(width, height) * DISPLAY_BASE_DPI) / dpi).toBe(720)
   })
 })

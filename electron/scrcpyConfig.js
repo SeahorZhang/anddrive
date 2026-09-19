@@ -7,6 +7,7 @@ import {
   normalizeScrcpyConfig,
   computeDisplayMetrics,
   DISPLAY_BASE_DPI,
+  DISPLAY_PIXEL_SCALE,
   LARGE_SCREEN_COMPAT,
 } from "../shared/scrcpyConfig.js";
 
@@ -25,6 +26,7 @@ export {
   normalizeScrcpyConfig,
   computeDisplayMetrics,
   DISPLAY_BASE_DPI,
+  DISPLAY_PIXEL_SCALE,
   LARGE_SCREEN_COMPAT,
 };
 

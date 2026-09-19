@@ -14,12 +14,27 @@ export const DEFAULT_SCRCPY_CONFIG = Object.freeze({
   engine: "native",
 });
 
-/** 虚拟显示基准密度：1dp = 1px（实际下发 dpi = 该值 × devicePixelRatio）。 */
+/** 虚拟显示基准密度：1dp = 1px（实际下发 dpi = 该值 × DISPLAY_PIXEL_SCALE）。 */
 export const DISPLAY_BASE_DPI = 160;
 
 /**
+ * 虚拟显示的像素倍率：显示像素 = 窗口 CSS × 该值，dpi = `160 × 该值`，于是
+ * **1dp = 1 CSS px**（与倍率无关，布局松紧不变）。不再跟 `devicePixelRatio`。
+ *
+ * 为什么要有这个旋钮：抖音有一批控件是**按 px 写死**的（顶部那排 tab 最明显）。
+ * 真机量过：dpi 480 下它的字高只有 ~16 物理像素（14sp 在该 dpi 下本该 42），
+ * 而且 `settings put system font_scale 1.3` 对它毫无作用 —— 这类字只能靠
+ * 「同样 dp 少给像素」变大：像素减半、dp 不变（布局一模一样），px 写死的控件
+ * 相对画面就大一倍。实测同一块 588dp 显示，`1766x2412` 与 `882x1206` 两帧对比，
+ * 顶部 tab 从几乎看不清变成正常可读。
+ *
+ * 代价：帧被放大到 Retina 背衬上，画面没那么锐。嫌糊就调到 1.5 或 2（2 = 旧行为）。
+ */
+export const DISPLAY_PIXEL_SCALE = 1;
+
+/**
  * Android 16 的大屏方向 compat 开关：打开后系统不再听 app 自己的方向锁。
- * **实测只在物理屏生效**，单独打在 scrcpy 虚拟显示上无效（四种启动顺序都量过），
+ * **实测只在物理屏生效**，单独用在 scrcpy 虚拟显示上无效（四种启动顺序都量过），
  * 必须配合 `electron/mirror/padMode.js` 那套配方：先把物理屏临时改成横形大屏、
  * 让 app 在上面以 pad 横屏起来，再搬到虚拟显示；搬过去之后物理屏可以还原，pad 不掉。
  */
@@ -29,24 +44,22 @@ export const LARGE_SCREEN_COMPAT = Object.freeze({
 });
 
 /**
- * 由窗口 CSS 尺寸算出虚拟显示的实际像素尺寸与密度：两根轴都乘 `devicePixelRatio`
- * （Retina 上按物理像素采样更清晰），dpi 同步乘，于是 dp = 物理 px × 160 / dpi = CSS px，
- * 即 **1dp = 1 CSS px**：窗口多大，app 就按多大的 dp 排版，画面与窗口比例严格一致、零黑边。
+ * 由窗口 CSS 尺寸算出虚拟显示的像素尺寸与密度：`窗口 CSS × DISPLAY_PIXEL_SCALE`，
+ * dpi = `160 × DISPLAY_PIXEL_SCALE`，于是 1dp = 1 CSS px，画面比例恒等于窗口比例
+ * （contain 下不会出现黑边）。
  *
  * 这里不再压 600dp 下限（旧「小屏模式」的做法）：镜像只有大屏一种形态，会话建立前
  * `padMode.js` 已经让 app 以 pad 横屏起来，越过 600dp 拿到的是它自己的 pad 全屏布局
  * （实测 `resizeDisplay` 跟随窗口后仍保持 `mBounds == mMaxBounds`），不再是 size-compat 竖条。
  * @param {number} cssWidth
  * @param {number} cssHeight
- * @param {{ pixelRatio?: number }} [options]
  * @returns {{ width: number, height: number, dpi: number }}
  */
-export function computeDisplayMetrics(cssWidth, cssHeight, options = {}) {
-  const dpr = Number.isFinite(options.pixelRatio) && options.pixelRatio > 0 ? options.pixelRatio : 1;
+export function computeDisplayMetrics(cssWidth, cssHeight) {
   return {
-    width: Math.round(cssWidth * dpr),
-    height: Math.round(cssHeight * dpr),
-    dpi: Math.round(DISPLAY_BASE_DPI * dpr),
+    width: Math.round(cssWidth * DISPLAY_PIXEL_SCALE),
+    height: Math.round(cssHeight * DISPLAY_PIXEL_SCALE),
+    dpi: Math.round(DISPLAY_BASE_DPI * DISPLAY_PIXEL_SCALE),
   };
 }
 

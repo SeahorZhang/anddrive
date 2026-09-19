@@ -18,12 +18,11 @@ const current = {
   pad: false,
 };
 
-/** 当前窗口对应的虚拟显示尺寸（× devicePixelRatio，1dp = 1 CSS px）。 */
+/** 当前窗口对应的虚拟显示尺寸（像素倍率与 dpi 都在 `computeDisplayMetrics` 里定）。 */
 function viewportDisplay() {
   return computeDisplayMetrics(
     document.documentElement.clientWidth,
     document.documentElement.clientHeight,
-    { pixelRatio: window.devicePixelRatio },
   );
 }
 
@@ -139,7 +138,7 @@ export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket,
 
   // 虚拟显示跟随窗口（scrcpy `--flex-display` / -x 语义）：官方 resizeDisplay
   // 控制消息驱动，窗口一变化虚拟显示即按窗口尺寸重排（排版随之变化）。
-  // 尺寸乘 devicePixelRatio（Retina 上按物理像素采样更清晰），1dp = 1 CSS px。
+  // 像素 = 窗口 CSS × DISPLAY_PIXEL_SCALE；1dp = DISPLAY_ZOOM CSS px。
   //
   // 只在尺寸真的变化时才下发：初始尺寸已用于创建虚拟显示（`connect.js` 的
   // `newDisplay`），启动阶段再补发一条完全相同的请求会让服务端白走一次
