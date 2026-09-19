@@ -104,7 +104,11 @@ function armCover(ms) {
   coverTimer = setTimeout(endCover, wait)
 }
 
-/** 真正把 `resizeDisplay` 发出去的那一刻才盖（拖拽期间 debounce 还没发，提前盖没意义）。 */
+/**
+ * 手一拖就盖（`onIntent` 在每次尺寸请求都回调，包括拖拽过程中的每一帧）：
+ * 遮罩要盖住的是「用户在改尺寸」这段时间，不是只有真正重排的那一下。
+ * 每帧都把总兜底线往前推，慢拖（超过 COVER_MAX_MS）也不会中途露出来。
+ */
 function coverForReflow(target) {
   if (!decoder.value || !target) return
   // 同比例的纯缩放不会让 app 重新决定方向，不值得盖一次。
@@ -112,6 +116,14 @@ function coverForReflow(target) {
   covering.value = true
   coverDeadline = Date.now() + COVER_MAX_MS
   armCover(COVER_MAX_MS)
+}
+
+/** 停手合并后发现尺寸其实没变（拖出去又拖回来）：没下发 resize，遮罩也没必要留。 */
+function cancelCover() {
+  if (coverTimer) clearTimeout(coverTimer)
+  coverTimer = null
+  coverDeadline = 0
+  if (covering.value) endCover()
 }
 
 function onFrameSizeChanged() {
@@ -252,6 +264,7 @@ async function booted() {
     },
     hooks: {
       onReflowStart: coverForReflow,
+      onReflowAbort: cancelCover,
       onMeta: (info) => {
         meta.value = info
         startDecoder(info)

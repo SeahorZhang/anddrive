@@ -8,8 +8,10 @@ function settle() {
 }
 
 /** 手动时钟 + 定时器，便于断言合并窗口。 */
-function createHarness({ settleMs = RESIZE_SETTLE_MS } = {}) {
+function createHarness({ settleMs = RESIZE_SETTLE_MS, lastSent = null } = {}) {
   const sent = []
+  const intents = []
+  const skips = []
   const timers = new Map()
   let seq = 0
   let clock = 0
@@ -18,6 +20,8 @@ function createHarness({ settleMs = RESIZE_SETTLE_MS } = {}) {
     send: (size) => {
       sent.push(`${size.width}x${size.height}`)
     },
+    onIntent: (size) => intents.push(`${size.width}x${size.height}`),
+    onSkip: () => skips.push(clock),
     settleMs,
     setTimer: (callback, ms) => {
       const id = ++seq
@@ -26,6 +30,7 @@ function createHarness({ settleMs = RESIZE_SETTLE_MS } = {}) {
     },
     clearTimer: (id) => timers.delete(id),
   })
+  if (lastSent) follower.seed(lastSent)
 
   function advance(ms) {
     clock += ms
@@ -40,7 +45,7 @@ function createHarness({ settleMs = RESIZE_SETTLE_MS } = {}) {
     }
   }
 
-  return { follower, sent, advance, pendingTimers: () => timers.size }
+  return { follower, sent, intents, skips, advance, pendingTimers: () => timers.size }
 }
 
 describe('displaySizeKey', () => {
@@ -139,6 +144,42 @@ describe('createDisplayFollower', () => {
     follower.request({ width: 920, height: 1800 })
     await settle()
     expect(sent).toEqual(['920x1800', '920x1800'])
+  })
+
+  it('reports every size change as intent, while the burst is still merging', () => {
+    const { follower, sent, intents, advance } = createHarness()
+    follower.seed({ width: 920, height: 1800 })
+
+    // 遮罩要在手一拖就盖上，所以「要改尺寸」这件事必须逐次上报，不能等合并窗口结束。
+    follower.request({ width: 1000, height: 1800 })
+    follower.request({ width: 1100, height: 1800 })
+    expect(intents).toEqual(['1000x1800', '1100x1800'])
+    expect(sent).toEqual([])
+
+    advance(RESIZE_SETTLE_MS)
+    expect(sent).toEqual(['1100x1800'])
+  })
+
+  it('reports a skip when the merged burst turns out to need no resize', () => {
+    // 拖出去又拖回原尺寸：盖了遮罩，但根本不会下发 resize，得告诉页面撤掉。
+    const { follower, sent, skips, advance } = createHarness({ lastSent: { width: 920, height: 1800 } })
+
+    follower.request({ width: 1100, height: 1800 })
+    follower.request({ width: 920, height: 1800 })
+    advance(RESIZE_SETTLE_MS)
+
+    expect(sent).toEqual([])
+    expect(skips).toHaveLength(1)
+  })
+
+  it('does not report a skip when the burst dispatches', () => {
+    const { follower, sent, skips, advance } = createHarness({ lastSent: { width: 920, height: 1800 } })
+
+    follower.request({ width: 1100, height: 1800 })
+    advance(RESIZE_SETTLE_MS)
+
+    expect(sent).toEqual(['1100x1800'])
+    expect(skips).toEqual([])
   })
 
   it('drops pending requests on dispose', () => {

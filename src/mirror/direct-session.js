@@ -32,9 +32,13 @@ function viewportDisplay() {
  *   onAudioPacket: (packet: unknown) => void,
  *   onEnded: () => void,
  *   onReflowStart?: (size: { width: number, height: number }) => void,
+ *   onReflowAbort?: () => void,
  * }} handlers
  */
-export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket, onEnded, onReflowStart }) {
+export async function startSession(
+  info,
+  { onMeta, onVideoPacket, onAudioPacket, onEnded, onReflowStart, onReflowAbort },
+) {
   current.info = info;
   const adb = await acquireDeviceAdb(getServerClient(), info.serial);
   const { client, display: initialDisplay } = await startScrcpy({
@@ -129,12 +133,11 @@ export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket,
   // `resize` 事件 + innerWidth：macOS 上窗口被系统缩放/吸附时，resize 事件
   // 可能滞后甚至不触发，innerWidth 会读到旧值，导致宽度不跟随。
   const follower = createDisplayFollower({
-    // 真正要下发 resizeDisplay 的那一刻才通知页面盖遮罩：debounce 之后拖拽期间根本不发，
-    // 提前盖等于把一段什么都没发生的时间糊在用户脸上。
-    send: (size) => {
-      onReflowStart?.(size);
-      return controller?.resizeDisplay({ width: size.width, height: size.height });
-    },
+    // 手一拖就通知页面盖遮罩（`onIntent` 每次尺寸请求都回调），停手合并完才真正下发；
+    // 如果合并下来发现尺寸没变（拖出去又拖回来），用 `onSkip` 让页面把遮罩撤掉。
+    onIntent: (size) => onReflowStart?.(size),
+    onSkip: () => onReflowAbort?.(),
+    send: (size) => controller?.resizeDisplay({ width: size.width, height: size.height }),
   });
   follower.seed(initialDisplay);
   current.follower = follower;

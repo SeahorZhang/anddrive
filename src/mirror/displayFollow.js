@@ -35,6 +35,8 @@ export function displaySizeKey(size) {
 /**
  * @param {{
  *   send: (size: { width: number, height: number }) => unknown,
+ *   onIntent?: (size: { width: number, height: number }) => void,
+ *   onSkip?: () => void,
  *   settleMs?: number,
  *   setTimer?: (callback: () => void, ms: number) => unknown,
  *   clearTimer?: (handle: unknown) => void,
@@ -42,6 +44,8 @@ export function displaySizeKey(size) {
  */
 export function createDisplayFollower({
   send,
+  onIntent,
+  onSkip,
   settleMs = RESIZE_SETTLE_MS,
   setTimer = (callback, ms) => setTimeout(callback, ms),
   clearTimer = (handle) => clearTimeout(handle),
@@ -56,10 +60,16 @@ export function createDisplayFollower({
     timer = null;
     const size = pending;
     pending = null;
-    if (!size || size.width <= 0 || size.height <= 0) return;
+    if (!size || size.width <= 0 || size.height <= 0) {
+      onSkip?.();
+      return;
+    }
     const key = displaySizeKey(size);
     // 尺寸没变就什么都不做：重复下发会让服务端白走一次 resize + capture reset。
-    if (key === lastSent) return;
+    if (key === lastSent) {
+      onSkip?.();
+      return;
+    }
     lastSent = key;
     try {
       Promise.resolve(send(size)).catch(() => {
@@ -84,10 +94,15 @@ export function createDisplayFollower({
     /**
      * 请求把虚拟显示调整为该尺寸；与已下发尺寸相同则丢弃。每次请求都把定时器往后推，
      * 所以**拖拽过程中一条都不发**，只有尺寸停住 `settleMs` 后才发最后那个值。
+     *
+     * 但「要重排了」这件事在第一次请求时就该让页面知道（遮罩要在手一拖就盖上，
+     * 不是停手才盖），所以每次请求都回调 `onIntent`；合并完发现尺寸其实没变（拖出去
+     * 又拖回来）时回调 `onSkip`，页面据此撤罩。
      * @param {{ width: number, height: number }} size
      */
     request(size) {
       pending = size;
+      onIntent?.(size);
       // 与 throttle（第一次变化起计时、期间只发一次）不同：这里每来一次变化就重新计时。
       if (timer !== null) clearTimer(timer);
       timer = setTimer(flush, settleMs);

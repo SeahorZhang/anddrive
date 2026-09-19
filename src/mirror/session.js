@@ -22,7 +22,7 @@ let player = null;
  *   video: (packet) => Promise<void> | void,
  *   audio: (packet) => void,
  *   audioStats: (stats: Record<string, number>) => void,
- *   hooks: { onMeta?: (meta) => void, onAudioError?: (message: string) => void, onReflowStart?: (size) => void },
+ *   hooks: { onMeta?: (meta) => void, onAudioError?: (message: string) => void, onReflowStart?: (size) => void, onReflowAbort?: () => void },
  * }} apply App 侧管线接线
  */
 export async function bootstrap(apply) {
@@ -44,6 +44,7 @@ export async function bootstrap(apply) {
     },
     onMeta: (meta) => apply.hooks.onMeta?.(meta),
     onReflowStart: (size) => apply.hooks.onReflowStart?.(size),
+    onReflowAbort: () => apply.hooks.onReflowAbort?.(),
     onEnded: (detail) => {
       // server 端自发退出（设备断开 / server 异常）。
       if (!window.__anddriveMirrorId) return
