@@ -54,6 +54,9 @@ function createMirrorWindow(session, prefs) {
     show: false,
     alwaysOnTop: prefs.alwaysOnTop,
     fullscreen: prefs.fullscreen,
+    // Electron 里只要显式传了 `fullscreen`（未勾「全屏启动」时就是 false），窗口就被
+    // 标成不可全屏，macOS 绿色按钮随之退化成 zoom（最大化）。显式打开它。
+    fullscreenable: true,
     // 直连形态：Video/Control/audio 在渲染层直连 adb，需要 node 的 ipc 与
     // 同源 socket；自定义页面无第三方内容，安全边界等同于主进程代码。
     webPreferences: {
