@@ -95,3 +95,40 @@ export function resolveRuntimePrefs(input) {
     turnScreenOff: config.screenMode === "turnOff",
   };
 }
+
+/** 镜像窗口长边上限：再大就超出笔电可用高度，且 1dp = 1 CSS px 下字会跟着变大。 */
+const MIRROR_WINDOW_MAX_EDGE = 1000;
+/** 从桌面可用区域里留出的边距（菜单栏、Dock、以及还能拖动的手感）。 */
+const MIRROR_WINDOW_MARGIN = 80;
+/** 查不到设备分辨率时的兜底比例（常见直板机 9:19.5）。 */
+const MIRROR_WINDOW_FALLBACK_RATIO = 9 / 19.5;
+
+/**
+ * 镜像窗口的初始尺寸 = **设备屏幕的宽高比**（用户 2026-09-19 要求「和手机一样的宽高」）。
+ *
+ * 形状可以随便选是因为大屏配方已经把 app 送进 pad：竖形显示上它排成双列 feed、横形显示上
+ * 排成宽布局，两种都 `mBounds == mMaxBounds`（真机量过 `1200x2608/160` 与 `2560x1440/320`），
+ * 所以窗口形状和设备一致也不会出现黑边。
+ * @param {{ width: number, height: number } | null | undefined} screenSize 设备物理分辨率
+ * @param {{ width: number, height: number }} workArea 桌面可用区域（CSS px）
+ * @returns {{ width: number, height: number }}
+ */
+export function mirrorWindowBounds(screenSize, workArea) {
+  const valid =
+    screenSize && Number.isFinite(screenSize.width) && Number.isFinite(screenSize.height)
+      ? screenSize.width > 0 && screenSize.height > 0
+      : false;
+  const ratio = valid ? screenSize.width / screenSize.height : MIRROR_WINDOW_FALLBACK_RATIO;
+  const portrait = ratio <= 1;
+  const longEdge = Math.max(
+    320,
+    Math.min(
+      (portrait ? workArea.height : workArea.width) - MIRROR_WINDOW_MARGIN,
+      MIRROR_WINDOW_MAX_EDGE,
+    ),
+  );
+  const shortEdge = Math.max(280, Math.round(longEdge * (portrait ? ratio : 1 / ratio)));
+  return portrait
+    ? { width: shortEdge, height: Math.round(longEdge) }
+    : { width: Math.round(longEdge), height: shortEdge };
+}

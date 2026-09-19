@@ -902,6 +902,21 @@ export async function overrideDisplayGeometry(serial, { width, height, dpi }) {
   return true;
 }
 
+/**
+ * 设备物理分辨率（`wm size` 的 `Physical size:` 行），用来决定镜像窗口的初始形状。
+ * 取不到就返回 null，调用方走兜底比例。
+ * @param {string} serial
+ * @returns {Promise<{ width: number, height: number } | null>}
+ */
+export async function getPhysicalScreenSize(serial) {
+  assertSerial(serial);
+  await ensureServer();
+  const { stdout, stderr } = await adbExecSafe("-s", serial, "shell", "wm size");
+  const match = /Physical size:\s*(\d+)x(\d+)/.exec(`${stdout}\n${stderr}`);
+  if (!match) return null;
+  return { width: Number(match[1]), height: Number(match[2]) };
+}
+
 /** 还原物理屏（`wm size reset` 会连带把 density 一起回到物理值）。 */
 export async function resetDisplayGeometry(serial) {
   assertSerial(serial);

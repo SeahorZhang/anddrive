@@ -11,6 +11,7 @@ const {
   parseBitRate,
   resolveNativeCodec,
   resolveRuntimePrefs,
+  mirrorWindowBounds,
 } = await import('../../electron/mirror/options.js')
 
 describe('parseBitRate', () => {
@@ -98,5 +99,35 @@ describe('resolveRuntimePrefs', () => {
       fullscreen: false,
       turnScreenOff: false,
     })
+  })
+})
+
+describe('mirrorWindowBounds', () => {
+  it('竖形手机：长边取高度，短边按设备宽高比缩', () => {
+    // 1200x2608 的 Redmi，可用区域 1440x875 → 高 = 875-80 = 795，宽 = 795×(1200/2608) ≈ 366
+    expect(mirrorWindowBounds({ width: 1200, height: 2608 }, { width: 1440, height: 875 })).toEqual({
+      width: 366,
+      height: 795,
+    })
+  })
+
+  it('横形设备：长边取宽度，并受长边上限约束', () => {
+    // 长边封顶 1000（再大超出笔电），高 = 1000 / (2608/1200) ≈ 460
+    expect(mirrorWindowBounds({ width: 2608, height: 1200 }, { width: 2560, height: 1400 })).toEqual({
+      width: 1000,
+      height: 460,
+    })
+  })
+
+  it('拿不到设备分辨率时走兜底比例，不抛错', () => {
+    const bounds = mirrorWindowBounds(null, { width: 1440, height: 875 })
+    expect(bounds.height).toBe(795)
+    expect(bounds.width).toBe(Math.round(795 * (9 / 19.5)))
+  })
+
+  it('小屏幕上长边被可用区域夹住，且不低于最小边', () => {
+    const small = mirrorWindowBounds({ width: 1200, height: 2608 }, { width: 700, height: 500 })
+    expect(small.height).toBe(420)
+    expect(small.width).toBeGreaterThanOrEqual(280)
   })
 })

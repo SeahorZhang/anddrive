@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { BrowserWindow, ipcMain, screen } from "electron";
 import path from "node:path";
 import { CHANNELS } from "../ipcContract.js";
 import {
@@ -9,11 +9,12 @@ import {
   overrideDisplayGeometry,
   resetDisplayGeometry,
   forceStopApp,
+  getPhysicalScreenSize,
   scrcpyServerPath,
   setLargeScreenCompat,
 } from "../adb.js";
 import { createPadMode } from "./padMode.js";
-import { resolveRuntimePrefs } from "./options.js";
+import { mirrorWindowBounds, resolveRuntimePrefs } from "./options.js";
 
 // ---------------------------------------------------------------------------
 // 自研镜像会话（mirror，渲染层直连形态）
@@ -67,15 +68,15 @@ function preloadPath() {
   return path.join(process.env.APP_ROOT, "dist-electron/preload.mjs");
 }
 
-function createMirrorWindow(session, prefs) {
+function createMirrorWindow(session, prefs, bounds) {
   const win = new BrowserWindow({
     title: session.label || session.packageName,
-    // 大屏方式打开：镜像只有这一种形态，窗口按 16:9 横向起，pad 布局的画面与窗口同比例、
-    // 不需要在窗口里给横屏画面留黑边。
-    width: 1280,
-    height: 720,
-    minWidth: 480,
-    minHeight: 320,
+    // 初始形状跟设备屏幕一致（用户 2026-09-19 要求）：pad 状态下的 app 在竖形显示上排双列、
+    // 横形显示上排宽布局，两种都铺满整帧，所以窗口照手机比例开也不会有黑边。
+    width: bounds.width,
+    height: bounds.height,
+    minWidth: 280,
+    minHeight: 280,
     titleBarStyle: "hiddenInset",
     backgroundColor: "#000000",
     show: false,
@@ -146,6 +147,9 @@ export async function startMirrorSession(request) {
   await ensureServer();
   const serverPath = scrcpyServerPath();
   const prefs = resolveRuntimePrefs(request?.config);
+  // 窗口形状按设备分辨率算；查不到就走兜底比例，不值得为它挡住开会话。
+  const screenSize = await getPhysicalScreenSize(serial).catch(() => null);
+  const bounds = mirrorWindowBounds(screenSize, screen.getPrimaryDisplay().workAreaSize);
 
   /** @type {MirrorSession} */
   const session = {
@@ -163,7 +167,7 @@ export async function startMirrorSession(request) {
   sessions.set(session.id, session);
 
   try {
-    session.win = createMirrorWindow(session, prefs);
+    session.win = createMirrorWindow(session, prefs, bounds);
   } catch (error) {
     sessions.delete(session.id);
     throw error;

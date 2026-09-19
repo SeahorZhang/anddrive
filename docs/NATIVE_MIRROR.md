@@ -76,7 +76,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 
 - [x] **跟随请求去重**（2026-09-19 完成）：启动阶段不再补发与 `newDisplay` 完全相同的 `resizeDisplay`，窗口拖动期间的多次变化合并为一次（`src/mirror/displayFollow.js` + `tests/mirror/displayFollow.test.js`）
 - [x] **虚拟显示比例吸附（已回退）**（2026-09-19 试错）：曾把显示尺寸吸附到横 16:9 / 竖 9:16 的内接盒，当天回退。黑边的真正变量不是比例，而是 **Android 的 600dp 大屏门槛**：`smallestWidth ≥ 600dp` 时系统判定大屏并**忽略 app 的方向锁**，锁方向的 app 走 size-compat 被 letterbox 在帧内（双层黑）；`sw < 600dp` 时锁被尊重，`FLAG_ROTATES_WITH_CONTENT` 让显示跟着 app 转，app 填满帧。实测（Redmi 2509FPN0BC / Android 17 / 抖音）：`1920x1080/320`(sw540) 与 `3424x1926/640`(sw481) → 转竖填满；`3424x1926/320`(sw963) 与 `1920x1080/160`(sw1080) → 保持横并 letterbox。`flexDisplay` 对该行为无影响（A/B 过）
-- [x] **大屏（pad）模式：镜像的唯一形态**（2026-09-19 落地）：窗口固定按 1280x720 横向打开，会话建立前由 `electron/mirror/padMode.js` 跑完这套真机量出来的配方，缺一步都不成立：
+- [x] **大屏（pad）模式：镜像的唯一形态**（2026-09-19 落地）：窗口初始形状 = 设备屏幕宽高比（`mirrorWindowBounds`，长边封顶 1000 CSS px 并夹在桌面可用区域内；查不到分辨率按 9:19.5 兜底）。pad 状态下的 app 在竖形显示上排双列 feed、横形显示上排宽布局，两种都 `mBounds == mMaxBounds`（真机量过 `1200x2608/160` 与 `2560x1440/320`），所以窗口照手机比例开也不会有黑边。会话建立前由 `electron/mirror/padMode.js` 跑完这套配方，缺一步都不成立：
   1. `am compat enable OVERRIDE_ANY_ORIENTATION_TO_USER <pkg>`（Android 16 大屏方向 change，id `310816437`；这台 HyperOS 把 `dumpsys compat` 改名成了 `platform_compat`，change 名用 `dumpsys platform_compat -a` 列）。**这条只在物理屏生效** —— 单独打在 scrcpy 虚拟显示上无效（先打开关再冷启动 / 先冷启动再打开关 / `user_rotation=1` / 物理屏同时改大屏，四种顺序全部量到 `sw589dp w589dp port` 竖条）。
   2. `wm size 1920x1080` + `wm density 160` 把**物理屏**临时改成横形大屏（sw=1080dp）。
   3. `am force-stop` + `monkey -c LAUNCHER` 重启 app —— compat 是**进程启动时**读的，热着的进程不会重读。
