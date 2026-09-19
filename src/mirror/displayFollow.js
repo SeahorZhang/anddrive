@@ -9,12 +9,18 @@
 //   决定**。而每次 resize 都是一次配置变更，应用（例如抖音）会重新走一遍方向
 //   决策 —— 于是画面看起来「旋转了几下」。
 //
-// 结论：客户端只在「窗口对应的显示尺寸真的变了」时下发一次请求，并把短时间内的
-// 多次变化合并成一次（服务端另有 300ms 去抖，见 DisplayResizeDebouncer）。
+// 结论：客户端只在「窗口对应的显示尺寸真的变了」时下发一次请求，并且**等尺寸停下来
+// 再发**（debounce，不是 throttle）。
+//
+// 为什么必须 debounce：真机量过一次连续拖宽（每 150ms 发一步，920→1880 宽），
+// 服务端的 300ms 去抖并没有把中间值合掉 —— 每一步都真的改了显示，于是 app 每一步都
+// 重新决定一次布局：`≤1560x1800` 时它跟着填满，到 `1720x1800` 翻成固定比例竖条 + 左右
+// 黑边，再到 `1880x1800` 又重排一次。表现出来就是用户说的「拖一下宽度画面转好几次」。
+// 改成停手后才发，一次拖拽就只剩最后一次重排。
 // ---------------------------------------------------------------------------
 
-/** 合并窗口：窗口拖动时把短时间内的多次尺寸变化并成一次请求。 */
-export const RESIZE_COALESCE_MS = 150;
+/** 尺寸稳定窗口：这段时间内没有新变化才真正下发（拖拽期间会被不断往后推）。 */
+export const RESIZE_SETTLE_MS = 250;
 
 /**
  * 尺寸指纹，用于判断「与上次下发的尺寸是否相同」。
@@ -29,14 +35,14 @@ export function displaySizeKey(size) {
 /**
  * @param {{
  *   send: (size: { width: number, height: number }) => unknown,
- *   coalesceMs?: number,
+ *   settleMs?: number,
  *   setTimer?: (callback: () => void, ms: number) => unknown,
  *   clearTimer?: (handle: unknown) => void,
  * }} options
  */
 export function createDisplayFollower({
   send,
-  coalesceMs = RESIZE_COALESCE_MS,
+  settleMs = RESIZE_SETTLE_MS,
   setTimer = (callback, ms) => setTimeout(callback, ms),
   clearTimer = (handle) => clearTimeout(handle),
 }) {
@@ -76,14 +82,15 @@ export function createDisplayFollower({
     },
 
     /**
-     * 请求把虚拟显示调整为该尺寸；与已下发尺寸相同则丢弃，多次请求在合并窗口内
-     * 只下发最后一次。
+     * 请求把虚拟显示调整为该尺寸；与已下发尺寸相同则丢弃。每次请求都把定时器往后推，
+     * 所以**拖拽过程中一条都不发**，只有尺寸停住 `settleMs` 后才发最后那个值。
      * @param {{ width: number, height: number }} size
      */
     request(size) {
       pending = size;
-      if (timer !== null) return;
-      timer = setTimer(flush, coalesceMs);
+      // 与 throttle（第一次变化起计时、期间只发一次）不同：这里每来一次变化就重新计时。
+      if (timer !== null) clearTimer(timer);
+      timer = setTimer(flush, settleMs);
     },
 
     /** 会话结束：丢弃待发请求。 */
@@ -98,4 +105,17 @@ export function createDisplayFollower({
       return lastSent;
     },
   };
+}
+
+/**
+ * 窗口比例与当前画面比例差多少才算「需要重排虚拟显示」。
+ * 用在拖拽遮罩上：小于这个容差的抖动不值得把画面盖一次。
+ * @param {number} windowRatio 窗口宽 / 高
+ * @param {number} frameRatio 当前画面宽 / 高，0/NaN 表示还不知道
+ * @param {number} [tolerance] 相对容差
+ */
+export function aspectDiffers(windowRatio, frameRatio, tolerance = 0.02) {
+  if (!Number.isFinite(windowRatio) || !Number.isFinite(frameRatio)) return false;
+  if (windowRatio <= 0 || frameRatio <= 0) return false;
+  return Math.abs(windowRatio / frameRatio - 1) > tolerance;
 }

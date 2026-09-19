@@ -47,9 +47,10 @@ async function padMode(action, info) {
  *   onVideoPacket: (packet: unknown) => Promise<void> | void,
  *   onAudioPacket: (packet: unknown) => void,
  *   onEnded: () => void,
+ *   onReflowStart?: (size: { width: number, height: number }) => void,
  * }} handlers
  */
-export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket, onEnded }) {
+export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket, onEnded, onReflowStart }) {
   // 大屏配方先跑：主进程会打开 compat 开关、把物理屏临时改成横形大屏、重启目标 app
   // 并等它自己进 pad 横屏。**必须在建虚拟显示之前**做完，否则 app 会以竖屏锁起来，
   // 之后搬到宽显示只会被 size-compat 压成竖条（真机量过四种顺序）。
@@ -151,7 +152,12 @@ export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket,
   // `resize` 事件 + innerWidth：macOS 上窗口被系统缩放/吸附时，resize 事件
   // 可能滞后甚至不触发，innerWidth 会读到旧值，导致宽度不跟随。
   const follower = createDisplayFollower({
-    send: (size) => controller?.resizeDisplay({ width: size.width, height: size.height }),
+    // 真正要下发 resizeDisplay 的那一刻才通知页面盖遮罩：debounce 之后拖拽期间根本不发，
+    // 提前盖等于把一段什么都没发生的时间糊在用户脸上。
+    send: (size) => {
+      onReflowStart?.(size);
+      return controller?.resizeDisplay({ width: size.width, height: size.height });
+    },
   });
   follower.seed(initialDisplay);
   current.follower = follower;

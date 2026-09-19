@@ -2,6 +2,7 @@
 import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { useMirrorInput } from './useMirrorInput.js'
 import { bootstrap, dispose as disposeSession } from './session.js'
+import { aspectDiffers } from './displayFollow.js'
 
 // 镜像窗口（渲染层直连）：adb/scrcpy 全在本进程内由 Tango 官方库建立，
 // 视频包直接写 WebCodecs 解码器、音频包直接播放，主进程不参与帧路径。
@@ -77,11 +78,55 @@ function attachCanvas() {
  * 视频宽高比与窗口一致，此时等价于铺满；拖动过程中也能避免拉伸变形。
  * 指针反算统一按「canvas 实际显示矩形」独立换算 x/y（见 useMirrorInput）。
  */
+/**
+ * 拖窗口时的遮罩：设备侧每次重排都会 reset 采集、画面会跳/翻，所以在那一刻盖上。
+ * 出现得快（90ms）、消失得慢（320ms 渐变），元素常驻只切 opacity。
+ */
+const covering = ref(false)
+/** 画面尺寸连续这么久不再变化，才认为设备重排完了（它往往要变好几下：先翻方向再改尺寸）。 */
+const COVER_UNTIL_STABLE_MS = 420
+/** 兜底：设备一直没回传新尺寸（会话断了等）也不能把画面一直盖着。 */
+const COVER_MAX_MS = 3000
+let coverTimer = null
+let coverDeadline = 0
+/** 当前画面比例，由 syncCanvasBox 从解码器尺寸刷新。 */
+let frameRatio = 0
+
+function endCover() {
+  coverTimer = null
+  covering.value = false
+}
+
+/** 统一走一个定时器：短计时不能越过总兜底线。 */
+function armCover(ms) {
+  if (coverTimer) clearTimeout(coverTimer)
+  const wait = Math.min(ms, Math.max(0, coverDeadline - Date.now()))
+  coverTimer = setTimeout(endCover, wait)
+}
+
+/** 真正把 `resizeDisplay` 发出去的那一刻才盖（拖拽期间 debounce 还没发，提前盖没意义）。 */
+function coverForReflow(target) {
+  if (!decoder.value || !target) return
+  // 同比例的纯缩放不会让 app 重新决定方向，不值得盖一次。
+  if (!aspectDiffers(target.width / target.height, frameRatio)) return
+  covering.value = true
+  coverDeadline = Date.now() + COVER_MAX_MS
+  armCover(COVER_MAX_MS)
+}
+
+function onFrameSizeChanged() {
+  hud.vidChanges += 1
+  syncCanvasBox()
+  if (!covering.value) return
+  armCover(COVER_UNTIL_STABLE_MS)
+}
+
 function syncCanvasBox() {
   const host = canvasHost.value
   const canvas = renderer.value?.canvas
   if (!host || !canvas) return
   const size = getVideoSize()
+  if (size?.width && size?.height) frameRatio = size.width / size.height
   hud.win = `${host.clientWidth}x${host.clientHeight}`
   hud.vid = size ? `${size.width}x${size.height}` : '-'
   if (!size?.width || !size?.height) {
@@ -118,10 +163,7 @@ function startDecoder(info) {
     flushPending()
     // 视频尺寸变化次数：虚拟显示被重排/应用重新取向都会让它增长，
     // 用来判断「画面旋转几下」是客户端 resize 触发的还是设备侧应用自己的行为。
-    disposeSizeChanged = videoDecoder.sizeChanged(() => {
-      hud.vidChanges += 1
-      syncCanvasBox()
-    })
+    disposeSizeChanged = videoDecoder.sizeChanged(onFrameSizeChanged)
     attachCanvas()
     status.value = ''
 
@@ -209,6 +251,7 @@ async function booted() {
       hud.audioTime = time ?? 0
     },
     hooks: {
+      onReflowStart: coverForReflow,
       onMeta: (info) => {
         meta.value = info
         startDecoder(info)
@@ -252,6 +295,17 @@ onBeforeUnmount(() => {
     <div ref="canvasHost" class="absolute inset-0 flex items-center justify-center overflow-hidden bg-black"
       style="touch-action: none"></div>
 
+    <!-- 拖窗口时的遮罩：设备侧每次重排都会 reset 采集、画面会跳/翻，所以盖上这层。
+         出现得快（90ms）、消失得慢（320ms 渐变），免得「啪」一下黑屏又「啪」一下揭开。
+         一直挂在 DOM 上只切 opacity，这样才有淡出；不透明才盖得住闪烁，
+         底色用中心偏亮的径向渐变，比纯黑柔和。 -->
+    <div class="mirror-cover" :class="{ 'is-shown': covering }">
+      <div class="mirror-cover__pill">
+        <span class="mirror-cover__spinner" aria-hidden="true"></span>
+        <span class="mirror-cover__text">调整画面尺寸…</span>
+      </div>
+    </div>
+
     <div class="pointer-events-auto absolute inset-x-0 top-0 z-10 h-6" style="-webkit-app-region: drag"></div>
 
     <p v-if="status"
@@ -271,3 +325,62 @@ onBeforeUnmount(() => {
     </div>
   </div>
 </template>
+
+<style scoped>
+.mirror-cover {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: radial-gradient(115% 85% at 50% 42%, #17181a 0%, #0b0b0c 55%, #000 100%);
+  opacity: 0;
+  transition: opacity 320ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.mirror-cover.is-shown {
+  opacity: 1;
+  transition-duration: 90ms;
+}
+
+.mirror-cover__pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px 7px 11px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 6%);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 9%), 0 8px 24px rgb(0 0 0 / 45%);
+}
+
+.mirror-cover__text {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: rgb(255 255 255 / 58%);
+}
+
+.mirror-cover__spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid rgb(255 255 255 / 18%);
+  border-top-color: rgb(255 255 255 / 72%);
+  animation: mirror-cover-spin 720ms linear infinite;
+}
+
+@keyframes mirror-cover-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 系统开了「减少动态效果」就不转圈，只留文字。 */
+@media (prefers-reduced-motion: reduce) {
+  .mirror-cover__spinner {
+    animation: none;
+    border-top-color: rgb(255 255 255 / 18%);
+  }
+}
+</style>

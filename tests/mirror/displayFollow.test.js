@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { RESIZE_COALESCE_MS, createDisplayFollower, displaySizeKey } from '../../src/mirror/displayFollow.js'
+import { RESIZE_SETTLE_MS, aspectDiffers, createDisplayFollower, displaySizeKey } from '../../src/mirror/displayFollow.js'
 
 /** 让真实定时器 + promise 回调跑完（coalesceMs 为 0 的场景用）。 */
 function settle() {
@@ -8,7 +8,7 @@ function settle() {
 }
 
 /** 手动时钟 + 定时器，便于断言合并窗口。 */
-function createHarness({ coalesceMs = RESIZE_COALESCE_MS } = {}) {
+function createHarness({ settleMs = RESIZE_SETTLE_MS } = {}) {
   const sent = []
   const timers = new Map()
   let seq = 0
@@ -18,7 +18,7 @@ function createHarness({ coalesceMs = RESIZE_COALESCE_MS } = {}) {
     send: (size) => {
       sent.push(`${size.width}x${size.height}`)
     },
-    coalesceMs,
+    settleMs,
     setTimer: (callback, ms) => {
       const id = ++seq
       timers.set(id, { callback, at: clock + ms })
@@ -58,9 +58,9 @@ describe('createDisplayFollower', () => {
 
     // 启动阶段：显式跟随请求 + ResizeObserver 首次回调，尺寸都与 seed 相同。
     follower.request({ width: 920, height: 1800 })
-    advance(RESIZE_COALESCE_MS)
+    advance(RESIZE_SETTLE_MS)
     follower.request({ width: 920, height: 1800 })
-    advance(RESIZE_COALESCE_MS)
+    advance(RESIZE_SETTLE_MS)
 
     expect(sent).toEqual([])
     expect(follower.lastSentKey).toBe('920x1800')
@@ -72,7 +72,7 @@ describe('createDisplayFollower', () => {
 
     follower.request({ width: 1000, height: 1800 })
     expect(sent).toEqual([]) // 合并窗口内不下发
-    advance(RESIZE_COALESCE_MS)
+    advance(RESIZE_SETTLE_MS)
 
     expect(sent).toEqual(['1000x1800'])
     expect(follower.lastSentKey).toBe('1000x1800')
@@ -85,17 +85,33 @@ describe('createDisplayFollower', () => {
     follower.request({ width: 940, height: 1800 })
     follower.request({ width: 980, height: 1800 })
     follower.request({ width: 1020, height: 1800 })
-    advance(RESIZE_COALESCE_MS)
+    advance(RESIZE_SETTLE_MS)
 
     expect(sent).toEqual(['1020x1800'])
+  })
+
+  it('拖拽途中持续变化时一条都不发，停手后才发（debounce 而非 throttle）', () => {
+    const { follower, sent, advance } = createHarness()
+    follower.seed({ width: 920, height: 1800 })
+
+    // 每 100ms 拖一次、共 8 次：都小于稳定窗口 250ms，所以全程不该下发。
+    for (let i = 1; i <= 8; i += 1) {
+      follower.request({ width: 920 + i * 120, height: 1800 })
+      advance(100)
+    }
+    expect(sent).toEqual([])
+
+    // 停手：超过稳定窗口后只发最终尺寸一次。
+    advance(RESIZE_SETTLE_MS)
+    expect(sent).toEqual(['1880x1800'])
   })
 
   it('skips a duplicate of the last sent size', () => {
     const { follower, sent, advance } = createHarness()
     follower.request({ width: 920, height: 1800 })
-    advance(RESIZE_COALESCE_MS)
+    advance(RESIZE_SETTLE_MS)
     follower.request({ width: 920, height: 1800 })
-    advance(RESIZE_COALESCE_MS)
+    advance(RESIZE_SETTLE_MS)
 
     expect(sent).toEqual(['920x1800'])
   })
@@ -108,7 +124,7 @@ describe('createDisplayFollower', () => {
         if (sent.length === 1) return Promise.reject(new Error('socket closed'))
         return undefined
       },
-      coalesceMs: 0,
+      settleMs: 0,
     })
 
     follower.request({ width: 0, height: 0 })
@@ -133,5 +149,20 @@ describe('createDisplayFollower', () => {
     expect(pendingTimers()).toBe(0)
     advance(1000)
     expect(sent).toEqual([])
+  })
+})
+
+describe('aspectDiffers', () => {
+  it('比例明显变了才算需要重排', () => {
+    expect(aspectDiffers(1.6, 0.5)).toBe(true)
+    expect(aspectDiffers(0.5, 0.5)).toBe(false)
+    expect(aspectDiffers(0.505, 0.5)).toBe(false) // 容差内的抖动不值得盖一次
+    expect(aspectDiffers(0.56, 0.5)).toBe(true)
+  })
+
+  it('未知比例不触发', () => {
+    expect(aspectDiffers(0, 0.5)).toBe(false)
+    expect(aspectDiffers(0.5, 0)).toBe(false)
+    expect(aspectDiffers(NaN, 0.5)).toBe(false)
   })
 })
