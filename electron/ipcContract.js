@@ -36,6 +36,10 @@ export const CHANNELS = {
   mirrorExit: 'mirror:exit',
   /** 镜像渲染层 → 主进程的状态上报（ready / exit）。 */
   mirrorState: 'mirror:state',
+  /** 镜像 → 设备：目标应用当前在哪个 root task / 哪块显示上。 */
+  mirrorAppTask: 'mirror:appTask',
+  /** 镜像 → 设备：把应用的任务搬到本窗口的虚拟显示上（不重启应用）。 */
+  mirrorMoveTask: 'mirror:moveTask',
 
   /** macOS 系统权限（electron/permissions.js）。 */
   permissionsStatus: 'permissions:getStatus',

@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, screen } from "electron";
 import path from "node:path";
 import { CHANNELS } from "../ipcContract.js";
 import { ensureServer, getPhysicalScreenSize, onDeviceTeardown, scrcpyServerPath } from "../adb.js";
+import { findAppSession } from "./appSession.js";
 import { mirrorWindowBounds, resolveRuntimePrefs } from "./options.js";
 
 // ---------------------------------------------------------------------------
@@ -110,6 +111,7 @@ function notifyExit(payload) {
 
 /**
  * 启动一个原生镜像窗口；连接/解码由渲染层完成，主进程轻手笔画。
+ * 同一台设备上的同一个应用只开一个窗口：已经有了就把它唤到前台（见 `appSession.js`）。
  * @param {{ serial: string, packageName: string, label?: string, config?: unknown }} request
  */
 export async function startMirrorSession(request) {
@@ -118,6 +120,18 @@ export async function startMirrorSession(request) {
   if (!serial) throw new Error("设备序列号无效");
   if (!packageName) throw new Error("应用包名无效");
   const label = typeof request?.label === "string" && request.label.trim() ? request.label.trim() : packageName;
+
+  const existing = findAppSession(sessions.values(), { serial, packageName });
+  if (existing) {
+    // 再开一块虚拟显示会把应用从旧显示上搬走（旧窗口只剩启动器），所以这里直接复用。
+    try {
+      focusMirrorSession(existing.id);
+      return { ...snapshot(existing), reused: true };
+    } catch {
+      // 窗口已经没了但记录还在（关窗事件还没跑完）：往下正常新建。
+    }
+  }
+
   await ensureServer();
   const serverPath = scrcpyServerPath();
   const prefs = resolveRuntimePrefs(request?.config);
@@ -221,7 +235,9 @@ ipcMain.on(CHANNELS.mirrorState, (_event, payload) => {
   } else if (payload.kind === "exit") {
     notifyExit({ ...payload, label: session.label, packageName: session.packageName, win: session.win });
     sessions.delete(session.id);
-  }
+    // 会话已经没了（设备断开 / server 挂了），归属要一起放手。这里不 release 的话，
+    // 窗口随后 closed → stopMirrorSession 会因为记录已删而什么都做不到。
+    }
 });
 
 // 断开设备或退出时，结束对应设备的自研镜像会话（直接关窗口）。

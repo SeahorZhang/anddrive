@@ -91,6 +91,12 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
     还剩一条**未验**的两全路子：那排字也可能是按**物理屏 density**（恒 480）算的而不是真写死 —— 若是，开会话时临时抬 `wm density` 就能撑大它同时保住 2 倍像素。这条要手机处于解锁状态才能测（设备有锁屏密码，adb 的 swipe 解不开）。
   - 未验：只有竖屏排版、没有宽布局的 app 在横形显示上会怎样（大概是被拉成横屏后排版变形）；真机反馈后再决定要不要按包豁免。
   - 已回退的历史结论（2026-09-19 记录，2026-09-20 推翻）：当时判断「Android 16 只认物理屏为大屏，所以 compat 只在物理屏生效、虚拟显示拿不到横屏」。那是对**没有** `ignoreActivitySizeRestrictions` 的显示做的四种顺序测量得出的，结论只适用于官方 scrcpy 的创建方式。
+- [x] **同一设备 + 同一应用只开一个镜像窗口**（2026-09-20 完成）：一个会话 = 一块虚拟显示，同一应用开两个窗口时后建的那块会把应用搬走（真机量过：`startApp` 之后应用窗口从 138 挪到 139，**138 上只剩 MIUI 的 `SecondaryDisplayLauncher`**），先开的窗口变成一块没人用的启动器镜像 —— 就是「两个窗口抢同一条画面」。现在 `startMirrorSession` 先用 `findAppSession`（`electron/mirror/appSession.js`，纯逻辑 + 单测）按「设备 + 包名」查已有会话，命中就 `focusMirrorSession` 把它唤到前台并返回 `reused: true`，不再建第二个窗口；窗口记录还在但窗口已销毁时 `focus` 抛错，就照常新建。
+  - 另一条路（参照 app 的「直接把同一块显示看走」）：**采集**别人的虚拟显示是可行的（AndroMeld 就能直接显示我们这块显示上的画面），做不到的只有 **resize 与销毁** —— `VirtualDisplay` 与创建它的进程绑死，只有属主办得到。所以多窗口共览一块显示仍然需要一个常驻持有者，这一档暂不做。
+- [x] **无缝接回被别处拿走的应用**（2026-09-20 完成）：应用可能挂在别的显示上 —— 被另一个投屏软件搬走，或本来就在手机主屏上用着。这种时候 `startApp` 只把它留在原处（真机量过 `am start --display <id>` 对**已存在的 task 不改显示**），本窗口就只剩启动器画面。现在的做法是**搬任务、不重启**：`adb shell am display move-stack <taskId> <displayId>`（`electron/adb.js` 的 `moveAppTaskToDisplay`），taskId/当前显示从 `getAppTask` 读（`dumpsys window windows` 里应用窗口的 `mDisplayId=.. taskId=..`），本会话的显示 id 从 server stdout 的 `New display: WxH/D (id=N)` 解析（`direct-session.js` 的 `current.displayId`，stdout 是异步到的所以 `ensureAppHere` 会等它并重试 4×400ms）。
+  - 真机验证（抖音被 AndroMeld 的显示 118 占着时开我们的镜像）：pid 30912 → **30912 不变**、taskId 22409 不变，窗口从 118 挪到我们的 147，`mBounds=Rect(0,0-812,1764)` 铺满 —— 进程与页面状态都留着，不是重新启动。
+  - 手动入口：镜像窗口右上角「接回画面」（同一个 `reclaimApp()`，带一次性提示「已接回画面 / 画面已经在这个窗口 / 失败原因」）。
+- [x] **镜像窗口「重新启动」按钮**（2026-09-20 完成）：右上角 `.mirror-tool`（平时 42% 透明度不压画面，指针靠近变清晰）。`restartApp()` = 主进程 `am force-stop` → 重新认领归属 → 本会话 `controller.startApp()` 把应用拉回**本窗口**的虚拟显示。要它是因为应用在某些 ROM 的虚拟显示上会整个进程死掉（真机遇到过两次抖音），窗口活着但画面停在原地，之前只能关窗重开。
 - [x] **镜像窗口绿色按钮 = 全屏**（2026-09-19 完成）：`electron/mirror/session.js` 显式 `fullscreenable: true`。Electron 44 上只要构造时显式传了 `fullscreen`（未勾「全屏启动」即 `false`），窗口就被标成不可全屏，macOS 绿色按钮退化成 zoom（最大化、保留菜单栏）；置顶与全屏启动两种组合下均已验证为可全屏
 - [ ] **设备侧旋转的剩余观感**：虚拟显示带 `VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT`，方向由设备上的应用决定；应用自身在启动过程中换向（例如抖音）仍会让画面转一次。可选缓解：`--no-vd-system-decorations`（不渲染虚拟显示里的 launcher/系统装饰）、或把启动应用放到服务端侧，避免「先显示 launcher 再启动应用」这段换向窗口
 

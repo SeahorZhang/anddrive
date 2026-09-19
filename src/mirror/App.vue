@@ -1,7 +1,7 @@
 <script setup>
 import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { useMirrorInput } from './useMirrorInput.js'
-import { bootstrap, dispose as disposeSession } from './session.js'
+import { bootstrap, dispose as disposeSession, restartApp, reclaimApp } from './session.js'
 import { aspectDiffers } from './displayFollow.js'
 
 // 镜像窗口（渲染层直连）：adb/scrcpy 全在本进程内由 Tango 官方库建立，
@@ -131,6 +131,49 @@ function onFrameSizeChanged() {
   syncCanvasBox()
   if (!covering.value) return
   armCover(COVER_UNTIL_STABLE_MS)
+}
+
+/** 「重新启动」进行中：禁用按钮，避免连点成多次 force-stop。 */
+const restarting = ref(false)
+
+/** 「接回画面」进行中。 */
+const reclaiming = ref(false)
+
+/** 按钮操作的一次性反馈（例如「画面已经在这个窗口」），两秒后自己消失。 */
+const notice = ref('')
+let noticeTimer = null
+function showNotice(text) {
+  notice.value = text
+  if (noticeTimer) clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => {
+    notice.value = ''
+    noticeTimer = null
+  }, 2400)
+}
+
+/** 把被别的投屏软件拿走的应用原样搬回本窗口（不重启，进程与页面状态都留着）。 */
+async function reclaim() {
+  if (reclaiming.value) return
+  reclaiming.value = true
+  try {
+    const result = await reclaimApp()
+    if (result?.ok) showNotice(result.already ? '画面已经在这个窗口' : '已接回画面')
+    else showNotice(result?.message || '接回失败')
+  } finally {
+    reclaiming.value = false
+  }
+}
+
+/** 「重新启动」：force-stop 目标应用再把它拉回本窗口的虚拟显示。 */
+async function restart() {
+  if (restarting.value) return
+  restarting.value = true
+  try {
+    await restartApp()
+    showNotice('正在重新启动应用…')
+  } finally {
+    restarting.value = false
+  }
 }
 
 function syncCanvasBox() {
@@ -321,6 +364,20 @@ onBeforeUnmount(() => {
 
     <div class="pointer-events-auto absolute inset-x-0 top-0 z-10 h-6" style="-webkit-app-region: drag"></div>
 
+    <!-- 右上角两颗：
+         「接回画面」= 应用被别的投屏软件/别的显示拿走时，原样搬回本窗口（不重启，状态留着）；
+         「重新启动」= force-stop 后冷启回来，用于应用在虚拟显示上整个挂掉的情况。
+         平时半透明免得压住画面。 -->
+    <div class="mirror-tools" style="-webkit-app-region: no-drag">
+      <button type="button" class="mirror-tool" :disabled="reclaiming" @click="reclaim">
+        {{ reclaiming ? '接回中…' : '接回画面' }}
+      </button>
+      <button type="button" class="mirror-tool" :disabled="restarting" @click="restart">
+        {{ restarting ? '重启中…' : '重新启动' }}
+      </button>
+    </div>
+    <p v-if="notice" class="mirror-notice">{{ notice }}</p>
+
     <p v-if="status"
       class="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-[12px] text-white/60">
       {{ status }}
@@ -396,4 +453,51 @@ onBeforeUnmount(() => {
     border-top-color: rgb(255 255 255 / 18%);
   }
 }
+
+/* 右上角工具：平时淡淡地挂着，指针靠近才清晰，免得压住画面内容。 */
+.mirror-tools {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 15;
+  display: flex;
+  gap: 6px;
+}
+
+.mirror-notice {
+  position: absolute;
+  top: 44px;
+  right: 12px;
+  z-index: 15;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgb(20 20 22 / 82%);
+  color: rgb(255 255 255 / 76%);
+  font-size: 11px;
+}
+
+.mirror-tool {
+  padding: 4px 10px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 999px;
+  background: rgb(20 20 22 / 72%);
+  color: rgb(255 255 255 / 78%);
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  opacity: 0.42;
+  transition: opacity 160ms ease, background 160ms ease;
+}
+
+.mirror-tool:hover,
+.mirror-tool:focus-visible {
+  opacity: 1;
+  background: rgb(28 28 30 / 92%);
+}
+
+.mirror-tool:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
 </style>

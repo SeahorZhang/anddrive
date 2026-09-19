@@ -854,6 +854,59 @@ async function getAppApkPaths(serial, packageName) {
 }
 
 /**
+ * 应用主窗口当前挂在哪个 root task / 哪块显示上。
+ * 镜像要「无缝接回」得先知道应用在不在别的显示（例如被别的投屏软件搬走了）。
+ * 应用没在跑（没有带 taskId 的窗口）时返回 null。
+ * @param {string} serial
+ * @param {string} packageName
+ * @returns {Promise<{ taskId: number, displayId: number } | null>}
+ */
+export async function getAppTask(serial, packageName) {
+  assertSerial(serial);
+  const pkg = normalizePackageName(packageName);
+  await ensureServer();
+  const { stdout } = await adbExecSafe(
+    "-s",
+    serial,
+    "shell",
+    // 只 grep 需要的那几行，别把整份 dumpsys（几百 KB）拖回本机。
+    `dumpsys window windows | grep -E 'Window #.*${pkg}' -A4 | grep -m1 -oE 'mDisplayId=[0-9]+ taskId=[0-9]+'`,
+  );
+  const match = /mDisplayId=(\d+) taskId=(\d+)/.exec(stdout);
+  if (!match) return null;
+  return { displayId: Number(match[1]), taskId: Number(match[2]) };
+}
+
+/**
+ * 把一个 root task 搬到指定显示上 —— **不重启应用**，进程与页面状态都保留，
+ * 只是换了块显示（真机量过：搬回来后 pid 不变，窗口尺寸等于新显示）。
+ * @param {string} serial
+ * @param {number} taskId
+ * @param {number} displayId
+ */
+export async function moveAppTaskToDisplay(serial, taskId, displayId) {
+  assertSerial(serial);
+  const task = Number(taskId);
+  const display = Number(displayId);
+  if (!Number.isInteger(task) || !Number.isInteger(display) || task <= 0 || display < 0) {
+    throw new Error("任务或显示编号无效");
+  }
+  await ensureServer();
+  const { code, stderr, stdout } = await adbExecSafe(
+    "-s",
+    serial,
+    "shell",
+    `am display move-stack ${task} ${display}`,
+  );
+  // 命令成功时没有输出；失败通常是 `Exception ... Unknown displayId`，按文本 + 退出码判。
+  const output = `${stdout}\n${stderr}`;
+  if (code !== 0 || /exception|error|unknown/i.test(output)) {
+    throw new Error(output.trim() || "搬移任务到该显示失败");
+  }
+  return true;
+}
+
+/**
  * 设备物理分辨率（`wm size` 的 `Physical size:` 行），用来决定镜像窗口的初始形状。
  * 取不到就返回 null，调用方走兜底比例。
  * @param {string} serial
@@ -1303,6 +1356,10 @@ ipcMain.handle(CHANNELS.adbGetCachedApps, async (event, address) => {
 
 // 应用操作：强制停止 / 清除数据 / 卸载 / 应用信息 / 导出 APK
 ipcMain.handle(CHANNELS.adbForceStop, (_, serial, pkg) => forceStopApp(serial, pkg));
+ipcMain.handle(CHANNELS.mirrorAppTask, (_, serial, pkg) => getAppTask(serial, pkg));
+ipcMain.handle(CHANNELS.mirrorMoveTask, (_, serial, taskId, displayId) =>
+  moveAppTaskToDisplay(serial, taskId, displayId),
+);
 ipcMain.handle(CHANNELS.adbClearData, (_, serial, pkg) => clearAppData(serial, pkg));
 ipcMain.handle(CHANNELS.adbUninstallApp, (_, serial, pkg) => uninstallApp(serial, pkg));
 ipcMain.handle(CHANNELS.adbAppInfo, (_, serial, pkg) => getAppInfo(serial, pkg));
