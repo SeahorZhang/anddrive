@@ -14,7 +14,7 @@ const {
   DEFAULT_SCRCPY_CONFIG,
   normalizeScrcpyConfig,
   computeDisplayMetrics,
-  standardDisplayBox,
+  DISPLAY_BASE_DPI,
   loadScrcpyConfig,
   saveScrcpyConfig,
   currentScrcpyConfig,
@@ -41,7 +41,6 @@ describe('normalizeScrcpyConfig', () => {
         alwaysOnTop: true,
         fullscreen: true,
         engine: 'native',
-        tablet: true,
       }),
     ).toEqual({
       bitRate: '8M',
@@ -52,55 +51,41 @@ describe('normalizeScrcpyConfig', () => {
       alwaysOnTop: true,
       fullscreen: true,
       engine: 'native',
-      tablet: true,
     })
   })
 
-  it('drops removed legacy fields (newDisplay / renderFit / flex)', () => {
+  it('drops removed legacy fields (newDisplay / renderFit / flex / tablet)', () => {
     expect(
-      normalizeScrcpyConfig({ newDisplay: '1920x1080/320', renderFit: 'unscaled', flex: true }),
+      normalizeScrcpyConfig({
+        newDisplay: '1920x1080/320',
+        renderFit: 'unscaled',
+        flex: true,
+        tablet: true,
+      }),
     ).toEqual({ ...DEFAULT_SCRCPY_CONFIG })
   })
 })
 
-describe('standardDisplayBox', () => {
-  it('snaps the window ratio to 16:9 / 9:16 with the inscribed box', () => {
-    expect(standardDisplayBox(1920, 1080)).toEqual({ width: 1920, height: 1080 })
-    // 1.54:1 的横窗口 → 内接 16:9，短的那一轴留给 contain 当黑边
-    expect(standardDisplayBox(1248, 810)).toEqual({ width: 1248, height: 702 })
-    expect(standardDisplayBox(810, 1248)).toEqual({ width: 702, height: 1248 })
-  })
-
-  it('never exceeds the input on either axis', () => {
-    for (const [w, h] of [[460, 900], [1248, 810], [900, 460], [1000, 1000]]) {
-      const box = standardDisplayBox(w, h)
-      expect(box.width).toBeLessThanOrEqual(w)
-      expect(box.height).toBeLessThanOrEqual(h)
-    }
-  })
-})
-
 describe('computeDisplayMetrics', () => {
-  it('keeps 1dp = 1px and scales by devicePixelRatio', () => {
-    expect(computeDisplayMetrics(460, 900)).toEqual({ width: 460, height: 818, dpi: 160 })
-    expect(computeDisplayMetrics(460, 900, { pixelRatio: 2 })).toEqual({
-      width: 920,
-      height: 1636,
+  it('keeps 1dp = 1 CSS px and samples at physical pixels', () => {
+    expect(computeDisplayMetrics(1280, 720)).toEqual({ width: 1280, height: 720, dpi: 160 })
+    expect(computeDisplayMetrics(1280, 720, { pixelRatio: 2 })).toEqual({
+      width: 2560,
+      height: 1440,
       dpi: 320,
     })
-    expect(computeDisplayMetrics(460, 900, { pixelRatio: 0 })).toEqual({
-      width: 460,
-      height: 818,
+    expect(computeDisplayMetrics(1280, 720, { pixelRatio: 0 })).toEqual({
+      width: 1280,
+      height: 720,
       dpi: 160,
     })
   })
 
-  it('applies the 1.5x tablet zoom on top of the pixel ratio', () => {
-    expect(computeDisplayMetrics(800, 600, { tablet: true, pixelRatio: 2 })).toEqual({
-      width: 2400,
-      height: 1350,
-      dpi: 320,
-    })
+  it('no longer clamps dpi to keep smallestWidth under the 600dp threshold', () => {
+    // 旧「小屏模式」会把 dpi 抬到 sw≈599dp 换 app 填满帧；镜像现在只有大屏一种形态，
+    // app 由 padMode 配方送进 pad 横屏，dp 就等于窗口 CSS（短边 720 CSS px → 720dp）。
+    const { width, height, dpi } = computeDisplayMetrics(1280, 720, { pixelRatio: 2 })
+    expect((Math.min(width, height) * DISPLAY_BASE_DPI) / dpi).toBe(720)
   })
 })
 

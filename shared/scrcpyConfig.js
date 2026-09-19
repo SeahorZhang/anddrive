@@ -12,53 +12,42 @@ export const DEFAULT_SCRCPY_CONFIG = Object.freeze({
   fullscreen: false,
   /** 默认引擎：`native` 自研渲染引擎 · `scrcpy` 原生窗口（兼容回退）。 */
   engine: "native",
-  /** 平板模式：窗口跟随下以 1.5x 上报虚拟显示，app 收到更大的 dp 宽度（更快触发平板双栏布局）。 */
-  tablet: false,
 });
 
 /** 虚拟显示基准密度：1dp = 1px（实际下发 dpi = 该值 × devicePixelRatio）。 */
 export const DISPLAY_BASE_DPI = 160;
-/** 平板模式：虚拟显示尺寸按窗口的 1.5x 上报，让 app 得到更大的 dp 宽度。 */
-export const TABLET_ZOOM = 1.5;
-
-/** 标准画面比例（宽/高）：横 16:9 · 竖 9:16。 */
-const LANDSCAPE_RATIO = 16 / 9;
-const PORTRAIT_RATIO = 9 / 16;
 
 /**
- * 把任意盒子吸附到标准画面比例，结果取**内接**的最大标准盒（两根轴都不大于输入）。
- *
- * 为什么要吸附：照抄窗口比例（例如这台 Mac 的 1.54:1）时，只肯按标准比例出画面的
- * app 会在帧内自己补黑；而内接保证 1dp = 1px 不变、内容不被放大，窗口与画面剩下
- * 的比例差由 contain 渲染留成黑边。
- *
- * @param {number} width
- * @param {number} height
- * @returns {{ width: number, height: number }}
+ * Android 16 的大屏方向 compat 开关：打开后系统不再听 app 自己的方向锁。
+ * **实测只在物理屏生效**，单独打在 scrcpy 虚拟显示上无效（四种启动顺序都量过），
+ * 必须配合 `electron/mirror/padMode.js` 那套配方：先把物理屏临时改成横形大屏、
+ * 让 app 在上面以 pad 横屏起来，再搬到虚拟显示；搬过去之后物理屏可以还原，pad 不掉。
  */
-export function standardDisplayBox(width, height) {
-  const ratio = width >= height ? LANDSCAPE_RATIO : PORTRAIT_RATIO;
-  // 编码器按 4:2:0 采样，奇数边长会被服务端裁掉 1px，直接取偶数。
-  const even = (value) => Math.round(value / 2) * 2;
-  const w = even(Math.min(width, height * ratio));
-  return { width: w, height: even(w / ratio) };
-}
+export const LARGE_SCREEN_COMPAT = Object.freeze({
+  name: "OVERRIDE_ANY_ORIENTATION_TO_USER",
+  id: "310816437",
+});
 
 /**
- * 由窗口 CSS 尺寸算出虚拟显示的实际像素尺寸与密度：
- * 尺寸乘 `devicePixelRatio`（Retina 上 2x 采样更清晰），dpi 同步乘，从而保持
- * 1dp = 1px 的布局观感（dp = 物理 px × 160 / dpi = CSS px）；平板模式再乘 1.5。
- * 最终尺寸吸附到标准画面比例（见 `standardDisplayBox`）。
+ * 由窗口 CSS 尺寸算出虚拟显示的实际像素尺寸与密度：两根轴都乘 `devicePixelRatio`
+ * （Retina 上按物理像素采样更清晰），dpi 同步乘，于是 dp = 物理 px × 160 / dpi = CSS px，
+ * 即 **1dp = 1 CSS px**：窗口多大，app 就按多大的 dp 排版，画面与窗口比例严格一致、零黑边。
+ *
+ * 这里不再压 600dp 下限（旧「小屏模式」的做法）：镜像只有大屏一种形态，会话建立前
+ * `padMode.js` 已经让 app 以 pad 横屏起来，越过 600dp 拿到的是它自己的 pad 全屏布局
+ * （实测 `resizeDisplay` 跟随窗口后仍保持 `mBounds == mMaxBounds`），不再是 size-compat 竖条。
  * @param {number} cssWidth
  * @param {number} cssHeight
- * @param {{ tablet?: boolean, pixelRatio?: number }} [options]
+ * @param {{ pixelRatio?: number }} [options]
  * @returns {{ width: number, height: number, dpi: number }}
  */
 export function computeDisplayMetrics(cssWidth, cssHeight, options = {}) {
-  const zoom = options.tablet === true ? TABLET_ZOOM : 1;
   const dpr = Number.isFinite(options.pixelRatio) && options.pixelRatio > 0 ? options.pixelRatio : 1;
-  const box = standardDisplayBox(cssWidth * dpr * zoom, cssHeight * dpr * zoom);
-  return { ...box, dpi: Math.round(DISPLAY_BASE_DPI * dpr) };
+  return {
+    width: Math.round(cssWidth * dpr),
+    height: Math.round(cssHeight * dpr),
+    dpi: Math.round(DISPLAY_BASE_DPI * dpr),
+  };
 }
 
 const VIDEO_CODECS = new Set(["h264", "h265", "av1"]);
@@ -92,6 +81,5 @@ export function normalizeScrcpyConfig(input) {
     alwaysOnTop: raw.alwaysOnTop === true,
     fullscreen: raw.fullscreen === true,
     engine: ENGINES.has(raw.engine) ? raw.engine : DEFAULT_SCRCPY_CONFIG.engine,
-    tablet: raw.tablet === true,
   };
 }

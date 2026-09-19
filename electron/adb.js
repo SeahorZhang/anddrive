@@ -10,6 +10,7 @@ import {
   DEFAULT_SCRCPY_CONFIG,
   normalizeScrcpyConfig,
   currentScrcpyConfig,
+  LARGE_SCREEN_COMPAT,
 } from "./scrcpyConfig.js";
 import { sanitizeIcon } from "./iconImage.js";
 import helperVersion from "../resources/helper-app.version.json" with { type: "json" };
@@ -853,8 +854,115 @@ async function getAppApkPaths(serial, packageName) {
     .filter(Boolean);
 }
 
+/**
+ * 打开 / 还原 Android 16 的「大屏方向」compat 开关（`LARGE_SCREEN_COMPAT`）。
+ *
+ * 打开后系统不再听目标 app 自己的方向锁。**注意实测边界**：这条开关只在**物理屏**上生效，
+ * 单独打在 scrcpy 虚拟显示上无效 —— 要用 `electron/mirror/padMode.js` 那套配方，先让 app
+ * 在被临时改大的物理屏上以 pad 起来，再搬到虚拟显示。
+ * 设备不认识这条 change（老系统 / ROM 砍掉）时不抛错，只返回 `{ ok: false }`。
+ * @param {string} serial
+ * @param {string} packageName
+ * @param {boolean} enabled true 打开，false 还原默认值
+ */
+export async function setLargeScreenCompat(serial, packageName, enabled) {
+  assertSerial(serial);
+  const pkg = normalizePackageName(packageName);
+  await ensureServer();
+  const { code, stdout, stderr } = await adbExecSafe(
+    "-s",
+    serial,
+    "shell",
+    "am",
+    "compat",
+    enabled ? "enable" : "reset",
+    LARGE_SCREEN_COMPAT.name,
+    pkg,
+  );
+  const output = `${stdout} ${stderr}`.trim();
+  // 老设备上没有 `am compat`（打印 Unknown command 或异常栈），新 ROM 上可能删了这条
+  // change（Unknown or invalid change）；这些输出**不一定带非零退出码**，所以按文本判。
+  if (code !== 0 || /unknown|invalid|exception/i.test(output)) {
+    return { ok: false, message: output || "设备不支持该 compat 开关" };
+  }
+  return { ok: true, message: output };
+}
+
+/** 临时改物理屏的逻辑尺寸与密度（`wm size` / `wm density`），让 app 以大屏身份起来。 */
+export async function overrideDisplayGeometry(serial, { width, height, dpi }) {
+  assertSerial(serial);
+  await ensureServer();
+  const { code, stderr } = await adbExecSafe(
+    "-s",
+    serial,
+    "shell",
+    `wm size ${Math.round(width)}x${Math.round(height)} && wm density ${Math.round(dpi)}`,
+  );
+  if (code !== 0) throw new Error(stderr || "改物理屏尺寸失败");
+  return true;
+}
+
+/** 还原物理屏（`wm size reset` 会连带把 density 一起回到物理值）。 */
+export async function resetDisplayGeometry(serial) {
+  assertSerial(serial);
+  await ensureServer();
+  await adbExecSafe("-s", serial, "shell", "wm size reset && wm density reset");
+  return true;
+}
+
+/**
+ * 用 launcher intent 把应用拉到前台（不指定 activity，包名通用）。
+ * @param {string} serial
+ * @param {string} packageName
+ */
+export async function launchApp(serial, packageName) {
+  assertSerial(serial);
+  const pkg = normalizePackageName(packageName);
+  await ensureServer();
+  const { code, stderr } = await adbExecSafe(
+    "-s",
+    serial,
+    "shell",
+    `monkey -p ${pkg} -c android.intent.category.LAUNCHER 1`,
+  );
+  if (code !== 0) throw new Error(stderr || "启动应用失败");
+  return true;
+}
+
+/**
+ * 取应用当前主窗口的几何状态，用于判断「它是不是已经以横屏铺满整个显示了」。
+ * 只 grep 需要的字段，避免把整份 dumpsys（几百 KB）拖回本机。
+ * @param {string} serial
+ * @param {string} packageName
+ * @returns {Promise<{ full: boolean, landscape: boolean }>}
+ */
+export async function getAppWindowGeometry(serial, packageName) {
+  assertSerial(serial);
+  const pkg = normalizePackageName(packageName);
+  await ensureServer();
+  const { stdout } = await adbExecSafe(
+    "-s",
+    serial,
+    "shell",
+    `dumpsys window windows | grep -E 'Window #.*${pkg}' -A28 | grep -oE 'mBounds=Rect\\([^)]*\\)|mMaxBounds=Rect\\([^)]*\\)' | head -2`,
+  );
+  const rect = (label) => {
+    const match = new RegExp(`${label}=Rect\\((\\d+),\\s*(\\d+) - (\\d+),\\s*(\\d+)\\)`).exec(stdout);
+    if (!match) return null;
+    const [, left, top, right, bottom] = match.map(Number);
+    return { width: right - left, height: bottom - top };
+  };
+  const bounds = rect("mBounds");
+  const maxBounds = rect("mMaxBounds");
+  if (!bounds || !maxBounds) return { full: false, landscape: false };
+  return {
+    full: bounds.width === maxBounds.width && bounds.height === maxBounds.height,
+    landscape: bounds.width > bounds.height,
+  };
+}
+
 /** 强制停止应用。 */
-async function forceStopApp(serial, packageName) {
+export async function forceStopApp(serial, packageName) {
   assertSerial(serial);
   const pkg = normalizePackageName(packageName);
   await ensureServer();

@@ -19,8 +19,6 @@ export const SCRCPY_DEFAULTS = Object.freeze({
   fullscreen: false,
   /** 默认引擎：`native` 自研渲染引擎 · `scrcpy` 原生窗口（兼容回退）。 */
   engine: "native",
-  /** 平板模式：窗口跟随下按 1.5x 上报虚拟显示，app 更快进双栏布局。 */
-  tablet: false,
 });
 
 /** 旧版本把参数存在 localStorage，升级后迁移一次到主进程。 */

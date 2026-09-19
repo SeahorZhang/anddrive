@@ -49,20 +49,18 @@ export async function startScrcpy({ adb, serverPath, config }) {
   const { buildMirrorOptions, resolveNativeCodec } = await import(
     "../../electron/mirror/options.js"
   );
-  const { computeDisplayMetrics, normalizeScrcpyConfig } = await import(
-    "../../shared/scrcpyConfig.js"
-  );
+  const { computeDisplayMetrics } = await import("../../shared/scrcpyConfig.js");
 
   const { codec, downgraded } = resolveNativeCodec(config);
   if (downgraded) {
     console.warn(`[mirror] 自研引擎暂不支持所选编码，改用 ${codec}`);
   }
-  // 初始虚拟显示按当前窗口尺寸创建（× devicePixelRatio × 平板 1.5x）：编码
-  // 分辨率与窗口一致，Retina 上按物理像素采样更清晰；之后由 resizeDisplay 跟随。
+  // 初始虚拟显示 = 当前窗口 CSS 尺寸 × devicePixelRatio，dpi 同步乘（1dp = 1 CSS px）：
+  // 编码分辨率与窗口一致，Retina 上按物理像素采样更清晰；之后由 resizeDisplay 跟随。
   const display = computeDisplayMetrics(
     document.documentElement.clientWidth,
     document.documentElement.clientHeight,
-    { tablet: normalizeScrcpyConfig(config).tablet, pixelRatio: window.devicePixelRatio },
+    { pixelRatio: window.devicePixelRatio },
   );
   const newDisplay = `${display.width}x${display.height}/${display.dpi}`;
   const file = ReadableStream.from(createReadStream(serverPath));

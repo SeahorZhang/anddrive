@@ -23,9 +23,9 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 | 能力 | 位置 | 说明 |
 | --- | --- | --- |
 | 协议与连接 | `src/mirror/connect.js` | Tango 官方 `AdbServerNodeJsClient` + `AdbScrcpyClient`；push server、`AdbScrcpyOptions4_0`、scid 由官方库直接处理 |
-| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.0 选项；编码回落、窗口/息屏偏好、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口尺寸 × devicePixelRatio × (平板 1.5x)` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`），保持 1dp = 1px 且 Retina 上按物理像素采样；结果再吸附到标准画面比例（横 16:9 / 竖 9:16 的内接盒，见 `standardDisplayBox`），因为只肯按标准比例出画面的 app 在任意比例下会在帧内自己补黑 |
+| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.0 选项；编码回落、窗口/息屏偏好、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口尺寸 × devicePixelRatio` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`），dpi 同步乘，于是 **1dp = 1 CSS px**、画面比例恒等于窗口比例。镜像只有大屏一种形态，不再压 600dp dpi 下限、也没有平板 1.5x（两者都已删除），见 §P3「大屏（pad）模式」|
 | 显示跟随去重 | `src/mirror/displayFollow.js` | 只在尺寸**真的变化**时下发 `resizeDisplay`：初始尺寸已用于创建虚拟显示，重复下发会让服务端白走一次 `virtualDisplay.resize()` → capture reset，设备侧应用随之重新决定方向（表现为画面反复旋转）；同一合并窗口内只发最后一次。见 §3 排查记录 |
-| 会话生命周期 | `electron/mirror/session.js` | 窗口管理、会话记录、断开/退出清理；`src/mirror/session.js` / `direct-session.js` 与官方流的接线 |
+| 会话生命周期 | `electron/mirror/session.js` | 窗口管理、会话记录、断开/退出清理；`src/mirror/session.js` / `direct-session.js` 与官方流的接线；大屏配方 IPC（`mirror:padMode`）在此接线，编排在 `electron/mirror/padMode.js` |
 | 输入控制 | `electron/mirror/control.js`、`src/mirror/useMirrorInput.js` | 单指触控、滚轮、键盘（特殊键 + 文本注入）；序列化全在 Tango（`injectTouch/...`），Android 键值/metaState 用官方 `AndroidKeyCode` / `AndroidKeyEventMeta` / `AndroidMotionEventAction` 常量 |
 | 解码渲染 | `src/mirror/App.vue` | WebCodecs 解码；`AutoCanvasRenderer` 优先 WebGL，按显示尺寸出图；HUD 诊断 |
 | 音频转发 | `src/mirror/audio.js` | scrcpy 4.0 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放；音频不可用时自动降级纯画面；会话表见 `docs/archive` 记录 |
@@ -72,10 +72,21 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 
 ### P3 引擎收尾
 
-- [x] **虚拟显示跟随窗口**（2026-09-16 完成，2026-09-17 改为默认行为）：恒定 `flexDisplay` 服务端选项 + 官方 `resizeDisplay`，窗口尺寸变化即重排虚拟显示；对话框不再暴露 `newDisplay`/`renderFit`，虚拟显示尺寸按窗口 × devicePixelRatio 计算（Retina 更清晰），平板模式 1.5x（app 更早进入双栏布局）
+- [x] **虚拟显示跟随窗口**（2026-09-16 完成，2026-09-17 改为默认行为）：恒定 `flexDisplay` 服务端选项 + 官方 `resizeDisplay`，窗口尺寸变化即重排虚拟显示；对话框不再暴露 `newDisplay`/`renderFit`，虚拟显示尺寸按窗口 × devicePixelRatio 计算（Retina 更清晰，1dp = 1 CSS px）
 
 - [x] **跟随请求去重**（2026-09-19 完成）：启动阶段不再补发与 `newDisplay` 完全相同的 `resizeDisplay`，窗口拖动期间的多次变化合并为一次（`src/mirror/displayFollow.js` + `tests/mirror/displayFollow.test.js`）
-- [x] **虚拟显示比例吸附**（2026-09-19 完成）：显示尺寸吸附到横 16:9 / 竖 9:16 的**内接**盒（`shared/scrcpyConfig.js` 的 `standardDisplayBox`，初始 `--new-display` 与运行时 `resizeDisplay` 同一条路）。照抄窗口比例时，只肯按标准比例出画面的 app（如麒麟阅读）会在帧内自己补黑；吸附后画面内部不再补黑，剩下的窗口/画面比例差由 contain 留成黑边。内接（而不是外扩）保证 1dp = 1px 不被破坏、内容不会随窗口放大
+- [x] **虚拟显示比例吸附（已回退）**（2026-09-19 试错）：曾把显示尺寸吸附到横 16:9 / 竖 9:16 的内接盒，当天回退。黑边的真正变量不是比例，而是 **Android 的 600dp 大屏门槛**：`smallestWidth ≥ 600dp` 时系统判定大屏并**忽略 app 的方向锁**，锁方向的 app 走 size-compat 被 letterbox 在帧内（双层黑）；`sw < 600dp` 时锁被尊重，`FLAG_ROTATES_WITH_CONTENT` 让显示跟着 app 转，app 填满帧。实测（Redmi 2509FPN0BC / Android 17 / 抖音）：`1920x1080/320`(sw540) 与 `3424x1926/640`(sw481) → 转竖填满；`3424x1926/320`(sw963) 与 `1920x1080/160`(sw1080) → 保持横并 letterbox。`flexDisplay` 对该行为无影响（A/B 过）
+- [x] **大屏（pad）模式：镜像的唯一形态**（2026-09-19 落地）：窗口固定按 1280x720 横向打开，会话建立前由 `electron/mirror/padMode.js` 跑完这套真机量出来的配方，缺一步都不成立：
+  1. `am compat enable OVERRIDE_ANY_ORIENTATION_TO_USER <pkg>`（Android 16 大屏方向 change，id `310816437`；这台 HyperOS 把 `dumpsys compat` 改名成了 `platform_compat`，change 名用 `dumpsys platform_compat -a` 列）。**这条只在物理屏生效** —— 单独打在 scrcpy 虚拟显示上无效（先打开关再冷启动 / 先冷启动再打开关 / `user_rotation=1` / 物理屏同时改大屏，四种顺序全部量到 `sw589dp w589dp port` 竖条）。
+  2. `wm size 1920x1080` + `wm density 160` 把**物理屏**临时改成横形大屏（sw=1080dp）。
+  3. `am force-stop` + `monkey -c LAUNCHER` 重启 app —— compat 是**进程启动时**读的，热着的进程不会重读。
+  4. 轮询 `dumpsys window` 直到 app 在物理屏上 `mBounds == mMaxBounds` 且横向（= 它自己进了 pad）。
+  5. 建宽虚拟显示 + `startApp` 把它搬过去 → `mBounds == mMaxBounds`（实测 `1920x1080/240` 下 `sw720dp w1280dp h720dp`），pad 布局铺满整帧。
+  6. 搬完再 `wm size reset && wm density reset` 还原物理屏 —— **实测还原后虚拟显示上的 pad 不掉**，后续 `resizeDisplay` 跟随窗口（量到 resize 成 `1600x900` 仍 `mBounds == mMaxBounds`）也不掉。所以手机屏幕只在开会话那几秒是横形大屏。
+  - 生命周期：渲染层在建会话前 `enter`、`startApp` 之后 `settle`（还原物理屏）、关会话时 `exit`（还原 compat）。主进程兜三层 —— 窗口关闭 / 会话异常退出 / 设备断开都补 `exit`，`settle` 另有 30s 超时自动还原，渲染层挂了也不会把手机留在大屏状态。
+  - 代价（用户 2026-09-19 知情后选定）：**每次开镜像都会重启目标 app**，且手机本体屏幕会短暂横过来变大屏。会话中途不能提前关 compat（实测一关 app 窗口直接消失），所以只在会话结束还原。
+  - 同时删除：`tablet` 平板模式（1.5x 上报）与「dpi 下限把 sw 钉在 600dp 以下」这两套旧的小屏/折中方案，`computeDisplayMetrics` 现在就是 `窗口 × devicePixelRatio` + `dpi = 160 × devicePixelRatio`，即 1dp = 1 CSS px。旧参数存盘里的 `tablet` 字段由 `normalizeScrcpyConfig` 静默丢弃。
+  - 未验：没有 pad 布局的 app 走这套配方会怎样（大概是被强制横屏后拉伸排版）；真机反馈后再决定要不要按包豁免。
 - [x] **镜像窗口绿色按钮 = 全屏**（2026-09-19 完成）：`electron/mirror/session.js` 显式 `fullscreenable: true`。Electron 44 上只要构造时显式传了 `fullscreen`（未勾「全屏启动」即 `false`），窗口就被标成不可全屏，macOS 绿色按钮退化成 zoom（最大化、保留菜单栏）；置顶与全屏启动两种组合下均已验证为可全屏
 - [ ] **设备侧旋转的剩余观感**：虚拟显示带 `VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT`，方向由设备上的应用决定；应用自身在启动过程中换向（例如抖音）仍会让画面转一次。可选缓解：`--no-vd-system-decorations`（不渲染虚拟显示里的 launcher/系统装饰）、或把启动应用放到服务端侧，避免「先显示 launcher 再启动应用」这段换向窗口
 

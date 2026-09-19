@@ -36,6 +36,8 @@ export const CHANNELS = {
   mirrorExit: 'mirror:exit',
   /** 镜像渲染层 → 主进程的状态上报（ready / exit）。 */
   mirrorState: 'mirror:state',
+  /** 大屏（pad）模式：enter / settle / exit，见 `electron/mirror/padMode.js`。 */
+  mirrorPadMode: 'mirror:padMode',
 
   /** macOS 系统权限（electron/permissions.js）。 */
   permissionsStatus: 'permissions:getStatus',

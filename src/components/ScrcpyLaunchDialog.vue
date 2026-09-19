@@ -95,12 +95,9 @@ async function launch() {
           <p class="mt-1 px-1 text-[11px] text-black/40">
             自研引擎支持 H.264 / H.265（需平台硬解），AV1 会自动回落到 H.264。
           </p>
-          <label class="mt-2 flex cursor-pointer items-center gap-2 px-1 text-[12px] text-black/60">
-            <input v-model="draft.tablet" type="checkbox" class="size-3.5 accent-[#007aff]" />
-            平板模式（1.5x 上报，app 更快进双栏布局）
-          </label>
           <p class="mt-1 px-1 text-[11px] text-black/40">
-            画面始终跟随窗口宽高自动重排；手机 1x，平板 1.5x。app 自身锁定的比例可能需要更大的窗口才会铺满。
+            镜像以大屏方式打开：启动前会先让应用在手机上进 pad 横屏，再搬到镜像窗口，
+            画面与窗口同比例、无黑边。期间手机屏幕会短暂变成横屏大屏，应用会被重启一次。
           </p>
         </div>
 

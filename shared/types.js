@@ -30,7 +30,7 @@
  * @property {string} screenMode keepActive | turnOff | normal
  * @property {boolean} alwaysOnTop 窗口置顶
  * @property {boolean} fullscreen 全屏启动
- * @property {boolean} tablet 平板模式：虚拟显示按窗口 1.5x 上报
+ * @property {string} engine native | scrcpy
  */
 
 /**

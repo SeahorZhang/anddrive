@@ -1,6 +1,6 @@
 import { CHANNELS } from "../../electron/ipcContract.js";
 import { getServerClient, acquireDeviceAdb, startScrcpy, codecName } from "./connect.js";
-import { computeDisplayMetrics, normalizeScrcpyConfig } from "../../shared/scrcpyConfig.js";
+import { computeDisplayMetrics } from "../../shared/scrcpyConfig.js";
 import { createDisplayFollower } from "./displayFollow.js";
 
 // ---------------------------------------------------------------------------
@@ -14,18 +14,31 @@ const current = {
   resizeObserver: null,
   follower: null,
   stopping: false,
+  /** 本次会话是否成功走了大屏（pad）配方，决定关会话时要不要还原 compat。 */
+  pad: false,
 };
 
-/**
- * 当前窗口对应的虚拟显示尺寸（× devicePixelRatio × 平板 1.5x）。
- * @param {ReturnType<typeof normalizeScrcpyConfig>} config
- */
-function viewportDisplay(config) {
+/** 当前窗口对应的虚拟显示尺寸（× devicePixelRatio，1dp = 1 CSS px）。 */
+function viewportDisplay() {
   return computeDisplayMetrics(
     document.documentElement.clientWidth,
     document.documentElement.clientHeight,
-    { tablet: config.tablet, pixelRatio: window.devicePixelRatio },
+    { pixelRatio: window.devicePixelRatio },
   );
+}
+
+/** 主进程的大屏配方入口（`electron/mirror/padMode.js`）；任何失败都只是退回普通布局。 */
+async function padMode(action, info) {
+  try {
+    return await window.__anddriveIpc?.invoke(CHANNELS.mirrorPadMode, {
+      action,
+      serial: info.serial,
+      packageName: info.packageName,
+    });
+  } catch (error) {
+    console.warn(`[mirror] 大屏模式 ${action} 失败：`, error?.message || error);
+    return false;
+  }
 }
 
 /**
@@ -38,6 +51,12 @@ function viewportDisplay(config) {
  * }} handlers
  */
 export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket, onEnded }) {
+  // 大屏配方先跑：主进程会打开 compat 开关、把物理屏临时改成横形大屏、重启目标 app
+  // 并等它自己进 pad 横屏。**必须在建虚拟显示之前**做完，否则 app 会以竖屏锁起来，
+  // 之后搬到宽显示只会被 size-compat 压成竖条（真机量过四种顺序）。
+  current.pad = (await padMode("enter", info)) === true;
+  // 先记下来：后面任何一步失败，stopSession 都要能拿到 serial/packageName 去还原。
+  current.info = info;
   const adb = await acquireDeviceAdb(getServerClient(), info.serial);
   const { client, display: initialDisplay } = await startScrcpy({
     adb,
@@ -112,13 +131,15 @@ export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket,
 
   const controller = client.controller;
   await controller?.startApp(info.packageName).catch(() => {});
+  // app 已经被搬到虚拟显示上，这时候才可以把物理屏还原（实测还原后虚拟显示上的 pad 不掉）。
+  if (current.pad) await padMode("settle", info);
   if (info.prefs?.turnScreenOff) {
     await controller?.setDisplayPower(false).catch(() => {});
   }
 
   // 虚拟显示跟随窗口（scrcpy `--flex-display` / -x 语义）：官方 resizeDisplay
   // 控制消息驱动，窗口一变化虚拟显示即按窗口尺寸重排（排版随之变化）。
-  // 尺寸乘 devicePixelRatio（Retina 上按物理像素采样更清晰）+ 平板 1.5x。
+  // 尺寸乘 devicePixelRatio（Retina 上按物理像素采样更清晰），1dp = 1 CSS px。
   //
   // 只在尺寸真的变化时才下发：初始尺寸已用于创建虚拟显示（`connect.js` 的
   // `newDisplay`），启动阶段再补发一条完全相同的请求会让服务端白走一次
@@ -130,7 +151,6 @@ export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket,
   // 尺寸来自 documentElement（视口）的 ResizeObserver，而不是 window 的
   // `resize` 事件 + innerWidth：macOS 上窗口被系统缩放/吸附时，resize 事件
   // 可能滞后甚至不触发，innerWidth 会读到旧值，导致宽度不跟随。
-  const config = normalizeScrcpyConfig(info.config);
   const follower = createDisplayFollower({
     send: (size) => controller?.resizeDisplay({ width: size.width, height: size.height }),
   });
@@ -138,7 +158,7 @@ export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket,
   current.follower = follower;
 
   // observe() 会立即回调一次当前尺寸：窗口在会话建立期间变过的话，这次就会补上。
-  const observer = new ResizeObserver(() => follower.request(viewportDisplay(config)));
+  const observer = new ResizeObserver(() => follower.request(viewportDisplay()));
   observer.observe(document.documentElement);
   current.resizeObserver = observer;
 
@@ -191,6 +211,10 @@ export function stopSession() {
     current.follower.dispose();
     current.follower = null;
   }
+  // 还原设备：compat 开关（按包）与可能还挂着的物理屏覆盖。放在 client 判空之前 ——
+  // enter 成功但 scrcpy 没起来时，也必须把手机状态还回去。
+  if (current.pad && current.info) void padMode("exit", current.info);
+  current.pad = false;
   if (!current.client) return null;
   const closing = current.client.close?.().catch?.(() => {}) ?? null;
   current.client = null;

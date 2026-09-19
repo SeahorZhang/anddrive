@@ -27,7 +27,6 @@ describe('normalizeScrcpyConfig', () => {
       alwaysOnTop: true,
       fullscreen: true,
       engine: 'native',
-      tablet: true,
     })
     expect(config).toEqual({
       bitRate: '8M',
@@ -38,7 +37,6 @@ describe('normalizeScrcpyConfig', () => {
       alwaysOnTop: true,
       fullscreen: true,
       engine: 'native',
-      tablet: true,
     })
   })
 

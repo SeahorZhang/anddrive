@@ -6,9 +6,8 @@ import {
   DEFAULT_SCRCPY_CONFIG,
   normalizeScrcpyConfig,
   computeDisplayMetrics,
-  standardDisplayBox,
   DISPLAY_BASE_DPI,
-  TABLET_ZOOM,
+  LARGE_SCREEN_COMPAT,
 } from "../shared/scrcpyConfig.js";
 
 // ---------------------------------------------------------------------------
@@ -25,9 +24,8 @@ export {
   DEFAULT_SCRCPY_CONFIG,
   normalizeScrcpyConfig,
   computeDisplayMetrics,
-  standardDisplayBox,
   DISPLAY_BASE_DPI,
-  TABLET_ZOOM,
+  LARGE_SCREEN_COMPAT,
 };
 
 
