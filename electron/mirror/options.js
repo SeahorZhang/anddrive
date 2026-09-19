@@ -106,8 +106,8 @@ const MIRROR_WINDOW_FALLBACK_RATIO = 9 / 19.5;
 /**
  * 镜像窗口的初始尺寸 = **设备屏幕的宽高比**（用户 2026-09-19 要求「和手机一样的宽高」）。
  *
- * 形状可以随便选是因为大屏配方已经把 app 送进 pad：竖形显示上它排成双列 feed、横形显示上
- * 排成宽布局，两种都 `mBounds == mMaxBounds`（真机量过 `1200x2608/160` 与 `2560x1440/320`），
+ * 形状可以随便选：随包 server 建的虚拟显示带「忽略应用尺寸限制」，app 会按显示的逻辑尺寸铺满
+ * （`mBounds == mMaxBounds`，真机量过 `2462x1924/256` 横形与 `1200x2608/160` 竖形），
  * 所以窗口形状和设备一致也不会出现黑边。
  * @param {{ width: number, height: number } | null | undefined} screenSize 设备物理分辨率
  * @param {{ width: number, height: number }} workArea 桌面可用区域（CSS px）

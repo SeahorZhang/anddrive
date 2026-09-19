@@ -1,19 +1,7 @@
 import { BrowserWindow, ipcMain, screen } from "electron";
 import path from "node:path";
 import { CHANNELS } from "../ipcContract.js";
-import {
-  ensureServer,
-  getAppWindowGeometry,
-  launchApp,
-  onDeviceTeardown,
-  overrideDisplayGeometry,
-  resetDisplayGeometry,
-  forceStopApp,
-  getPhysicalScreenSize,
-  scrcpyServerPath,
-  setLargeScreenCompat,
-} from "../adb.js";
-import { createPadMode } from "./padMode.js";
+import { ensureServer, getPhysicalScreenSize, onDeviceTeardown, scrcpyServerPath } from "../adb.js";
 import { mirrorWindowBounds, resolveRuntimePrefs } from "./options.js";
 
 // ---------------------------------------------------------------------------
@@ -43,20 +31,6 @@ let sessionSeq = 0;
  * @property {import("electron").BrowserWindow | null} win
  * @property {Record<string, unknown> | null} pendingInit
  */
-
-/**
- * 大屏（pad）模式配方的编排（见 `padMode.js` 顶部注释）。渲染层在建会话前 `enter`、
- * 把 app 搬到虚拟显示之后 `settle`、关会话时 `exit`；主进程这边再兜两层：
- * 窗口关闭 / 设备断开时补一次 `exit`，以及 `enter` 后渲染层挂了时的超时自动还原物理屏。
- */
-const padMode = createPadMode({
-  setCompat: setLargeScreenCompat,
-  overrideGeometry: overrideDisplayGeometry,
-  resetGeometry: resetDisplayGeometry,
-  forceStop: forceStopApp,
-  launch: launchApp,
-  geometry: getAppWindowGeometry,
-});
 
 function loadMirrorPage(win) {
   const devServer = process.env.VITE_DEV_SERVER_URL;
@@ -191,8 +165,6 @@ export async function stopMirrorSession(id) {
   const session = sessions.get(id);
   if (!session) return false;
   sessions.delete(id);
-  // 渲染层可能已经先没了（关窗 / 崩溃），这里兜底还原大屏状态：compat 与物理屏覆盖。
-  await padMode.exit(session.serial, session.packageName);
   if (session.win && !session.win.isDestroyed()) {
     // 渲染层在 beforeunload 里停掉 scrcpy 会话；窗口关闭兜底。
     session.win.close();
@@ -234,18 +206,6 @@ ipcMain.handle(CHANNELS.mirrorList, () => listMirrorSessions());
 ipcMain.handle(CHANNELS.mirrorStop, (_, id) => stopMirrorSession(id));
 ipcMain.handle(CHANNELS.mirrorStopAll, () => stopAllMirrorSessions());
 ipcMain.handle(CHANNELS.mirrorFocus, (_, id) => focusMirrorSession(id));
-ipcMain.handle(CHANNELS.mirrorPadMode, async (_event, payload) => {
-  const serial = typeof payload?.serial === "string" ? payload.serial.trim() : "";
-  const packageName = typeof payload?.packageName === "string" ? payload.packageName.trim() : "";
-  if (!serial || !packageName) throw new Error("设备或包名无效");
-  if (payload.action === "enter") return padMode.enter(serial, packageName);
-  if (payload.action === "settle") {
-    padMode.settle(serial);
-    return true;
-  }
-  await padMode.exit(serial, packageName);
-  return true;
-});
 
 /**
  * 渲染层状态上报：ready（回填快照字段）、exit（意外退出 → 通知主窗口）。
@@ -261,8 +221,6 @@ ipcMain.on(CHANNELS.mirrorState, (_event, payload) => {
   } else if (payload.kind === "exit") {
     notifyExit({ ...payload, label: session.label, packageName: session.packageName, win: session.win });
     sessions.delete(session.id);
-    // 服务端自己挂了（设备断开等）也要还原大屏状态。
-    void padMode.exit(session.serial, session.packageName);
   }
 });
 

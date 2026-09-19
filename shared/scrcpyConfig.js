@@ -36,24 +36,13 @@ export const DISPLAY_BASE_DPI = 160;
 export const DISPLAY_PIXEL_SCALE = 2;
 
 /**
- * Android 16 的大屏方向 compat 开关：打开后系统不再听 app 自己的方向锁。
- * **实测只在物理屏生效**，单独用在 scrcpy 虚拟显示上无效（四种启动顺序都量过），
- * 必须配合 `electron/mirror/padMode.js` 那套配方：先把物理屏临时改成横形大屏、
- * 让 app 在上面以 pad 横屏起来，再搬到虚拟显示；搬过去之后物理屏可以还原，pad 不掉。
- */
-export const LARGE_SCREEN_COMPAT = Object.freeze({
-  name: "OVERRIDE_ANY_ORIENTATION_TO_USER",
-  id: "310816437",
-});
-
-/**
  * 由窗口 CSS 尺寸算出虚拟显示的像素尺寸与密度：`窗口 CSS × DISPLAY_PIXEL_SCALE`，
  * dpi = `160 × DISPLAY_PIXEL_SCALE`，于是 1dp = 1 CSS px，画面比例恒等于窗口比例
  * （contain 下不会出现黑边）。
  *
- * 这里不再压 600dp 下限（旧「小屏模式」的做法）：镜像只有大屏一种形态，会话建立前
- * `padMode.js` 已经让 app 以 pad 横屏起来，越过 600dp 拿到的是它自己的 pad 全屏布局
- * （实测 `resizeDisplay` 跟随窗口后仍保持 `mBounds == mMaxBounds`），不再是 size-compat 竖条。
+ * 窗口宽大于高时这里给出的是横形尺寸（logical width > height），随附的 scrcpy-server
+ * 在建这个虚拟显示时打开了「忽略应用尺寸限制」，所以固定竖屏的 app 也会真的按横屏铺满，
+ * 而不是被 size-compat 压成中间一条竖屏带 —— 详见 docs/NATIVE_MIRROR.md。
  * @param {number} cssWidth
  * @param {number} cssHeight
  * @returns {{ width: number, height: number, dpi: number }}

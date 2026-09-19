@@ -14,8 +14,6 @@ const current = {
   resizeObserver: null,
   follower: null,
   stopping: false,
-  /** 本次会话是否成功走了大屏（pad）配方，决定关会话时要不要还原 compat。 */
-  pad: false,
 };
 
 /** 当前窗口对应的虚拟显示尺寸（像素倍率与 dpi 都在 `computeDisplayMetrics` 里定）。 */
@@ -24,20 +22,6 @@ function viewportDisplay() {
     document.documentElement.clientWidth,
     document.documentElement.clientHeight,
   );
-}
-
-/** 主进程的大屏配方入口（`electron/mirror/padMode.js`）；任何失败都只是退回普通布局。 */
-async function padMode(action, info) {
-  try {
-    return await window.__anddriveIpc?.invoke(CHANNELS.mirrorPadMode, {
-      action,
-      serial: info.serial,
-      packageName: info.packageName,
-    });
-  } catch (error) {
-    console.warn(`[mirror] 大屏模式 ${action} 失败：`, error?.message || error);
-    return false;
-  }
 }
 
 /**
@@ -51,11 +35,6 @@ async function padMode(action, info) {
  * }} handlers
  */
 export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket, onEnded, onReflowStart }) {
-  // 大屏配方先跑：主进程会打开 compat 开关、把物理屏临时改成横形大屏、重启目标 app
-  // 并等它自己进 pad 横屏。**必须在建虚拟显示之前**做完，否则 app 会以竖屏锁起来，
-  // 之后搬到宽显示只会被 size-compat 压成竖条（真机量过四种顺序）。
-  current.pad = (await padMode("enter", info)) === true;
-  // 先记下来：后面任何一步失败，stopSession 都要能拿到 serial/packageName 去还原。
   current.info = info;
   const adb = await acquireDeviceAdb(getServerClient(), info.serial);
   const { client, display: initialDisplay } = await startScrcpy({
@@ -131,8 +110,6 @@ export async function startSession(info, { onMeta, onVideoPacket, onAudioPacket,
 
   const controller = client.controller;
   await controller?.startApp(info.packageName).catch(() => {});
-  // app 已经被搬到虚拟显示上，这时候才可以把物理屏还原（实测还原后虚拟显示上的 pad 不掉）。
-  if (current.pad) await padMode("settle", info);
   if (info.prefs?.turnScreenOff) {
     await controller?.setDisplayPower(false).catch(() => {});
   }
@@ -216,10 +193,7 @@ export function stopSession() {
     current.follower.dispose();
     current.follower = null;
   }
-  // 还原设备：compat 开关（按包）与可能还挂着的物理屏覆盖。放在 client 判空之前 ——
-  // enter 成功但 scrcpy 没起来时，也必须把手机状态还回去。
-  if (current.pad && current.info) void padMode("exit", current.info);
-  current.pad = false;
+  // 虚拟显示随会话一起销毁，设备侧不留任何残留状态。
   if (!current.client) return null;
   const closing = current.client.close?.().catch?.(() => {}) ?? null;
   current.client = null;
