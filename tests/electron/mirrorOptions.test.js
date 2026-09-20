@@ -29,12 +29,11 @@ describe('parseBitRate', () => {
 })
 
 describe('buildMirrorOptions', () => {
-  it('maps defaults to a video+audio, control-enabled session', () => {
+  it('默认转视频 + 控制，音频按设置默认关', () => {
     const options = buildMirrorOptions(undefined)
     expect(options).toMatchObject({
       video: true,
-      audio: true,
-      audioCodec: 'opus',
+      audio: false,
       control: true,
       sendStreamMeta: true,
       videoCodec: 'h265',
@@ -42,20 +41,16 @@ describe('buildMirrorOptions', () => {
       maxFps: 60,
       newDisplay: '1280x960/160',
       flexDisplay: true,
-      keepActive: true,
     })
+    expect(options.audioCodec).toBeUndefined()
   })
 
-  it('always creates a flex virtual display and maps screen modes', () => {
-    const normal = buildMirrorOptions({ screenMode: 'normal' })
-    expect(normal.flexDisplay).toBe(true)
-    expect(normal.newDisplay).toBe('1280x960/160')
-    expect('keepActive' in normal).toBe(false)
-    expect('stayAwake' in normal).toBe(false)
-
-    const turnOff = buildMirrorOptions({ screenMode: 'turnOff' })
-    expect(turnOff.stayAwake).toBe(true)
-    expect('keepActive' in turnOff).toBe(false)
+  it('打开音频转发时才有音频参数', () => {
+    expect(buildMirrorOptions({ audio: true })).toMatchObject({
+      video: true,
+      audio: true,
+      audioCodec: 'opus',
+    })
   })
 
   it('uses the newDisplay override from the renderer', () => {
@@ -64,9 +59,19 @@ describe('buildMirrorOptions', () => {
     expect(options.flexDisplay).toBe(true)
   })
 
-  it('always requests opus audio for scrcpy 4.0', () => {
-    expect(buildMirrorOptions({ audio: false }).audio).toBe(true)
-    expect(buildMirrorOptions(undefined).audioCodec).toBe('opus')
+  it('转发音频时才请求 Opus；关掉就完全不建音频采集', () => {
+    // 抓系统音频会抢设备侧音频焦点（在播的 app 会暂停、会话结束时又自动续播），
+    // 所以设置里的音频开关必须是真的开关 —— 早先这里写死 audio: true。
+    expect(buildMirrorOptions({ audio: true }).audio).toBe(true)
+    expect(buildMirrorOptions({ audio: true }).audioCodec).toBe('opus')
+    // 用户 2026-09-21 明确要「投屏时手机不出声」= scrcpy 默认（不开 --audio-dup）。
+    expect(buildMirrorOptions({ audio: true }).audioDup).toBeUndefined()
+
+    expect(buildMirrorOptions({ audio: false }).audio).toBe(false)
+    expect(buildMirrorOptions({ audio: false }).audioCodec).toBeUndefined()
+    expect(buildMirrorOptions({ audio: false }).audioDup).toBeUndefined()
+
+    expect(buildMirrorOptions(undefined).audio).toBe(false)
   })
 
   it('overrides the codec when the native engine requests it', () => {

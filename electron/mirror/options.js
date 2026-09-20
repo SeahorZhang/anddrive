@@ -43,15 +43,24 @@ export function buildMirrorOptions(input, overrides = {}) {
   /** @type {Record<string, unknown>} */
   const options = {
     video: true,
-    // scrcpy 4.0 的音频仅支持 Opus（`ScrcpyAudioCodec.Opus`），WebCodecs 可解。
-    audio: true,
-    audioCodec: 'opus',
+    // 音频转发跟着设置走，不写死：抓系统音频（REMOTE_SUBMIX playback capture）会抢
+    // 设备侧的音频焦点，正在播的 app 会因此暂停，会话结束时焦点回来又自动续播 ——
+    // 用户实机反馈就是「关掉投屏，手机立刻响起声音」。关掉音频就没有这次焦点抢占。
+    audio: config.audio === true,
     control: true,
     sendStreamMeta: true,
     videoCodec: config.videoCodec,
     videoBitRate: parseBitRate(config.bitRate),
     maxFps: config.maxFps,
   };
+  if (options.audio) {
+    // scrcpy 4.0 的音频仅支持 Opus（`ScrcpyAudioCodec.Opus`），WebCodecs 可解。
+    options.audioCodec = 'opus';
+    // 故意**不**开 audioDup（scrcpy 默认）：服务端给 AudioMix 设的是 ROUTE_FLAG_LOOP_BACK
+    // —— 只回环、不在本机渲染，所以投屏期间手机静音、声音只在电脑上出。
+    // 代价要知道：会话结束时 AudioPolicy 撤销，手机恢复渲染，正在播的内容会当场出声。
+    // 想要两边同时有声才需要 audioDup: true（ROUTE_FLAG_LOOP_BACK_RENDER）。
+  }
 
   // 恒定创建虚拟显示并开启 flex display（scrcpy `--flex-display` / -x）：虚拟
   // 显示初始按窗口尺寸创建，之后窗口变化由客户端用官方 `resizeDisplay` 控制消息

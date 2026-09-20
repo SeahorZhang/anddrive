@@ -106,7 +106,10 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 - [x] **镜像窗口绿色按钮 = 全屏**（2026-09-19 完成）：`electron/mirror/session.js` 显式 `fullscreenable: true`。Electron 44 上只要构造时显式传了 `fullscreen`（未勾「全屏启动」即 `false`），窗口就被标成不可全屏，macOS 绿色按钮退化成 zoom（最大化、保留菜单栏）；置顶与全屏启动两种组合下均已验证为可全屏
 - [ ] **设备侧旋转的剩余观感**：虚拟显示带 `VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT`，方向由设备上的应用决定；应用自身在启动过程中换向（例如抖音）仍会让画面转一次。可选缓解：`--no-vd-system-decorations`（不渲染虚拟显示里的 launcher/系统装饰）、或把启动应用放到服务端侧，避免「先显示 launcher 再启动应用」这段换向窗口
 
-- [x] **音频转发**（2026-09-16 完成）：scrcpy 4.0 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放，preskip 裁剪、落后丢帧
+- [x] **音频转发**（2026-09-16 完成；2026-09-21 修两处）：scrcpy 4.0 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放，preskip 裁剪、落后丢帧。
+  - **音频开关以前是死的**：`buildMirrorOptions` 把 `audio: true` 写死、完全不读 `config.audio`，所以设置页那个开关没有任何作用（实测存盘 `audio:true` 也掩盖了这点）。现在按设置下发，关掉的会话不建音频采集。
+  - **投屏时手机静音是刻意的**：服务端 `AudioPlaybackCapture(keepPlayingOnDevice)` 为 false（scrcpy 默认，即不传 `audio_dup`）时给 `AudioMix` 设 `ROUTE_FLAG_LOOP_BACK` —— 只回环、**不在本机渲染**，所以声音只在电脑上出。用户 2026-09-21 明确要求「投屏时手机不要发出声音」，因此我们不开 `audioDup`。要知道的副作用：会话结束、AudioPolicy 撤销后手机恢复渲染，正在播的内容会当场出声（这正是「电脑上结束投屏，手机立马响起声音」的由来，不是 bug）；要两边同时出声才需要 `audioDup: true`（`ROUTE_FLAG_LOOP_BACK_RENDER`）。真机验证过两种都能跑：`c2.android.opus.encoder`、5 秒 253 个 Opus 包。
+  - 默认值仍是**关**（`DEFAULT_SCRCPY_CONFIG.audio = false`，早先实际行为等于常开）；要声音去设置页打开「音频转发」。
 - [x] **渲染层直连**（2026-09-16 完成）：镜像窗口 `nodeIntegration` + 官方 Tango 库直连 adb server；去掉主进程 per-packet 转发（曾做 ws 桥方案后替换为官方 connector）
 - [ ] **AV1 支持**：验证平台解码并移出回落名单
 - [ ] **控制错误可见性**：控制失败目前仅 `console.warn`，可上报到会话 UI
