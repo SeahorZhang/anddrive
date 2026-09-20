@@ -24,7 +24,8 @@ let player = null;
  *   audio: (packet) => void,
  *   audioStats: (stats: Record<string, number>) => void,
  *   hooks: { onMeta?: (meta) => void, onAudioError?: (message: string) => void,
- *            onReflowStart?: (size) => void, onReflowAbort?: () => void },
+ *            onReflowStart?: (size) => void, onReflowAbort?: () => void,
+ *            onStolen?: (stolen) => void },
  * }} apply App 侧管线接线
  */
 export async function bootstrap(apply) {
