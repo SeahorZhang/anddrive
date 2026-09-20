@@ -16,6 +16,8 @@ const current = {
   stopping: false,
   /** 本会话虚拟显示的 id（从 server stdout 里解析），未拿到为 null。 */
   displayId: null,
+  /** 「应用被别的显示拿走」轮询的停止函数。 */
+  stopStolenWatch: null,
 };
 
 /** 当前窗口对应的虚拟显示尺寸（像素倍率与 dpi 都在 `computeDisplayMetrics` 里定）。 */
@@ -35,11 +37,12 @@ function viewportDisplay() {
  *   onEnded: () => void,
  *   onReflowStart?: (size: { width: number, height: number }) => void,
  *   onReflowAbort?: () => void,
+ *   onStolen?: (stolen: boolean) => void,
  * }} handlers
  */
 export async function startSession(
   info,
-  { onMeta, onVideoPacket, onAudioPacket, onEnded, onReflowStart, onReflowAbort },
+  { onMeta, onVideoPacket, onAudioPacket, onEnded, onReflowStart, onReflowAbort, onStolen },
 ) {
   current.info = info;
   const adb = await acquireDeviceAdb(getServerClient(), info.serial);
@@ -123,6 +126,8 @@ export async function startSession(
   // 应用可能已经挂在别的显示上（被别的投屏软件搬走、或本来就在主屏上用着），那种情况下
   // `startApp` 只会把它留在原处，本窗口就只剩启动器画面 —— 补一次不重启的搬移。
   void ensureAppHere();
+  // 之后应用仍可能被别的投屏软件搬走：只负责把入口亮出来，要不要接回由用户点。
+  current.stopStolenWatch = watchAppStolen(onStolen);
   if (info.prefs?.turnScreenOff) {
     await controller?.setDisplayPower(false).catch(() => {});
   }
@@ -194,6 +199,11 @@ async function pumpLoop(stream, send, onDone) {
   onDone?.();
 }
 
+/** 本会话的启动参数（镜像页取应用图标等用途）；会话未建立时 null。 */
+export function getSessionInfo() {
+  return current.info;
+}
+
 /** 当前 controller（Tango 的 ScrcpyControlMessageWriter）；未连接返回 null。 */
 export function getController() {
   return current.client?.controller ?? null;
@@ -224,7 +234,9 @@ export async function reclaimApp() {
   }
 }
 
-/** server 的 stdout 是异步到的，刚建会话时显示 id 可能还没解析出来。 */
+/**
+ * server 的 stdout 是异步到的，刚建会话时显示 id 可能还没解析出来。
+ */
 async function waitForDisplayId(timeoutMs = 1500) {
   const until = Date.now() + timeoutMs;
   while (!current.displayId && Date.now() < until) await sleep(100);
@@ -243,6 +255,29 @@ async function ensureAppHere(attempts = 4) {
   return last;
 }
 
+/** 轮询间隔：一次 `dumpsys window` 的 grep 要几十到几百毫秒，太密会给设备白添负载。 */
+const STOLEN_POLL_MS = 2500;
+
+/**
+ * 盯住「应用还在不在本窗口这块显示上」，被别的投屏软件搬走时通知页面显示接回入口。
+ * 只报告、**不自动搬**：自动搬回去就是两边来回抢，谁也别想用。
+ */
+function watchAppStolen(onStolen) {
+  let last = false;
+  const timer = setInterval(async () => {
+    if (document.hidden || !current.client || !current.displayId) return;
+    const info = current.info;
+    if (!info) return;
+    const task = await ipcInvoke(CHANNELS.mirrorAppTask, info.serial, info.packageName).catch(() => null);
+    const stolen = !!task && task.displayId !== current.displayId;
+    if (stolen !== last) {
+      last = stolen;
+      onStolen?.(stolen);
+    }
+  }, STOLEN_POLL_MS);
+  return () => clearInterval(timer);
+}
+
 /** 关闭当前 scrcpy client（窗口 beforeunload / 主进程 stop 时调用）。 */
 export function stopSession() {
   current.stopping = true;
@@ -253,6 +288,10 @@ export function stopSession() {
   if (current.follower) {
     current.follower.dispose();
     current.follower = null;
+  }
+  if (current.stopStolenWatch) {
+    current.stopStolenWatch();
+    current.stopStolenWatch = null;
   }
   // 虚拟显示随会话一起销毁，设备侧不留任何残留状态。
   if (!current.client) return null;

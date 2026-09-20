@@ -1,5 +1,5 @@
 import { CHANNELS } from "../../electron/ipcContract.js";
-import { startSession, getController, stopSession, reclaimApp } from "./direct-session.js";
+import { startSession, getController, stopSession, reclaimApp, getSessionInfo } from "./direct-session.js";
 import { createOpusPlayer } from "./audio.js";
 import { applyControl } from "../../electron/mirror/control.js";
 
@@ -15,8 +15,6 @@ const ipcRenderer =
 // ---------------------------------------------------------------------------
 
 let player = null;
-/** 本窗口的启动参数（bootstrap 拉到的那份），「重新启动」要用。 */
-let currentInfo = null;
 
 /**
  * App.vue 启动入口：拉取启动参数 → 认领应用归属 → 建立直连会话 → 帧数据送解码管线。
@@ -32,7 +30,6 @@ let currentInfo = null;
 export async function bootstrap(apply) {
   const info = await ipcRenderer.invoke(CHANNELS.mirrorInitGet);
   if (!info) throw new Error("镜像启动参数缺失");
-  currentInfo = info;
   window.__anddriveMirrorId = info.id;
   window.addEventListener("beforeunload", () => stopSession());
 
@@ -50,6 +47,7 @@ export async function bootstrap(apply) {
     onMeta: (meta) => apply.hooks.onMeta?.(meta),
     onReflowStart: (size) => apply.hooks.onReflowStart?.(size),
     onReflowAbort: () => apply.hooks.onReflowAbort?.(),
+    onStolen: (stolen) => apply.hooks.onStolen?.(stolen),
     onEnded: (detail) => {
       // server 端自发退出（设备断开 / server 异常）。
       if (!window.__anddriveMirrorId) return
@@ -66,17 +64,8 @@ export async function bootstrap(apply) {
 /** 「接回画面」：把被别的显示（别的投屏软件）拿走的应用原样搬回本窗口，不重启。 */
 export { reclaimApp };
 
-/**
- * 「重新启动」：把目标应用 force-stop 后再拉回**本窗口**的虚拟显示。
- * 应用在某些 ROM 上会在虚拟显示里整个进程死掉（真机遇到过两次抖音），这时窗口
- * 还活着但画面停在原地；这个动作让窗口不关窗、不重连就能恢复。
- * 显示不动、只重启应用，所以虚拟显示的尺寸与 dpi 都保持原样。
- */
-export async function restartApp() {
-  if (!currentInfo) return false;
-  await ipcRenderer.invoke(CHANNELS.adbForceStop, currentInfo.serial, currentInfo.packageName).catch(() => false);
-  return getController()?.startApp(currentInfo.packageName) ?? null;
-}
+/** 本窗口的会话信息（包名 / 标签 / 序列号），镜像页取应用图标要用。 */
+export { getSessionInfo };
 
 /** 触控 / 键盘 → 直接写本进程内的 control socket。 */
 export function sendControl(message) {

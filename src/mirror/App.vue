@@ -1,7 +1,8 @@
 <script setup>
 import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { useMirrorInput } from './useMirrorInput.js'
-import { bootstrap, dispose as disposeSession, restartApp, reclaimApp } from './session.js'
+import { bootstrap, dispose as disposeSession, reclaimApp, getSessionInfo } from './session.js'
+import { CHANNELS } from '../../electron/ipcContract.js'
 import { aspectDiffers } from './displayFollow.js'
 
 // 镜像窗口（渲染层直连）：adb/scrcpy 全在本进程内由 Tango 官方库建立，
@@ -133,13 +134,13 @@ function onFrameSizeChanged() {
   armCover(COVER_UNTIL_STABLE_MS)
 }
 
-/** 「重新启动」进行中：禁用按钮，避免连点成多次 force-stop。 */
-const restarting = ref(false)
+/** 应用被别的显示（别的投屏软件）拿走了：画面还在播，但播的是我们这块空显示。 */
+const stolen = ref(false)
 
 /** 「接回画面」进行中。 */
 const reclaiming = ref(false)
 
-/** 按钮操作的一次性反馈（例如「画面已经在这个窗口」），两秒后自己消失。 */
+/** 一次性反馈（例如「画面已经在这个窗口」），两秒后自己消失。 */
 const notice = ref('')
 let noticeTimer = null
 function showNotice(text) {
@@ -151,7 +152,26 @@ function showNotice(text) {
   }, 2400)
 }
 
-/** 把被别的投屏软件拿走的应用原样搬回本窗口（不重启，进程与页面状态都留着）。 */
+/** 应用图标：等真要显示接回入口时才去缓存里取，平时不为它花一次 IO。 */
+const appIcon = ref('')
+const appLabel = ref('')
+let iconLoaded = false
+async function loadIcon() {
+  if (iconLoaded) return
+  iconLoaded = true
+  const info = getSessionInfo()
+  appLabel.value = info?.label || info?.packageName || ''
+  if (!info?.serial || !info?.packageName) return
+  let apps = null
+  try {
+    apps = await window.__anddriveIpc?.invoke?.(CHANNELS.adbGetCachedApps, info.serial)
+  } catch {
+    // 缓存读不到就退化成首字母方块，不为了图标打扰开会话
+  }
+  appIcon.value = apps?.find?.((app) => app.packageName === info.packageName)?.iconUrl || ''
+}
+
+/** 把被别处拿走的应用原样搬回本窗口：只搬任务、不重启，进程与页面状态都留着。 */
 async function reclaim() {
   if (reclaiming.value) return
   reclaiming.value = true
@@ -161,18 +181,6 @@ async function reclaim() {
     else showNotice(result?.message || '接回失败')
   } finally {
     reclaiming.value = false
-  }
-}
-
-/** 「重新启动」：force-stop 目标应用再把它拉回本窗口的虚拟显示。 */
-async function restart() {
-  if (restarting.value) return
-  restarting.value = true
-  try {
-    await restartApp()
-    showNotice('正在重新启动应用…')
-  } finally {
-    restarting.value = false
   }
 }
 
@@ -308,6 +316,10 @@ async function booted() {
     hooks: {
       onReflowStart: coverForReflow,
       onReflowAbort: cancelCover,
+      onStolen: (value) => {
+        stolen.value = value
+        if (value) void loadIcon()
+      },
       onMeta: (info) => {
         meta.value = info
         startDecoder(info)
@@ -364,16 +376,13 @@ onBeforeUnmount(() => {
 
     <div class="pointer-events-auto absolute inset-x-0 top-0 z-10 h-6" style="-webkit-app-region: drag"></div>
 
-    <!-- 右上角两颗：
-         「接回画面」= 应用被别的投屏软件/别的显示拿走时，原样搬回本窗口（不重启，状态留着）；
-         「重新启动」= force-stop 后冷启回来，用于应用在虚拟显示上整个挂掉的情况。
-         平时半透明免得压住画面。 -->
-    <div class="mirror-tools" style="-webkit-app-region: no-drag">
-      <button type="button" class="mirror-tool" :disabled="reclaiming" @click="reclaim">
+    <!-- 应用被别的显示拿走时，画面中间给一个接回入口（带应用图标）。
+         平时不显示：没被抢就不该有多余控件压在画面上。 -->
+    <div v-if="stolen" class="mirror-reclaim" style="-webkit-app-region: no-drag">
+      <img v-if="appIcon" :src="appIcon" class="mirror-reclaim__icon" alt="" />
+      <span v-else class="mirror-reclaim__icon mirror-reclaim__icon--letter">{{ (appLabel || '?').slice(0, 1) }}</span>
+      <button type="button" class="mirror-reclaim__button" :disabled="reclaiming" @click="reclaim">
         {{ reclaiming ? '接回中…' : '接回画面' }}
-      </button>
-      <button type="button" class="mirror-tool" :disabled="restarting" @click="restart">
-        {{ restarting ? '重启中…' : '重新启动' }}
       </button>
     </div>
     <p v-if="notice" class="mirror-notice">{{ notice }}</p>
@@ -454,50 +463,61 @@ onBeforeUnmount(() => {
   }
 }
 
-/* 右上角工具：平时淡淡地挂着，指针靠近才清晰，免得压住画面内容。 */
-.mirror-tools {
+/* 被抢走时的接回入口：只压一层轻底，让原来的画面仍然看得清是「哪一块」空了。 */
+.mirror-reclaim {
   position: absolute;
-  top: 10px;
-  right: 12px;
-  z-index: 15;
+  inset: 0;
+  z-index: 16;
   display: flex;
-  gap: 6px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgb(0 0 0 / 45%);
+}
+
+.mirror-reclaim__icon {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 45%);
+}
+
+.mirror-reclaim__icon--letter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(255 255 255 / 14%);
+  color: rgb(255 255 255 / 82%);
+  font-size: 24px;
+}
+
+.mirror-reclaim__button {
+  padding: 7px 16px;
+  border: none;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 94%);
+  color: #101012;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mirror-reclaim__button:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .mirror-notice {
   position: absolute;
-  top: 44px;
-  right: 12px;
-  z-index: 15;
-  padding: 3px 10px;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 17;
+  padding: 4px 12px;
   border-radius: 999px;
-  background: rgb(20 20 22 / 82%);
-  color: rgb(255 255 255 / 76%);
-  font-size: 11px;
-}
-
-.mirror-tool {
-  padding: 4px 10px;
-  border: 1px solid rgb(255 255 255 / 14%);
-  border-radius: 999px;
-  background: rgb(20 20 22 / 72%);
+  background: rgb(20 20 22 / 84%);
   color: rgb(255 255 255 / 78%);
   font-size: 11px;
-  line-height: 1.4;
-  cursor: pointer;
-  opacity: 0.42;
-  transition: opacity 160ms ease, background 160ms ease;
-}
-
-.mirror-tool:hover,
-.mirror-tool:focus-visible {
-  opacity: 1;
-  background: rgb(28 28 30 / 92%);
-}
-
-.mirror-tool:disabled {
-  cursor: default;
-  opacity: 0.35;
 }
 
 </style>
