@@ -2,11 +2,15 @@ import { app, ipcMain } from "electron";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { CHANNELS } from "./ipcContract.js";
+import { resolveDeviceStableId } from "./adb.js";
+import { collapseAddressKeys } from "./deviceIdentity.js";
 
 // ---------------------------------------------------------------------------
 // 应用收藏（favorites）
 //
-// 结构：{ [serial]: string[] }，按设备 serial 隔离，写入 userData/favorites.json。
+// 结构：{ [稳定设备标识]: string[] }，写入 userData/favorites.json。
+// 键**不是** adb 传输地址：无线重连一次地址就换一个，早先版本因此每次重连都
+// 让用户以为收藏丢了（旧数据会在第一次读写时一次性并入稳定键，并先备份文件）。
 // 收藏只影响界面分组与置顶，不改变设备上的任何状态。
 // ---------------------------------------------------------------------------
 
@@ -60,6 +64,40 @@ async function readStore() {
   }
 }
 
+/** 旧数据只合并一次（每个进程）。 */
+let legacyCollapsed = false;
+
+/**
+ * 把历史遗留的「按传输地址存」的桶并进当前设备的稳定键。
+ *
+ * 宽松策略：所有地址形的键都并进来，不去猜它们属于哪台设备。收藏只是界面置顶，
+ * 多并进来的包名在别的设备上也只会因为「本机没装」而不显示；反过来漏并就是用户
+ * 数据凭空消失。重写前先把原文件备份成 `favorites.json.bak`，随时可回退。
+ */
+async function collapseLegacy(store, stableId) {
+  if (legacyCollapsed) return store;
+  legacyCollapsed = true;
+  const { store: next, mergedCount } = collapseAddressKeys(store, stableId);
+  if (!mergedCount) return store;
+  try {
+    await fs.copyFile(storePath(), `${storePath()}.bak`);
+  } catch {
+    // 原文件不存在或备份失败：继续合并，只是少一份回退副本
+  }
+  await writeStore(next);
+  console.info(`[favorites] 已把 ${mergedCount} 条旧收藏并入设备稳定标识 ${stableId}`);
+  return next;
+}
+
+/** 传输地址 → 稳定标识；解析不了（掉线等）就退回地址本身，至少不比旧行为差。 */
+async function resolveStableId(serial) {
+  try {
+    return (await resolveDeviceStableId(serial)) || serial;
+  } catch {
+    return serial;
+  }
+}
+
 /** @param {Record<string, string[]>} store */
 async function writeStore(store) {
   const file = storePath();
@@ -78,7 +116,9 @@ async function writeStore(store) {
 /** @param {string} serial @returns {Promise<string[]>} */
 export async function getFavorites(serial) {
   if (typeof serial !== "string" || !serial || serial.length > MAX_SERIAL_LENGTH) return [];
-  return (await readStore())[serial] || [];
+  const stableId = await resolveStableId(serial);
+  const store = await collapseLegacy(await readStore(), stableId);
+  return store[stableId] || [];
 }
 
 /**
@@ -91,13 +131,14 @@ export async function toggleFavorite(serial, packageName) {
   if (typeof serial !== "string" || !serial || serial.length > MAX_SERIAL_LENGTH || !pkg) {
     return null;
   }
-  const store = await readStore();
-  const current = new Set(store[serial] || []);
+  const stableId = await resolveStableId(serial);
+  const store = await collapseLegacy(await readStore(), stableId);
+  const current = new Set(store[stableId] || []);
   if (current.has(pkg)) current.delete(pkg);
   else current.add(pkg);
-  store[serial] = [...current].slice(0, MAX_FAVORITES_PER_DEVICE);
+  store[stableId] = [...current].slice(0, MAX_FAVORITES_PER_DEVICE);
   await writeStore(store);
-  return store[serial];
+  return store[stableId];
 }
 
 // ---------------------------------------------------------------------------

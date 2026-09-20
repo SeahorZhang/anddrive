@@ -32,6 +32,9 @@
 | 2026-09-16 | 新增自研镜像引擎（实验）：Tango 复用 `scrcpy-server`，WebCodecs 解码 + WebGL canvas 渲染，独立镜像窗口、输入控制、会话列表接入；现状与剩余待办见 [`NATIVE_MIRROR.md`](NATIVE_MIRROR.md) |
 | 2026-09-16 | 自研镜像引擎转发声音：scrcpy 4.0 仅支持的 Opus 经 WebCodecs `AudioDecoder` 解码、AudioContext 排程播放（preskip 裁剪、落后丢帧），音频不可用自动降级纯画面 |
 | 2026-09-16 | 自研镜像引擎改为渲染层直连：镜像窗口 `nodeIntegration`，adb/scrcpy 全用 Tango 官方库（`@yume-chan/adb-server-node-tcp` + `adb-scrcpy`）在本进程建立，去掉主进程 per-packet 转发（曾临时用 ws 桥方案，后被官方 connector 取代） |
+| 2026-09-20 | 镜像虚拟显示改为**真横屏**：随包 `scrcpy-server` 换成自编 4.0，走 `VirtualDisplayConfig.setIgnoreActivitySizeRestrictions`，固定竖屏应用也按横屏逻辑尺寸铺满；原先「compat + 临时改物理屏 + 重启应用」那套配方整个删除（细节见 `NATIVE_MIRROR.md` §P3） |
+| 2026-09-20 | 应用被别的投屏软件搬走时**无缝接回**：`am display move-stack` 只搬任务不重启（真机验证 pid 不变），入口只在画面被抢走时居中显示；同设备同应用不再开第二个窗口 |
+| 2026-09-21 | 修「收藏记不住设备」：收藏与应用缓存原先按 adb **传输地址**存，无线重连一次地址就换（同一台手机曾留下 3 个桶）；改用 `ro.serialno` 稳定标识 + 落盘别名表（`device-aliases.json`），旧地址桶首次读写时自动并入并备份为 `favorites.json.bak` |
 
 ---
 

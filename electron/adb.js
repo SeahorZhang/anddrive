@@ -1,11 +1,12 @@
 import { app, dialog, ipcMain } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHANNELS } from "./ipcContract.js";
 import { browse } from "./mdns.js";
+import { pickStableId } from "./deviceIdentity.js";
 import {
   DEFAULT_SCRCPY_CONFIG,
   normalizeScrcpyConfig,
@@ -273,6 +274,7 @@ async function listConnectDevices() {
   return Promise.all(
     entries.map(async ([serial, state]) => {
       const svc = bySerial.get(serial);
+      warmDeviceStableId(serial);
       const label =
         (svc && connectNames.get(svc.name)) || (await deviceDisplayName(serial)) || null;
       return {
@@ -478,6 +480,129 @@ const cacheRoot = () => path.join(app.getPath("userData"), "app-cache", "apps-v1
 const cacheKey = (serial) => createHash("sha256").update(serial).digest("hex");
 const cachePath = (serial) => path.join(cacheRoot(), `${cacheKey(serial)}.json`);
 
+// ---------------------------------------------------------------------------
+// 稳定设备标识（背景见 ./deviceIdentity.js）
+//
+// 持久化键一律用设备自己的序列号，不用 adb 传输地址：无线每次重连地址就换一个，
+// 拿地址当键会让收藏 / 应用缓存变成一次性的（用户看到的「重连后收藏没了」）。
+// ---------------------------------------------------------------------------
+
+/**
+ * 传输地址 → 稳定标识的别名表，**落盘**：冷启动时设备还没连上，读缓存不能依赖 adb，
+ * 只能靠上次连上时记下的对应关系。每台设备一行，读不到就当没有（回退传输地址）。
+ */
+const ALIAS_FILE = () => path.join(app.getPath("userData"), "device-aliases.json");
+/** @type {Map<string, string>} transport → stableId */
+const stableAliases = new Map();
+/** @type {Map<string, Promise<string>>} 解析中的地址，避免并发重复问设备 */
+const resolving = new Map();
+let aliasesLoaded = false;
+
+function loadAliases() {
+  if (aliasesLoaded) return;
+  aliasesLoaded = true;
+  try {
+    const parsed = JSON.parse(readFileSync(ALIAS_FILE(), "utf8"));
+    for (const [transport, stable] of Object.entries(parsed ?? {})) {
+      if (transport && stable && typeof transport === "string" && typeof stable === "string") {
+        stableAliases.set(transport, stable);
+      }
+    }
+  } catch {
+    // 首次运行或文件损坏：没有别名表也能正常工作
+  }
+}
+
+async function persistAliases() {
+  const file = ALIAS_FILE();
+  const temp = `${file}.${process.pid}.tmp`;
+  try {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(temp, JSON.stringify(Object.fromEntries(stableAliases)), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    await fs.rename(temp, file);
+  } catch (error) {
+    console.warn("Failed to write device aliases:", error);
+  }
+}
+
+function rememberAlias(transport, stable) {
+  if (!transport || !stable || stable === transport) return;
+  if (stableAliases.get(transport) === stable) return;
+  stableAliases.set(transport, stable);
+  void persistAliases();
+}
+
+/**
+ * 同步取已知标识，没记录就回传输地址。**读路径用它**：设备还没连上也要能秒开缓存。
+ * @param {string} transport
+ */
+export function stableIdOf(transport) {
+  loadAliases();
+  return stableAliases.get(transport) || transport;
+}
+
+/** 同一个稳定标识下见过的所有传输地址（清缓存时一起清掉）。 */
+function aliasesOfStableId(stable) {
+  loadAliases();
+  const found = [];
+  for (const [transport, value] of stableAliases) {
+    if (value === stable) found.push(transport);
+  }
+  return found;
+}
+
+/**
+ * 向设备问一次稳定标识：`ro.serialno` → `ro.boot.serialno` → `settings secure android_id`。
+ * 问不到（掉线、没这台设备）就回传输地址，并且**不写别名表**，下次连上还会再解析。
+ * @param {string} serial
+ * @returns {Promise<string>}
+ */
+export async function resolveDeviceStableId(serial) {
+  if (typeof serial !== "string" || !serial) return "";
+  loadAliases();
+  const known = stableAliases.get(serial);
+  if (known) return known;
+  const pending = resolving.get(serial);
+  if (pending) return pending;
+  const task = (async () => {
+    const { stdout, stderr } = await adbExecSafe(
+      "-s",
+      serial,
+      "shell",
+      "getprop ro.serialno; getprop ro.boot.serialno; settings get secure android_id",
+    );
+    const lines = `${stdout}\n${stderr}`.split("\n").map((line) => line.trim());
+    const stable = pickStableId(lines.slice(0, 3), serial);
+    rememberAlias(serial, stable);
+    return stable;
+  })().finally(() => resolving.delete(serial));
+  resolving.set(serial, task);
+  try {
+    return await task;
+  } catch {
+    return serial;
+  }
+}
+
+/** 设备列表里顺手预热别名（不阻塞返回）。 */
+function warmDeviceStableId(serial) {
+  void resolveDeviceStableId(serial).catch(() => {});
+}
+
+/** 读缓存的候选路径：稳定标识优先，再兜住别名还没建立时的旧地址桶。 */
+function cacheCandidates(serial) {
+  const known = stableIdOf(serial);
+  const list = [cachePath(serial)];
+  if (known !== serial) list.unshift(cachePath(known));
+  for (const other of aliasesOfStableId(known)) {
+    if (other !== serial && other !== known) list.push(cachePath(other));
+  }
+  return list;
+}
+
 async function removeFile(filePath) {
   try {
     await fs.unlink(filePath);
@@ -488,29 +613,39 @@ async function removeFile(filePath) {
 
 export async function readAppCache(serial) {
   if (typeof serial !== "string" || !serial || serial.length > 1024) return null;
-  const filePath = cachePath(serial);
+  for (const filePath of cacheCandidates(serial)) {
+    const snapshot = await readCacheFile(filePath);
+    // undefined = 这个路径不可用（没有 / 坏掉 / 过期），继续试下一个候选
+    if (snapshot !== undefined) return snapshot;
+  }
+  return null;
+}
+
+/** @returns {Promise<object | undefined>} */
+async function readCacheFile(filePath) {
   try {
     const data = await fs.readFile(filePath);
     if (data.length > MAX_SNAPSHOT_BYTES) {
       await removeFile(filePath);
-      return null;
+      return undefined;
     }
     const snapshot = sanitizeSnapshot(JSON.parse(data.toString("utf8")));
     if (!snapshot) await removeFile(filePath);
-    return snapshot;
+    return snapshot ?? undefined;
   } catch (error) {
     if (error?.code !== "ENOENT") {
       console.warn("Failed to read app cache:", error);
       await removeFile(filePath);
     }
-    return null;
+    return undefined;
   }
 }
 
 /** Delete the cached snapshot of one device. Idempotent. */
 async function deleteAppCache(serial) {
   if (typeof serial !== "string" || !serial || serial.length > 1024) return false;
-  await removeFile(cachePath(serial));
+  // 同一台设备可能留下过多个地址桶（每次重连一个），一起清干净
+  for (const filePath of cacheCandidates(serial)) await removeFile(filePath);
   return true;
 }
 
@@ -561,14 +696,15 @@ async function pruneCaches(protectedPath) {
  */
 export async function writeAppCache(serial, snapshot) {
   if (typeof serial !== "string" || !serial || serial.length > 1024) return false;
+  // 写的时候设备必然是连着的，所以这里可以问出真正的稳定标识当键。
+  const filePath = cachePath(await resolveDeviceStableId(serial));
   const data = serializeSnapshot(snapshot);
   if (data == null) {
-    await removeFile(cachePath(serial));
+    await removeFile(filePath);
     return false;
   }
 
   const root = cacheRoot();
-  const filePath = cachePath(serial);
   const tempPath = `${filePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   try {
     await fs.mkdir(root, { recursive: true });
