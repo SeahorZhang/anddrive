@@ -9,8 +9,18 @@
 
 /** `anddrive://` 自定义协议，需与 electron-builder.json 的 protocols 一致。 */
 export const MIRROR_SCHEME = "anddrive";
-/** 快捷方式文件后缀，必须与 electron-builder.json 的 fileAssociations 一致。 */
+/** 快捷方式文件后缀，需与 electron-builder.json 的 `mac.extendInfo` 一致。 */
 export const MIRROR_FILE_EXTENSION = "adr";
+/**
+ * `.adr` 的正式 UTI（macOS 文件类型标识）。打包版（electron-builder.json 的
+ * `mac.extendInfo`）与 dev launcher 的 Info.plist 都按它声明自己拥有该类型。
+ *
+ * 为什么不靠后缀就够：只写后缀时系统会按扩展名现造一个 `dyn.xxxxx` 动态类型，
+ * 任何注册过该后缀的 app 都是平等的候选处理者，谁最后被 LaunchServices 扫到谁赢
+ * —— 桌面上双击就可能打开一个旧构建。正式 UTI + `LSHandlerRank: Owner` 才是
+ * 「这个类型属于我」。
+ */
+export const MIRROR_FILE_UTI = "com.anddrive.mirror-shortcut";
 const SHORTCUT_FILE_TYPE = "anddrive-mirror-shortcut";
 const SHORTCUT_FILE_VERSION = 1;
 const MAX_SERIAL_LENGTH = 1024;

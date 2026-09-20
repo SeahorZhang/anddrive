@@ -22,6 +22,13 @@ const {
   extractMirrorUrl,
   extractShortcutFile,
 } = await import('../../electron/shortcutCore.js')
+// 快捷方式现在存「稳定设备标识」而不是 adb 传输地址（无线端口一变，存地址的快捷方式就点不开了），
+// 所以只桩掉解析用的那一层，其余（含包名校验）走真实实现。
+vi.mock('../../electron/adb.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  resolveDeviceStableId: async (address) => (address ? `stable-${address}` : ''),
+}))
+
 const { createAppShortcut, readShortcutFile } = await import('../../electron/shortcut.js')
 
 describe('sanitizeShortcutName', () => {
@@ -143,7 +150,8 @@ describe('createAppShortcut', () => {
       expect(result.path.endsWith('示例应用.adr')).toBe(true)
 
       const parsed = await readShortcutFile(result.path)
-      expect(parsed.serial).toBe('192.168.1.5:5555')
+      // 写进去的是稳定标识，不是当时那次连接的 host:port
+      expect(parsed.serial).toBe('stable-192.168.1.5:5555')
       expect(parsed.packageName).toBe('com.example.app')
       expect(parsed.label).toBe('示例应用')
     } finally {
@@ -153,8 +161,17 @@ describe('createAppShortcut', () => {
   })
 
   it('rejects unsafe package names', async () => {
-    await expect(
-      createAppShortcut({ address: '1.2.3.4:5555', packageName: 'com.a; rm -rf /' }),
-    ).rejects.toThrow('应用包名无效')
+    // 桌面上临时目录兜底：万一校验顺序被改坏，也不要把测试产物写进仓库。
+    const desktop = await fs.mkdtemp(path.join(os.tmpdir(), 'ad-shortcut-unsafe-'))
+    process.env.AD_TEST_DESKTOP = desktop
+    try {
+      await expect(
+        createAppShortcut({ address: '1.2.3.4:5555', packageName: 'com.a; rm -rf /' }),
+      ).rejects.toThrow('应用包名无效')
+      expect(await fs.readdir(desktop)).toEqual([])
+    } finally {
+      await fs.rm(desktop, { recursive: true, force: true })
+      delete process.env.AD_TEST_DESKTOP
+    }
   })
 })

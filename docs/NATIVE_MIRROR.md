@@ -145,6 +145,24 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 | `audio>0` 但 `ad=0` | 音频解码未推进：配置包被守卫拦下或 pts BigInt 未转换（历史上出现过，现为已修复形态） |
 | `astate=suspended` | 自动播放策略拦了 AudioContext：确认镜像窗口 `autoplayPolicy` 设置 |
 
+### 4.1 快捷方式双击没反应 / 打开了旧版本
+
+`.adr` 归谁处理由 LaunchServices 决定，构建机上很容易乱：**只声明后缀**时系统按扩展名现造
+一个 `dyn.xxxxx` 动态类型，每个注册过该后缀的副本都平等地是候选处理者，谁最后被扫到谁赢。
+本机实测曾有 47 个 AndDrive 副本（release/beta 下每个构建一个）都声称能开 `.adr`。
+
+- 现在打包版在 `electron-builder.json` 的 `mac.extendInfo` 里声明正式 UTI
+  `com.anddrive.mirror-shortcut` + `LSHandlerRank: Owner`（dev launcher 的 Info.plist 同步），
+  不再依赖 `fileAssociations`（它只能生成后缀 + `Default` 等级，`mimeType` 在 mac 上被丢弃）。
+  已用真构建验证：生成的 `Info.plist` 含 `UTExportedTypeDeclarations`，注册后 dump 里能看到
+  `type id: com.anddrive.mirror-shortcut / tags: .adr / conforms to: public.data`，且 claim 记录为 `rank: Owner`。
+- 清历史注册：`pnpm run shortcut:fix`（先加 `--dry-run` 看计划）。默认保留**最新的那个已安装**
+  副本（release/ 下的构建产物只兜底），`--keep <app 路径>` 手动指定，`--all` 连 dev launcher 一起清。
+  本机实测 47 → 3（正式版 + 两个 dev launcher）。
+- 取证：`lsregister -dump | grep -B12 "bindings:                   .adr"`
+  （`lsregister` 全名 `/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister`）。
+  正式版启动时还会顺手注销 dev launcher（含早期落在 `anddrive_next` userData 下的那份）。
+
 ## 5. 关键文件
 
 ```text

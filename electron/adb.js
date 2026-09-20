@@ -592,6 +592,35 @@ function warmDeviceStableId(serial) {
   void resolveDeviceStableId(serial).catch(() => {});
 }
 
+/**
+ * 用稳定标识反查**当前**可用的 adb 传输地址。
+ *
+ * 桌面快捷方式里存的是稳定标识：无线 adb 每重连一次端口就换一个，存地址的快捷方式
+ * 当场作废（点开没反应）—— AndroMeld 的 .adrx 里写的就是 `af3d7abd`，所以它一直能点开。
+ * @param {string} stableId
+ * @returns {Promise<string | null>}
+ */
+export async function findTransportByStableId(stableId) {
+  if (typeof stableId !== "string" || !stableId) return null;
+  loadAliases();
+  for (const [transport, value] of stableAliases) {
+    if (value !== stableId) continue;
+    if ((await getDeviceState(transport)) === "device") return transport;
+  }
+  // 别名表没命中（比如换过端口还没连上）：问一遍在线设备，谁的稳定标识对得上用谁。
+  let devices;
+  try {
+    devices = parseAdbDevices(await adbExec("devices"));
+  } catch {
+    return null;
+  }
+  for (const [serial, state] of devices) {
+    if (state !== "device" || serial.startsWith("emulator-")) continue;
+    if ((await resolveDeviceStableId(serial)) === stableId) return serial;
+  }
+  return null;
+}
+
 /** 读缓存的候选路径：稳定标识优先，再兜住别名还没建立时的旧地址桶。 */
 function cacheCandidates(serial) {
   const known = stableIdOf(serial);

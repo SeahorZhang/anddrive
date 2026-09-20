@@ -12,15 +12,6 @@
       ]
     }
   ],
-  "fileAssociations": [
-    {
-      "ext": "adr",
-      "name": "AndDrive Mirror",
-      "description": "AndDrive 投屏快捷方式",
-      "mimeType": "application/x-anddrive-mirror",
-      "role": "Viewer"
-    }
-  ],
   "electronLanguages": [
     "zh-CN",
     "en-US"
@@ -50,6 +41,35 @@
       "NSBonjourServices": [
         "_adb-tls-connect._tcp",
         "_adb-tls-pairing._tcp"
+      ],
+      "UTExportedTypeDeclarations": [
+        {
+          "UTTypeIdentifier": "com.anddrive.mirror-shortcut",
+          "UTTypeDescription": "AndDrive 投屏快捷方式",
+          "UTTypeConformsTo": [
+            "public.data"
+          ],
+          "UTTypeIconFile": "electron.icns",
+          "UTTypeTagSpecification": {
+            "public.filename-extension": [
+              "adr"
+            ]
+          }
+        }
+      ],
+      "CFBundleDocumentTypes": [
+        {
+          "CFBundleTypeName": "AndDrive 投屏快捷方式",
+          "CFBundleTypeRole": "Viewer",
+          "LSHandlerRank": "Owner",
+          "LSItemContentTypes": [
+            "com.anddrive.mirror-shortcut"
+          ],
+          "CFBundleTypeExtensions": [
+            "adr"
+          ],
+          "CFBundleTypeIconFile": "electron.icns"
+        }
       ]
     },
     "extraResources": [

@@ -34,7 +34,9 @@
 | 2026-09-16 | 自研镜像引擎改为渲染层直连：镜像窗口 `nodeIntegration`，adb/scrcpy 全用 Tango 官方库（`@yume-chan/adb-server-node-tcp` + `adb-scrcpy`）在本进程建立，去掉主进程 per-packet 转发（曾临时用 ws 桥方案，后被官方 connector 取代） |
 | 2026-09-20 | 镜像虚拟显示改为**真横屏**：随包 `scrcpy-server` 换成自编 4.0，走 `VirtualDisplayConfig.setIgnoreActivitySizeRestrictions`，固定竖屏应用也按横屏逻辑尺寸铺满；原先「compat + 临时改物理屏 + 重启应用」那套配方整个删除（细节见 `NATIVE_MIRROR.md` §P3） |
 | 2026-09-20 | 应用被别的投屏软件搬走时**无缝接回**：`am display move-stack` 只搬任务不重启（真机验证 pid 不变），入口只在画面被抢走时居中显示；同设备同应用不再开第二个窗口 |
-| 2026-09-21 | 修「收藏记不住设备」：收藏与应用缓存原先按 adb **传输地址**存，无线重连一次地址就换（同一台手机曾留下 3 个桶）；改用 `ro.serialno` 稳定标识 + 落盘别名表（`device-aliases.json`），旧地址桶首次读写时自动并入并备份为 `favorites.json.bak` |
+| 2026-09-21 | 修「收藏记不住设备」：收藏与应用缓存原先按 adb **传输地址**存，无线重连一次地址就换（同一台手机曾留下 3 个桶）；改用 `ro.serialno` 稳定标识 + 落盘别名表（`device-aliases.json`），旧地址桶首次读写时自动并入并备份为 `favorites.json.bak`；桌面快捷方式里存的也是这个稳定标识，打开时反查当前地址 |
+| 2026-09-21 | `.adr` 改为**正式 UTI 所有权**声明（`com.anddrive.mirror-shortcut` + `LSHandlerRank: Owner`，写在 `electron-builder.json` 的 `mac.extendInfo`，dev launcher 同步）：原先只给后缀，系统按扩展名造 `dyn.xxxx` 动态类型，谁最后注册谁处理 |
+| 2026-09-21 | 新增 `pnpm run shortcut:fix`（`scripts/fix-shortcut-association.mjs`）：把历史构建副本对 `.adr` 的注册清剩一个。开发机实测 47 个声称者 → 3 个（正式版 + 2 个 dev launcher），此前双击快捷方式可能唤起 release/ 里的旧包 |
 
 ---
 
@@ -49,10 +51,9 @@
 | 单设备会话 | `src/App.vue` | 只维护一台活动设备，连接后停止发现轮询 |
 | 应用列表（两阶段） | `electron/adb.js:740`、`src/components/home/AppList.vue:76` | 先包名/标签，再按 20 个/批补齐图标 |
 | 图标缓存 | `electron/adb.js:370` | 90 天快照、7 天图标刷新、原子写入 |
-| scrcpy 启动与多窗口 | `electron/adb.js` `startScrcpy` / `scrcpyProcesses`、`src/components/ScrcpySessions.vue` | 参数可配（分辨率/码率/fps/编码/音频/息屏/置顶/全屏），会话列表聚焦与关闭 |
+| 投屏启动与多窗口 | `electron/mirror/session.js`、`src/components/ScrcpySessions.vue` | 参数可配（码率/fps/编码/音频/屏幕策略/置顶/全屏），会话列表聚焦与关闭，同设备同应用只开一个窗口 |
 | 设备信息面板 | `electron/adb.js` `getDeviceStats`、`src/components/home/DeviceStats.vue` | 型号/系统/存储/电量/网络/CPU/内存，30s 缓存与手动刷新 |
-| 桌面投屏快捷方式 | `electron/shortcutCore.js`（纯逻辑）、`electron/shortcut.js`、`electron/main.js` `open-file`、`src/components/home/AppList.vue` | 生成 `.adr` 快捷方式文件（含应用图标，并设为 Finder 图标），系统按文件关联交给 AndDrive 打开并投屏，纳入会话管理；dev 模式由手工 `.app` bundle 提供文件关联；投屏参数唤起时取主进程最新全局配置 |
-| scrcpy 窗口图标 | `electron/scrcpyApp.js`、`electron/adb.js` | macOS 上 scrcpy 以带图标的 `.app` bundle 启动（按图标缓存、硬链接二进制），Dock 从出现即用应用图标；并以 `SCRCPY_ICON_DIR` 设定窗口图标 |
+| 桌面投屏快捷方式 | `electron/shortcutCore.js`（纯逻辑）、`electron/shortcut.js`、`electron/main.js` `open-file`、`src/components/home/AppList.vue`、`scripts/fix-shortcut-association.mjs` | 生成 `.adr` 快捷方式文件（含应用图标，并设为 Finder 图标），系统按文件关联交给 AndDrive 打开并投屏，纳入会话管理；文件里存稳定设备标识，打开时反查当前 adb 地址；`.adr` 以正式 UTI 声明为 AndDrive 所有（dev 模式由手工 `.app` bundle 提供同样声明的关联）；投屏参数唤起时取主进程最新全局配置 |
 | scrcpy 全局参数持久化 | `electron/scrcpyConfig.js`、`src/composables/useScrcpyPreferences.js` | 参数存主进程 userData/scrcpy-config.json，渲染层经 IPC 读写，冷启动唤起投屏也能拿到最新参数 |
 | Helper 自动安装/升级 | `electron/adb.js:642` `ensureLatestHelper` | 版本不一致时 `adb install -r` |
 | 应用列表缓存秒开 | `electron/adb.js:866` | `getCachedApps` 先渲染缓存 |

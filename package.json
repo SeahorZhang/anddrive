@@ -15,6 +15,7 @@
     "cert:install": "bash scripts/install-signing-cert.sh",
     "download-adb": "bash scripts/download-adb.sh",
     "mirror:spike": "node scripts/mirror-spike.mjs",
+    "shortcut:fix": "node scripts/fix-shortcut-association.mjs",
     "preview": "vite preview",
     "lint": "run-s lint:oxlint lint:eslint",
     "lint:oxlint": "oxlint .",
