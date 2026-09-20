@@ -192,6 +192,19 @@ export async function stopAllMirrorSessions() {
   return ids.length;
 }
 
+/**
+ * 这个窗口是不是某个镜像会话的窗口。菜单要用它决定 ⌘Q 的语义：
+ * 镜像窗口上就是「关掉这个投屏窗口」，不是把整个程序退掉。
+ * @param {import("electron").BrowserWindow | null} target
+ */
+export function isMirrorWindow(target) {
+  if (!target || target.isDestroyed()) return false;
+  for (const session of sessions.values()) {
+    if (session.win === target) return true;
+  }
+  return false;
+}
+
 export function listMirrorSessions() {
   return [...sessions.values()].map(snapshot);
 }

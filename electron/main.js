@@ -14,6 +14,7 @@ import { readShortcutFile, ensureFileAssociation } from "./shortcut.js";
 import { loadScrcpyConfig, currentScrcpyConfig } from "./scrcpyConfig.js";
 import "./permissions.js";
 import "./favorites.js";
+import { installAppMenu } from "./menu.js";
 import "./mirror/session.js";
 import { CHANNELS } from "./ipcContract.js";
 
@@ -171,6 +172,8 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  // 菜单要在建窗口之前就位，否则 macOS 先用 Electron 默认菜单（⌘Q = 退出程序）。
+  installAppMenu();
   // 快捷方式唤起投屏要用的全局参数先落到位，再开窗口处理队列。
   await loadScrcpyConfig();
   app.setAsDefaultProtocolClient(MIRROR_SCHEME);
