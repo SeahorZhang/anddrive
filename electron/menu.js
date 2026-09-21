@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu, app } from "electron";
+import { Menu, app } from "electron";
 import { isMirrorWindow } from "./mirror/session.js";
 
 // ---------------------------------------------------------------------------

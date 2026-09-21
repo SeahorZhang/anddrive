@@ -79,6 +79,21 @@ describe('buildMirrorOptions', () => {
       'h264',
     )
   })
+
+  it('屏幕策略只有「保持亮屏」进服务端选项，「启动后息屏」不进', () => {
+    expect(buildMirrorOptions({ screenMode: 'keepActive' }).keepActive).toBe(true)
+
+    // turnOff 曾被错映射成 stayAwake —— 那是「保持亮屏」的同义词，语义正好相反。
+    // 息屏靠会话建立后的 setDisplayPower(false) 控制消息（resolveRuntimePrefs.turnScreenOff）。
+    const turnOff = buildMirrorOptions({ screenMode: 'turnOff' })
+    expect(turnOff.keepActive).toBeUndefined()
+    expect(turnOff.stayAwake).toBeUndefined()
+    expect(resolveRuntimePrefs({ screenMode: 'turnOff' }).turnScreenOff).toBe(true)
+
+    const normal = buildMirrorOptions({ screenMode: 'normal' })
+    expect(normal.keepActive).toBeUndefined()
+    expect(normal.stayAwake).toBeUndefined()
+  })
 })
 
 describe('resolveNativeCodec', () => {

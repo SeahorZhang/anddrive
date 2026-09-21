@@ -162,6 +162,8 @@ export async function startMirrorSession(request) {
   }
 
   // 页面主动 invoke 拉取启动参数（避免 did-finish-load 时序竞态）。
+  // `prefs` 也要带上：`turnScreenOff` 得由镜像页在会话建立后用控制消息
+  // `setDisplayPower(false)` 下发（scrcpy 没有「启动即息屏」这个服务端选项）。
   session.pendingInit = {
     id: session.id,
     serial,
@@ -169,6 +171,7 @@ export async function startMirrorSession(request) {
     packageName,
     serverPath,
     config: request?.config ?? null,
+    prefs,
   };
 
   return { id: session.id, serial, packageName, label, startedAt: session.startedAt };

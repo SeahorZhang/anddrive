@@ -37,6 +37,8 @@
 | 2026-09-21 | 修「收藏记不住设备」：收藏与应用缓存原先按 adb **传输地址**存，无线重连一次地址就换（同一台手机曾留下 3 个桶）；改用 `ro.serialno` 稳定标识 + 落盘别名表（`device-aliases.json`），旧地址桶首次读写时自动并入并备份为 `favorites.json.bak`；桌面快捷方式里存的也是这个稳定标识，打开时反查当前地址 |
 | 2026-09-21 | `.adr` 改为**正式 UTI 所有权**声明（`com.anddrive.mirror-shortcut` + `LSHandlerRank: Owner`，写在 `electron-builder.json` 的 `mac.extendInfo`，dev launcher 同步）：原先只给后缀，系统按扩展名造 `dyn.xxxx` 动态类型，谁最后注册谁处理 |
 | 2026-09-21 | 新增 `pnpm run shortcut:fix`（`scripts/fix-shortcut-association.mjs`）：把历史构建副本对 `.adr` 的注册清剩一个。开发机实测 47 个声称者 → 3 个（正式版 + 2 个 dev launcher），此前双击快捷方式可能唤起 release/ 里的旧包 |
+| 2026-09-22 | 代码体检落成 [`AUDIT_2026-09.md`](AUDIT_2026-09.md)，并做完它的第 1 批：**修好「启动后息屏」**（此前映射成 `stayAwake`＝保持亮屏、且 `setDisplayPower` 那条分支因为 `pendingInit` 没带 `prefs` 永远不执行）；**adb 调用全面加超时**（默认 15s、connect/pair 45s、安装卸载拉文件 5 分钟，超时按「设备无响应」上报，`getDeviceState` 把超时归为 `offline` 让心跳真能发现掉线）；**收藏写盘失败改为报错**（渲染层据此回滚星标）；换设备后首页按设备地址重挂；快捷方式冷启动少跑一次 `adb devices` |
+| 2026-09-22 | 工程基线：`npm run lint` 由红转绿（6 条 `no-unused-vars` 清零，并给 `composeMacosIconPng` 补上真实合成 + 缓存的单测）；`adb.js`/`preload.js` 里 12 个裸通道字符串收进 `CHANNELS`，新增通道唯一性与形状单测；README 五处与代码不符的描述改对（build 语义、引擎回退、架构目录、两阶段列表、失效链接） |
 
 ---
 
@@ -350,6 +352,7 @@
 
 ## 12. 参考
 
+- [`AUDIT_2026-09.md`](AUDIT_2026-09.md) — 2026-09-22 代码体检：已确认的缺陷（含 3 个失效设置项）、工程优化、文档漂移与功能点子；本文是排期计划，那份是「代码现在到底什么样」
 - [`PRINCIPLE_DOCUMENT.md`](PRINCIPLE_DOCUMENT.md) — 架构与核心模块原理
 - [`../README.md`](../README.md) — 使用、构建与签名说明
 - [`../helper-app/README.md`](../helper-app/README.md) — Helper 协议与输出契约

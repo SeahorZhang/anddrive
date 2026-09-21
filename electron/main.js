@@ -102,12 +102,17 @@ async function handleMirrorArg(request) {
 async function launchMirrorFromRequest(request) {
   await ensureServer();
   let address = request.serial;
-  if ((await getDeviceState(request.serial)) !== "device") {
+  let state = await getDeviceState(address);
+  if (state !== "device") {
     // 快捷方式里存的可能是稳定设备标识（新）也可能是当年的传输地址（旧）：
     // 先按标识反查当前地址，命中就直接用，省掉一次重连失败。
-    address = (await findTransportByStableId(request.serial)) ?? address;
+    const found = await findTransportByStableId(request.serial);
+    if (found && found !== address) {
+      address = found;
+      state = await getDeviceState(address);
+    }
   }
-  if ((await getDeviceState(address)) !== "device") {
+  if (state !== "device") {
     const result = await reconnectDevice(address);
     if (!result.online || !result.address) {
       throw new Error("设备未连接，请先在 AndDrive 中连接设备");

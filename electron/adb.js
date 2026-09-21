@@ -1,5 +1,5 @@
 import { app, dialog, ipcMain } from "electron";
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
@@ -7,11 +7,7 @@ import { fileURLToPath } from "node:url";
 import { CHANNELS } from "./ipcContract.js";
 import { browse } from "./mdns.js";
 import { pickStableId } from "./deviceIdentity.js";
-import {
-  DEFAULT_SCRCPY_CONFIG,
-  normalizeScrcpyConfig,
-  currentScrcpyConfig,
-} from "./scrcpyConfig.js";
+import { DEFAULT_SCRCPY_CONFIG, normalizeScrcpyConfig } from "./scrcpyConfig.js";
 import { sanitizeIcon } from "./iconImage.js";
 import helperVersion from "../resources/helper-app.version.json" with { type: "json" };
 
@@ -42,10 +38,53 @@ export const scrcpyServerPath = () => path.join(resourcesBase(), "scrcpy", "scrc
 
 let serverStarted = false;
 
+/**
+ * adb 子进程超时。transport 半死（手机休眠、换地址、Wi-Fi 抖动）时 `adb` 会**一直挂着**：
+ * 不退出、不报错，于是调用它的 IPC 永远不返回 —— 界面停在 spinner，重连和提示都无从触发。
+ * 这里宁可报「设备无响应」也不能永久卡住。
+ */
+const ADB_TIMEOUT_MS = 15_000;
+/** `adb connect` / `adb pair`：对端不响应时要等 TCP 超时，给得更宽。 */
+const ADB_CONNECT_TIMEOUT_MS = 45_000;
+/** 安装 / 卸载 / 拉文件是分钟级的正常慢操作，不能用默认超时去掐。 */
+const ADB_TRANSFER_TIMEOUT_MS = 5 * 60_000;
+
+/** @typedef {{ timeoutMs?: number }} AdbCallOptions */
+
+/**
+ * 把写在最前面的选项对象从 adb 参数里摘出来：
+ * `adbExec({ timeoutMs: ADB_TRANSFER_TIMEOUT_MS }, "-s", serial, "install", …)`。
+ * @param {(string | AdbCallOptions)[]} args
+ * @returns {[AdbCallOptions, string[]]}
+ */
+function splitCallOptions(args) {
+  const first = args[0];
+  if (first && typeof first === "object") return [first, args.slice(1)];
+  return [{}, args];
+}
+
+/**
+ * execFile 被超时杀掉的特征：Node 置 `killed`/`signal`，部分版本给 `ETIMEDOUT`。
+ * @param {unknown} error
+ */
+function isAdbTimeoutError(error) {
+  if (!error || typeof error !== "object") return false;
+  const { killed, code } = /** @type {{ killed?: boolean, code?: unknown }} */ (error);
+  return killed === true || code === "ETIMEDOUT";
+}
+
+/** 超时对用户来说就是「手机没反应」，文案统一从这里出。 */
+const ADB_TIMEOUT_MESSAGE = "设备无响应（命令超时），可能已息屏休眠或换了地址";
+
+/** 超时错误保留 ETIMEDOUT 标记，好让上层（如 getDeviceState）认出这是超时。 */
+function adbTimeoutError() {
+  return Object.assign(new Error(ADB_TIMEOUT_MESSAGE), { code: "ETIMEDOUT" });
+}
+
 export async function ensureServer() {
   if (serverStarted) return;
   await new Promise((resolve, reject) => {
-    execFile(adbPath(), ["start-server"], (err) => {
+    execFile(adbPath(), ["start-server"], { timeout: ADB_TIMEOUT_MS }, (err) => {
       if (err) reject(err);
       else {
         serverStarted = true;
@@ -55,11 +94,12 @@ export async function ensureServer() {
   });
 }
 
-/** @param {...string} args */
+/** @param {...(string | AdbCallOptions)} args */
 function adbExec(...args) {
+  const [{ timeoutMs = ADB_TIMEOUT_MS }, command] = splitCallOptions(args);
   return new Promise((resolve, reject) => {
-    execFile(adbPath(), args, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr || err.message));
+    execFile(adbPath(), command, { timeout: timeoutMs }, (err, stdout, stderr) => {
+      if (err) reject(isAdbTimeoutError(err) ? adbTimeoutError() : new Error(stderr || err.message));
       else resolve(stdout.trim());
     });
   });
@@ -69,16 +109,24 @@ function adbExec(...args) {
  * Like adbExec but never rejects: resolves with `{ code, stdout, stderr }` so
  * callers can inspect exit codes and device output. adb exits non-zero while
  * still printing a meaningful message (e.g. uninstalling a missing package).
- * @param {...string} args
+ * 超时也算「有结果」：`timedOut` 为真、`stderr` 是给用户看的中文说明。
+ * @param {...(string | AdbCallOptions)} args
  */
 function adbExecSafe(...args) {
+  const [{ timeoutMs = ADB_TIMEOUT_MS }, command] = splitCallOptions(args);
   return new Promise((resolve) => {
-    execFile(adbPath(), args, (err, stdout, stderr) => {
-      resolve({
-        code: err ? (err.code ?? 1) : 0,
-        stdout: stdout?.trim() || "",
-        stderr: stderr?.trim() || "",
-      });
+    execFile(adbPath(), command, { timeout: timeoutMs }, (err, stdout, stderr) => {
+      const out = stdout?.trim() || "";
+      if (!err) {
+        resolve({ code: 0, stdout: out, stderr: stderr?.trim() || "" });
+        return;
+      }
+      if (isAdbTimeoutError(err)) {
+        resolve({ code: 1, stdout: out, stderr: ADB_TIMEOUT_MESSAGE, timedOut: true });
+        return;
+      }
+      const code = typeof err.code === "number" ? err.code : 1;
+      resolve({ code, stdout: out, stderr: stderr?.trim() || err.message });
     });
   });
 }
@@ -344,7 +392,14 @@ async function getConnectedDevice() {
 export async function getDeviceState(serial) {
   if (typeof serial !== "string" || !serial) return "absent";
   await ensureServer();
-  return parseAdbDevices(await adbExec("devices")).get(serial) || "absent";
+  try {
+    return parseAdbDevices(await adbExec("devices")).get(serial) || "absent";
+  } catch (error) {
+    // 问不到状态就按「离线」上报：心跳与快捷方式都据此走重连分支。
+    // 旧行为是让它一直挂着，调用方永远等不到答案。
+    if (isAdbTimeoutError(error)) return "offline";
+    throw error;
+  }
 }
 
 /**
@@ -380,7 +435,7 @@ export async function reconnectDevice(serial) {
   const address = /:\d+$/.test(serial) ? serial : await resolveReconnectAddress(serial);
   if (!address) return { online: false, reason: "no-address" };
 
-  const result = await adbExecSafe("connect", address);
+  const result = await adbExecSafe({ timeoutMs: ADB_CONNECT_TIMEOUT_MS }, "connect", address);
   if (!/connected to /i.test(result.stdout)) {
     return { online: false, reason: result.stderr || result.stdout || "connect-failed" };
   }
@@ -785,7 +840,14 @@ async function deviceApkPath(serial) {
 
 /** 安装 helper APK；adb 报错或输出不含 Success 均视为失败。 */
 async function installHelper(serial) {
-  const stdout = await adbExec("-s", serial, "install", "-r", helperApkPath());
+  const stdout = await adbExec(
+    { timeoutMs: ADB_TRANSFER_TIMEOUT_MS },
+    "-s",
+    serial,
+    "install",
+    "-r",
+    helperApkPath(),
+  );
   if (!/Success/i.test(stdout)) throw new Error(stdout || "安装失败");
   return "安装成功";
 }
@@ -799,7 +861,13 @@ async function installHelper(serial) {
 async function uninstallHelper(serial) {
   // adbExecSafe never rejects: on this ROM a *successful* uninstall still
   // exits 1 and prints "Failure [...]". Output is logged, not trusted.
-  return await adbExecSafe("-s", serial, "uninstall", HELPER_PACKAGE);
+  return await adbExecSafe(
+    { timeoutMs: ADB_TRANSFER_TIMEOUT_MS },
+    "-s",
+    serial,
+    "uninstall",
+    HELPER_PACKAGE,
+  );
 }
 
 /** @returns {Promise<string | null>} versionName of the on-device Helper */
@@ -1132,7 +1200,13 @@ async function uninstallApp(serial, packageName) {
   assertSerial(serial);
   const pkg = normalizePackageName(packageName);
   await ensureServer();
-  const { code, stdout, stderr } = await adbExecSafe("-s", serial, "uninstall", pkg);
+  const { code, stdout, stderr } = await adbExecSafe(
+    { timeoutMs: ADB_TRANSFER_TIMEOUT_MS },
+    "-s",
+    serial,
+    "uninstall",
+    pkg,
+  );
   if (code !== 0 && !/success/i.test(stdout)) {
     throw new Error(stderr || stdout || "卸载失败");
   }
@@ -1194,7 +1268,14 @@ async function exportApk(serial, packageName) {
   for (const remote of apkPaths) {
     const name = path.posix.basename(remote);
     const destination = path.join(dir, name);
-    const result = await adbExecSafe("-s", serial, "pull", remote, destination);
+    const result = await adbExecSafe(
+      { timeoutMs: ADB_TRANSFER_TIMEOUT_MS },
+      "-s",
+      serial,
+      "pull",
+      remote,
+      destination,
+    );
     const pulled = /(\d+) files? pulled/i.exec(result.stdout);
     if (result.code !== 0 || !pulled || Number(pulled[1]) === 0) {
       throw new Error(result.stderr || result.stdout || `导出 ${name} 失败`);
@@ -1416,37 +1497,37 @@ async function getDeviceStats(serial, force = false) {
 // ---------------------------------------------------------------------------
 
 // 连接设备
-ipcMain.handle("adb:connect", async (_, address) => {
-  const output = await adbExec("connect", address);
+ipcMain.handle(CHANNELS.adbConnect, async (_, address) => {
+  const output = await adbExec({ timeoutMs: ADB_CONNECT_TIMEOUT_MS }, "connect", address);
   if (!/connected to /i.test(output)) throw new Error(output || "连接失败");
   return output.trim();
 });
 
 // 发现设备
-ipcMain.handle("adb:findDevice", findDevice);
+ipcMain.handle(CHANNELS.adbFindDevice, findDevice);
 
 // 通过 mDNS 解析设备当前的连接地址（adb-tls-connect 端口，与配对端口不同）
-ipcMain.handle("adb:resolveConnectAddress", (_, serial) => resolveConnectAddress(serial));
+ipcMain.handle(CHANNELS.adbResolveConnectAddress, (_, serial) => resolveConnectAddress(serial));
 
 // 一次性列出当前可连接的设备（供渲染层轮询展示）
-ipcMain.handle("adb:listConnectDevices", listConnectDevices);
+ipcMain.handle(CHANNELS.adbListConnectDevices, listConnectDevices);
 
 // 当前已连接（其他工具建立）的设备，供启动时接管
-ipcMain.handle("adb:getConnectedDevice", getConnectedDevice);
+ipcMain.handle(CHANNELS.adbGetConnectedDevice, getConnectedDevice);
 
 // 连接健康检查：读取单台设备的实时状态（device / offline / unauthorized / absent）
-ipcMain.handle("adb:getDeviceState", (_, serial) => getDeviceState(serial));
+ipcMain.handle(CHANNELS.adbGetDeviceState, (_, serial) => getDeviceState(serial));
 
 // 断线重连：设备在线幂等返回，否则解析 mDNS 地址后重新 adb connect
-ipcMain.handle("adb:reconnect", (_, serial) => reconnectDevice(serial));
+ipcMain.handle(CHANNELS.adbReconnect, (_, serial) => reconnectDevice(serial));
 
 // 配对设备
 ipcMain.handle(CHANNELS.adbPair, async (event, device, password) => {
-  return adbExec("pair", device.address, password);
+  return adbExec({ timeoutMs: ADB_CONNECT_TIMEOUT_MS }, "pair", device.address, password);
 });
 
 /**
- * 设备级清理钩子：断开连接或退出时执行（自研镜像会话等）。：断开连接或退出时执行（自研镜像会话等）。
+ * 设备级清理钩子：断开连接或退出时执行（自研镜像会话等）。
  * 放在这里是为了让 adb.js 不用反向依赖 mirror 模块。
  * @type {Set<(serial?: string) => unknown>}
  */
@@ -1486,7 +1567,7 @@ ipcMain.handle(CHANNELS.adbDisconnect, async (_, rawSerial) => {
 });
 
 // 安装 Helper
-ipcMain.handle("adb:installHelper", async (event, serial) => {
+ipcMain.handle(CHANNELS.adbInstallHelper, async (event, serial) => {
   return installHelper(serial);
 });
 
@@ -1495,22 +1576,22 @@ ipcMain.handle("adb:installHelper", async (event, serial) => {
  * one-shot, so this resolves with the complete list.
  * @param {string} address
  */
-ipcMain.handle("adb:loadInstalledApps", async (event, address) => {
+ipcMain.handle(CHANNELS.adbLoadInstalledApps, async (event, address) => {
   return loadInstalledApps(address);
 });
 
 // 批量获取应用图标（渲染层按每组 20 个包名调用）
-ipcMain.handle("adb:getAppIcons", async (event, address, packages) => {
+ipcMain.handle(CHANNELS.adbGetAppIcons, async (event, address, packages) => {
   return getAppIcons(address, packages);
 });
 
 // 卸载 Helper（部分 ROM 卸载成功也返回 code 1 + Failure，输出仅记录，不作判断）
-ipcMain.handle("adb:uninstallHelper", async (event, address) => {
+ipcMain.handle(CHANNELS.adbUninstallHelper, async (event, address) => {
   return uninstallHelper(address);
 });
 
 // 清除该设备的应用列表缓存
-ipcMain.handle("adb:deleteAppCache", async (event, address) => {
+ipcMain.handle(CHANNELS.adbDeleteAppCache, async (event, address) => {
   return deleteAppCache(address);
 });
 

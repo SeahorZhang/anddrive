@@ -137,7 +137,11 @@ export async function toggleFavorite(serial, packageName) {
   if (current.has(pkg)) current.delete(pkg);
   else current.add(pkg);
   store[stableId] = [...current].slice(0, MAX_FAVORITES_PER_DEVICE);
-  await writeStore(store);
+  if (!(await writeStore(store))) {
+    // 写盘失败必须报错：渲染层是乐观更新（`useFavorites.toggleFavorite`），
+    // 只有 reject 才会把星标回滚并提示用户。返回新列表等于「假装存下来了」。
+    throw new Error("收藏没能保存：写入本地文件失败");
+  }
   return store[stableId];
 }
 

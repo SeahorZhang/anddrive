@@ -301,7 +301,9 @@ function closeSettings() {
     <span class="size-5 animate-spin rounded-full border-2 border-black/10 border-t-[#007aff]" aria-label="加载中" />
   </div>
 
-  <PageHome v-else-if="pageType === 'home'" :device="device" />
+  <!-- 按设备地址重挂：AppList / DeviceStats 只在挂载时拉一次数据，不换 key 的话
+       在首页直接连另一台设备会留着上一台的列表。 -->
+  <PageHome v-else-if="pageType === 'home'" :key="device.address" :device="device" />
 
   <PageSettings v-else-if="pageType === 'settings'" />
 

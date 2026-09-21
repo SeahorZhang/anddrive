@@ -68,8 +68,13 @@ export function buildMirrorOptions(input, overrides = {}) {
   options.newDisplay = overrides.newDisplay || DEFAULT_NEW_DISPLAY;
   options.flexDisplay = true;
 
+  // 「保持亮屏」是唯一能落到服务端选项的屏幕策略。
+  // 「启动后息屏」**不能**在这里表达：scrcpy 4.0 没有「启动即息屏」的服务端选项
+  // （Tango 侧只有 `powerOffOnClose` = 关闭会话时才息屏），早先这里错映射成
+  // `stayAwake`（与 `keepActive` 同义，等于「保持亮屏」，语义正好相反）。
+  // 真正的做法是会话建立后由镜像页发一条 `setDisplayPower(false)` 控制消息，
+  // 见 `resolveRuntimePrefs` 的 `turnScreenOff` 与 `src/mirror/direct-session.js`。
   if (config.screenMode === "keepActive") options.keepActive = true;
-  else if (config.screenMode === "turnOff") options.stayAwake = true;
 
   return options;
 }

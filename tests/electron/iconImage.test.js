@@ -30,3 +30,29 @@ describe('iconPngBuffer', () => {
     expect(iconPngBuffer(null)).toBeNull()
   })
 })
+
+describe('composeMacosIconPng', () => {
+  const composedDir = path.join(userDataDir, 'icon-cache', 'composed')
+
+  // 合成用的是 osascript(AppKit) + sips，只有 macOS 上有意义。
+  // Android 图标是铺满画布的方形，不合成就会比 macOS 其他图标明显大一圈。
+  it.runIf(process.platform === 'darwin')(
+    '合成成 1024 见方，并且结果按内容缓存',
+    async () => {
+      const composed = await composeMacosIconPng(PNG_32X32)
+      expect(composed).not.toBeNull()
+      expect(pngSize(composed)).toEqual({ width: 1024, height: 1024 })
+
+      // 第二次应当直接命中缓存（同内容同哈希），不再新落一份文件。
+      const again = await composeMacosIconPng(PNG_32X32)
+      expect(again?.equals(composed)).toBe(true)
+      const files = await fs.readdir(composedDir)
+      expect(files.filter((name) => name.endsWith('.png'))).toHaveLength(1)
+    },
+    30_000,
+  )
+
+  it.runIf(process.platform !== 'darwin')('非 macOS 原样返回', async () => {
+    expect(await composeMacosIconPng(PNG_32X32)).toBe(PNG_32X32)
+  })
+})

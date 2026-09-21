@@ -4,7 +4,6 @@ import { createHash, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import { pathExists } from "./fsUtil.js";
 
 const execFileAsync = promisify(execFile);
 

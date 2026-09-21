@@ -1,6 +1,6 @@
 # AndDrive
 
-AndDrive 是一个 macOS 桌面工具，通过 Android 无线调试连接单台 Android 设备，浏览已安装应用并使用 scrcpy 启动应用镜像窗口。
+AndDrive 是一个 macOS 桌面工具，通过 Android 无线调试连接单台 Android 设备，浏览已安装应用，并在自研镜像窗口里投屏与操作该应用（复用 scrcpy 服务端）。
 
 > 仅支持 macOS（Apple Silicon）。Windows/Linux 构建配置已移除。
 
@@ -9,7 +9,7 @@ AndDrive 是一个 macOS 桌面工具，通过 Android 无线调试连接单台 
 1. 在 Android 设备开启无线调试。
 2. 在 AndDrive 扫描二维码完成 ADB 配对。
 3. AndDrive 自动发现并连接设备，安装/启动 Helper App，读取应用列表和图标。
-4. 点击应用启动 scrcpy 镜像窗口。
+4. 点击应用启动镜像窗口。
 5. 在应用右键菜单选择“发送到桌面”，可在桌面生成带应用图标的 `.adr` 快捷方式，双击由系统交给 AndDrive 打开并投屏该应用；投屏参数始终使用设置中的最新全局参数，镜像窗口也使用该应用图标。
 6. 点击“断开连接”会结束当前无线 ADB 传输并停止 scrcpy；Android 中保存的配对记录不会被删除。
 
@@ -23,7 +23,7 @@ AndDrive 遵循**单设备优先**规则：当前只维护一台活动设备，�
 - Android 11+ 设备，开启无线调试并与 Mac 位于同一网络
 - Android SDK（构建 Helper App 时需要；仅打包已有 APK 时不需要）
 
-详细连接步骤见 [`docs/phone-connection.md`](docs/phone-connection.md)，Helper 协议见 [`helper-app/README.md`](helper-app/README.md)。
+Helper 协议见 [`helper-app/README.md`](helper-app/README.md)，镜像引擎的细节与剩余待办见 [`docs/NATIVE_MIRROR.md`](docs/NATIVE_MIRROR.md)。
 
 ## 开发
 
@@ -34,14 +34,15 @@ pnpm dev
 
 配对二维码需要设备开启“无线调试 → 使用二维码配对设备”。如果设备已经配对，可直接启动应用并等待自动发现。
 
-### 自研镜像引擎（实验）
+### 自研镜像引擎
 
-除 scrcpy 原生窗口外，项目内还有一个实验性的自研客户端：复用随包的 `scrcpy-server`，用 Tango（`@yume-chan`）建立连接与读取视频流，除了画面还转发声音：scrcpy-server 的 Opus 音频经 WebCodecs 解码后用 AudioContext 排程播放，设备侧音频不可用时自动降级为纯画面。整个客户端用 Tango（`@yume-chan`）官方库在镜像窗口内**直连** adb（`nodeIntegration`），帧数据不跨进程。自研引擎现为启动镜像的**默认**；需要兼容时在对话框勾选「使用 scrcpy 原生引擎（兼容回退）」。架构与约束详见 [`docs/NATIVE_MIRROR.md`](docs/NATIVE_MIRROR.md)。
+启动镜像走的是项目内自研客户端：复用随包的 `scrcpy-server`，用 Tango（`@yume-chan`）建立连接与读取视频流，除了画面还转发声音：scrcpy-server 的 Opus 音频经 WebCodecs 解码后用 AudioContext 排程播放，设备侧音频不可用时自动降级为纯画面。整个客户端用 Tango 官方库在镜像窗口内**直连** adb（`nodeIntegration`），帧数据不跨进程。
 
+- **这是唯一引擎**：早先的「scrcpy 原生窗口（兼容回退）」已连同随包 `scrcpy` 二进制一起移除，界面上没有引擎开关，也不存在需要时的回退路径。
 - 仅 macOS（Apple Silicon），解码依赖 Chromium WebCodecs；H.264 / H.265 可用，AV1 会自动回落到 H.264。
-- 服务端参数由 `electron/mirror/options.js` 映射；窗口置顶 / 全屏 / 息屏由 Electron 与会话处理。
-- 触控 / 滚轮 / 键盘输入；操作栏（返回/主屏等）已移除，高頻动作依赖 scrcpy 原生引擎快捷键或设备端手势。
-- 暂不支持复制粘贴与中文输入法注入（`Cmd` 组合键保留给系统与应用）。
+- 服务端参数由 `electron/mirror/options.js` 映射；窗口置顶 / 全屏由 Electron 窗口处理，「启动后息屏」在会话建立后以 `setDisplayPower(false)` 控制消息下发。
+- 输入支持触控、滚轮与键盘（`Esc` = 返回键）；**界面上没有返回 / 主屏 / 多任务 / 音量等动作键**（`electron/mirror/control.js` 里已实现，缺调用入口），这些只能靠设备端手势。
+- `Cmd` 组合键保留给系统与应用，所以 `⌘V` 不会把 Mac 剪贴板贴进手机；也不支持中文输入法注入。
 - 无界面协议调试：`pnpm mirror:spike <serial> [h264|h265] [raw-out] [秒数]`，可把裸码流写文件后用 `ffprobe` 检查。
 - 现状与剩余待办见 [`docs/NATIVE_MIRROR.md`](docs/NATIVE_MIRROR.md)。
 
@@ -55,17 +56,22 @@ pnpm test
 pnpm test:helper
 pnpm lint:helper
 pnpm build-helper
-pnpm build
-pnpm build:beta
+pnpm build:prod     # 正式版
+pnpm build          # Beta 版（可并存）
 ```
 
 `pnpm lint`、`pnpm format:check` 和测试命令只检查，不应修改工作区。需要自动修复 lint 时使用 `pnpm lint:fix`。
 
 `pnpm build-helper` 使用 `helper-app/gradlew` 构建 APK，并复制到 `resources/helper-app.apk`。
 
-`pnpm build` 会先运行资源校验（`pnpm run verify-resources`），确认 `resources/adb/mac/adb`、`resources/scrcpy/*` 和 `helper-app.apk` 存在且非空，缺资源时快速失败。首次准备资源可运行 `pnpm run download-adb`。
+两个构建命令都会先运行资源校验（`pnpm run verify-resources`），确认 `resources/adb/mac/adb`、`resources/scrcpy/scrcpy-server` 和 `helper-app.apk` 存在且非空，缺资源时快速失败。首次准备资源可运行 `pnpm run download-adb`。
 
-`pnpm build:beta` 构建可并存的 Beta 版（`AndDrive Beta`，独立 appId 与 userData，输出到 `release/beta/<version>`），版本自动带上 `-beta.<BETA_TAG>` 后缀。可通过 `BETA_TAG=xxx pnpm build:beta` 指定标签，默认使用 UTC 时间戳。Apple Silicon 单架构构建使用 `pnpm build:beta:mac:arm64`。
+- **`pnpm build:prod`** —— 正式版 `AndDrive`（appId `com.anddrive.next`），输出到 `release/<version>/`。
+- **`pnpm build`** —— **Beta 版**（`AndDrive Beta`，appId `com.anddrive.next.beta`、独立 userData，走 `electron-builder.beta.mjs`），输出到 `release/beta/<version>/`，版本自动带上 `-beta.<BETA_TAG>` 后缀；`BETA_TAG=xxx pnpm build` 可指定标签，默认用 UTC 时间戳。
+
+> 注意这两个名字与直觉相反：`build` 是 Beta，`build:prod` 才是正式版。
+
+开发机上历史构建会各自留下一份「能打开 `.adr`」的注册，双击桌面快捷方式可能唤起旧构建。`pnpm shortcut:fix` 把这些注册清剩一个（先加 `--dry-run` 看计划；`--keep <app 路径>` 可指定保留哪个）。
 
 ## 本地签名与分发
 
@@ -83,8 +89,8 @@ macOS 打包默认使用 ad-hoc 签名，cdhash 每次构建都会变化，系�
 首次运行：
 
 ```sh
-pnpm cert    # 已存在则复用；有私钥+证书则恢复；都没有才新建，并信任
-pnpm build
+pnpm cert        # 已存在则复用；有私钥+证书则恢复；都没有才新建，并信任
+pnpm build:prod    # 正式版构建（Beta 用 pnpm build）
 ```
 
 ### 分发给其他人
@@ -115,18 +121,16 @@ pnpm build
 
 ```text
 Vue renderer (src/)
-  → window.electronAPI（preload 桥）
+  → window.electronAPI（preload 桥，通道名集中在 electron/ipcContract.js）
   → electron/preload.js
   → electron/main.js（IPC 组装与单设备 teardown）
-  → electron/adb/*      ADB 命令、设备解析、mDNS 发现
-  → electron/adb/*      ADB 命令、设备解析、mDNS 发现
-  → electron/helper/*   Helper 安装、app_process 一次性执行、应用加载
-  → electron/cache/     按设备隔离的应用缓存
-  → electron/scrcpy/    镜像进程管理
+  → electron/adb.js            ADB 执行、设备解析、mDNS 发现、应用缓存与图标、应用操作
+  → electron/mirror/           自研镜像会话：窗口与生命周期、scrcpy 选项映射、控制消息编码
+  → src/mirror/                镜像窗口内的直连客户端（Tango + WebCodecs + WebGL）
   → Android app_process: com.anddrive.helper.ListMain（shell uid 2000，stdout JSON）
 ```
 
-缓存位于 Electron userData 目录，并按设备 serial 隔离。应用列表先显示有效缓存，再用设备上的权威列表（标签与图标内联）替换。Helper APK 仅作代码容器：不授予权限、不监听端口；它带有一个桌面图标，点击后跳转到系统无线调试的二维码配对界面，方便手机直接扫码配对。
+缓存位于 Electron userData 目录，并按**稳定设备标识**（`ro.serialno`，不是会变的 adb 传输地址）隔离。应用列表分两阶段：先出包名与标签（或命中缓存即刻渲染），再按批补齐图标。Helper APK 仅作代码容器：不授予权限、不监听端口；它带有一个桌面图标，点击后跳转到系统无线调试的二维码配对界面，方便手机直接扫码配对。
 
 ## 连接与断开
 

@@ -6,12 +6,22 @@
  * user-displayable string produced by the main-process handlers.
  */
 export const CHANNELS = {
+  /** 连接、发现与设备状态（electron/adb.js）。 */
+  adbConnect: 'adb:connect',
+  adbFindDevice: 'adb:findDevice',
+  adbResolveConnectAddress: 'adb:resolveConnectAddress',
+  adbListConnectDevices: 'adb:listConnectDevices',
+  adbGetConnectedDevice: 'adb:getConnectedDevice',
+  adbGetDeviceState: 'adb:getDeviceState',
+  adbReconnect: 'adb:reconnect',
+  adbInstallHelper: 'adb:installHelper',
+  adbUninstallHelper: 'adb:uninstallHelper',
+  adbLoadInstalledApps: 'adb:loadInstalledApps',
+  adbGetAppIcons: 'adb:getAppIcons',
   adbPair: 'adb:pair',
   adbDisconnect: 'adb:disconnect',
   adbDeleteAppCache: 'adb:deleteAppCache',
   adbGetCachedApps: 'adb:getCachedApps',
-  adbUninstallHelper: 'adb:uninstallHelper',
-  adbGetAppIcons: 'adb:getAppIcons',
 
   /** 应用操作（electron/adb.js）。 */
   adbForceStop: 'adb:forceStop',
