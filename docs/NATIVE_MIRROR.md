@@ -130,13 +130,21 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 4. 修复：`src/mirror/displayFollow.js` 记录「已下发尺寸」，相同尺寸直接丢弃；多次变化在 150ms 合并窗口内只发最后一次（服务端另有 300ms 去抖 `DisplayResizeDebouncer`）。`connect.js` 的 `startScrcpy` 现在返回实际用于创建虚拟显示的尺寸，供 `seed()` 初始化。
 5. 验证：HUD 的 `chg`（视频尺寸变化次数）在启动后应保持 0；拖动窗口时增长一次且画面不反复翻正。
 
-排查记录（2026-09-22 窗口拖大后画面被切 / 超出窗口）：
+排查记录（2026-09-22 窗口拖大后画面被切 / 超出窗口）——**问题仍未解决**：
 
-1. 现象：把抖音的镜像窗口往大拖，画面超出窗口、内容显示不完整。
-2. 取证：真机上起一个 flex display 会话，按档发 `resizeDisplay`，比对「请求尺寸」与 server 回传的 session 尺寸（`dumpsys display` 里 `virtual:com.android.shell,2000,scrcpy,<scid>` 的 logicalFrame 与之一致）。这台机器的 h265 上限是**短边 4320、长边 8192**：请求 5600x5600 → 回 5600x4320、6800x4400 → 6800x4320、4320x9000 → 4320x8192，**比例被改了**。倍率 3 下只要窗口任一边超过 ~1440 CSS px 就会越界。
-3. 根因：上游 `NewDisplayCapture` 对 flex display 用 `Size.constrain(constraints, false)` —— 逐维裁剪、尽量多留像素，于是越界时只砍超的那一维，**虚拟显示的形状就和窗口不一致**，设备上的应用按被改过的形状重排，我们这边 contain-fit 就表现为被切 / 超出。
-4. 修复（自编 server，客户端不动）：`prepare()` 的两个 flex 分支与 `requestResize()` 共三处改为按比例收缩 `constrain(constraints, true)`。越界的代价变成「每 CSS px 的像素数变少」（略软），而形状和 `1dp = 1 CSS px` 都保住；`resizeDisplay` 本来就不带 dpi，比例一致时 contain 恰好铺满，所以客户端无需跟改。
-5. 复测：替换 `resources/scrcpy/scrcpy-server`（构建配方见上面 §P3）后，同一批请求 5600x5600 → 4320x4320、6800x4400 → 6676x4320、4320x9000 → 3932x8192、6000x12000 → 4096x8192，**比例全部保持**；音频照常（一次会话回 648 个音频包）。
+
+
+1. 现象（用户描述，我全程没亲眼见到）：把抖音的镜像窗口往大拖，画面「超出屏幕 / 展示不完整」。**这句话至少有两种读法**：画面在窗口内被裁掉一圈，或窗口自己跑到 Mac 屏幕外看不见 —— 两种根因完全不同。下面这条记录只证明了「比例被裁」这个缺陷存在，**它不是用户的那个症状**。
+
+2. 取证（可复用）：真机上起一个 flex display 会话，按档发 `resizeDisplay`，比对「请求尺寸」与 server 回传的 session 尺寸（`dumpsys display` 里 `virtual:com.android.shell,2000,scrcpy,<scid>` 的 logicalFrame 与之一致）。这台机器的 h265 上限是**短边 4320、长边 8192**：5600x5600 → 5600x4320、6800x4400 → 6800x4320、4320x9000 → 4320x8192。倍率 3 下窗口任一边超过 ~1440 CSS px 就会越界。注：`dumpsys media.codec` 在这台 ROM 上**没有服务**，查不到 caps，只能这样实测。
+
+3. 顺带发现的一条真实缺陷：上游 `NewDisplayCapture` 对 flex display 用 `Size.constrain(constraints, false)` —— **逐维裁剪**，越界时只砍超的那一维，于是虚拟显示形状与窗口形状脱钩（5600x5600 变 1.296 比例）。这在正常窗口尺寸下不会触发（要某一维 >1440 CSS px），所以大概不是用户看到的那个。
+
+4. 试过并已回退：把上述三处改成按比例收缩 `constrain(constraints, true)`，重建替换 `resources/scrcpy/scrcpy-server`。几何上确实生效（同一批请求 5600x5600 → 4320x4320、4320x9000 → 3932x8192，比例全保住；音频照常），**但用户实测症状照旧，所以整个改动已回退**（server 回到 85b7fb1 之前那份、fork 源码同步改回 `false`）。回退时顺便验了一件有用的小事：从回退后的 fork 源码重建，产物哈希与仓库里那份**逐字节相同**（`2df957b2…`，98893 字节），说明 server 构建是可复现的、源码树与随包二进制对得上。
+
+5. 下一步该查什么（都还没验证）：先弄清症状到底是哪一种；若是窗口跑到屏幕外/贴边 → 看 Electron 侧窗口边界（`electron/mirror/session.js` 的初始 `mirrorWindowBounds` 只约束**初始**尺寸，用户手动拖拽没有 workArea 上限）；若是画面在窗口内被裁 → 看 contain-fit 用的尺寸来源（`src/mirror/App.vue` `syncCanvasBox` 取的是解码器帧尺寸，与 `resizeDisplay` 之后的真实显示尺寸之间是否有一次没同步）。
+
+
 
 ## 4. 验证与排查
 

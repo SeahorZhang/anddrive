@@ -43,8 +43,10 @@ export const DISPLAY_BASE_DPI = 160;
  * 上游 scrcpy 的 flex display 约束是**逐维裁剪**，越界时把 5600x5600 裁成 5600x4320、
  * 把 4320x9000 裁成 4320x8192 —— 显示形状和窗口脱钩，应用按错掉的形状重排，
  * 画面就出现「超出窗口 / 显示不完整」（2026-09-22 用户反馈）。
- * 随包的自编 server 已改成**按比例收缩**（`NewDisplayCapture`，见 docs/NATIVE_MIRROR.md），
- * 于是越界时的代价只是「每 CSS px 的像素数变少」（略软），形状与 1dp=1CSS px 都保住。
+ * 2026-09-22 试过把随包自编 server 的这三处约束改成按比例收缩（形状就保住了），**但用户实测
+ * 症状照旧，改动已回退**（`resources/scrcpy/scrcpy-server` 回到 85b7fb1 之前那份，fork 源码同步回退）。
+ * 结论：这条路径没修好他看到的问题，下次别再从「比例被裁」入手。实测数据与回退记录见
+ * docs/NATIVE_MIRROR.md 的 2026-09-22 排查记录。
  */
 export const DISPLAY_PIXEL_SCALE = 3;
 
