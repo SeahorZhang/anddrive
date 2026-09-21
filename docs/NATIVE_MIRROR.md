@@ -130,6 +130,14 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 4. 修复：`src/mirror/displayFollow.js` 记录「已下发尺寸」，相同尺寸直接丢弃；多次变化在 150ms 合并窗口内只发最后一次（服务端另有 300ms 去抖 `DisplayResizeDebouncer`）。`connect.js` 的 `startScrcpy` 现在返回实际用于创建虚拟显示的尺寸，供 `seed()` 初始化。
 5. 验证：HUD 的 `chg`（视频尺寸变化次数）在启动后应保持 0；拖动窗口时增长一次且画面不反复翻正。
 
+排查记录（2026-09-22 窗口拖大后画面被切 / 超出窗口）：
+
+1. 现象：把抖音的镜像窗口往大拖，画面超出窗口、内容显示不完整。
+2. 取证：真机上起一个 flex display 会话，按档发 `resizeDisplay`，比对「请求尺寸」与 server 回传的 session 尺寸（`dumpsys display` 里 `virtual:com.android.shell,2000,scrcpy,<scid>` 的 logicalFrame 与之一致）。这台机器的 h265 上限是**短边 4320、长边 8192**：请求 5600x5600 → 回 5600x4320、6800x4400 → 6800x4320、4320x9000 → 4320x8192，**比例被改了**。倍率 3 下只要窗口任一边超过 ~1440 CSS px 就会越界。
+3. 根因：上游 `NewDisplayCapture` 对 flex display 用 `Size.constrain(constraints, false)` —— 逐维裁剪、尽量多留像素，于是越界时只砍超的那一维，**虚拟显示的形状就和窗口不一致**，设备上的应用按被改过的形状重排，我们这边 contain-fit 就表现为被切 / 超出。
+4. 修复（自编 server，客户端不动）：`prepare()` 的两个 flex 分支与 `requestResize()` 共三处改为按比例收缩 `constrain(constraints, true)`。越界的代价变成「每 CSS px 的像素数变少」（略软），而形状和 `1dp = 1 CSS px` 都保住；`resizeDisplay` 本来就不带 dpi，比例一致时 contain 恰好铺满，所以客户端无需跟改。
+5. 复测：替换 `resources/scrcpy/scrcpy-server`（构建配方见上面 §P3）后，同一批请求 5600x5600 → 4320x4320、6800x4400 → 6676x4320、4320x9000 → 3932x8192、6000x12000 → 4096x8192，**比例全部保持**；音频照常（一次会话回 648 个音频包）。
+
 ## 4. 验证与排查
 
 - 图形验证：`pnpm dev` → 连接设备 → 应用右键「启动镜像」→ 勾选实验引擎。
