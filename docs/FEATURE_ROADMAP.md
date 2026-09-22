@@ -40,6 +40,8 @@
 | 2026-09-22 | 代码体检落成 [`AUDIT_2026-09.md`](AUDIT_2026-09.md)，并做完它的第 1 批：**修好「启动后息屏」**（此前映射成 `stayAwake`＝保持亮屏、且 `setDisplayPower` 那条分支因为 `pendingInit` 没带 `prefs` 永远不执行）；**adb 调用全面加超时**（默认 15s、connect/pair 45s、安装卸载拉文件 5 分钟，超时按「设备无响应」上报，`getDeviceState` 把超时归为 `offline` 让心跳真能发现掉线）；**收藏写盘失败改为报错**（渲染层据此回滚星标）；换设备后首页按设备地址重挂；快捷方式冷启动少跑一次 `adb devices` |
 | 2026-09-22 | 「镜像窗口拖大后画面被切/超出」**仍未解决**：真机量出这台设备 h265 的编码上限是**短边 4320、长边 8192**，且上游 flex display 越界时逐维裁剪确实会改掉显示形状（5600x5600 → 5600x4320）。但把 server 改成按比例收缩后用户实测症状照旧，**改动已回退**（server 回到 85b7fb1 之前那份；顺带确认回退后的产物与 fork 源码重建结果哈希一致，说明这份二进制确实出自那棵树）。下次排查别再从「比例被裁」入手，实测数据见 `NATIVE_MIRROR.md` |
 | 2026-09-22 | 工程基线：`npm run lint` 由红转绿（6 条 `no-unused-vars` 清零，并给 `composeMacosIconPng` 补上真实合成 + 缓存的单测）；`adb.js`/`preload.js` 里 12 个裸通道字符串收进 `CHANNELS`，新增通道唯一性与形状单测；README 五处与代码不符的描述改对（build 语义、引擎回退、架构目录、两阶段列表、失效链接） |
+| 2026-09-22 | 镜像大窗口卡顿**仍未定论**：给虚拟显示加了像素预算 `MAX_DISPLAY_PIXELS`（理由改成「请求比手机面板还细的像素本身没有意义」，这条与帧率无关），但原先那组 A/B（11.5MP→33.8fps、6MP→67.9fps）**作废** —— 测量时手机上并发跑着两个 `app_process` 采集会话，且静止画面不出帧，量到的是内容动静不是设备能力。复测纪律写进 `NATIVE_MIRROR.md` §4.0 |
+| 2026-09-23 | 大窗口卡顿定案：按 §4.0 纪律干净复测（唯一会话 + 受控匀速滑动）发现**三档像素（2.9/5.1/11.5MP）稳态都是 60fps**，差别只在带宽（~5 → ~27Mbps，会越过设定码率）—— 「像素多导致掉帧」不成立。于是删掉建在坏数据上的 `MAX_DISPLAY_PIXELS` 面积预算，改成**画质档位** `DISPLAY_QUALITY_TIERS`（compat 1.5 / native 2 / sharp 3，默认不变）+ 设置面板可切；遮罩收尾改为**等 configuration + 关键帧这一对**（`createReflowGate`）；渲染层默认参数不再手抄第二份 |
 
 ---
 
@@ -54,7 +56,7 @@
 | 单设备会话 | `src/App.vue` | 只维护一台活动设备，连接后停止发现轮询 |
 | 应用列表（两阶段） | `electron/adb.js:740`、`src/components/home/AppList.vue:76` | 先包名/标签，再按 20 个/批补齐图标 |
 | 图标缓存 | `electron/adb.js:370` | 90 天快照、7 天图标刷新、原子写入 |
-| 投屏启动与多窗口 | `electron/mirror/session.js`、`src/components/ScrcpySessions.vue` | 参数可配（码率/fps/编码/音频/屏幕策略/置顶/全屏），会话列表聚焦与关闭，同设备同应用只开一个窗口 |
+| 投屏启动与多窗口 | `electron/mirror/session.js`、`src/components/ScrcpySessions.vue` | 参数可配（码率/fps/编码/画质档位/音频/屏幕策略/置顶/全屏），会话列表聚焦与关闭，同设备同应用只开一个窗口 |
 | 设备信息面板 | `electron/adb.js` `getDeviceStats`、`src/components/home/DeviceStats.vue` | 型号/系统/存储/电量/网络/CPU/内存，30s 缓存与手动刷新 |
 | 桌面投屏快捷方式 | `electron/shortcutCore.js`（纯逻辑）、`electron/shortcut.js`、`electron/main.js` `open-file`、`src/components/home/AppList.vue`、`scripts/fix-shortcut-association.mjs` | 生成 `.adr` 快捷方式文件（含应用图标，并设为 Finder 图标），系统按文件关联交给 AndDrive 打开并投屏，纳入会话管理；文件里存稳定设备标识，打开时反查当前 adb 地址；`.adr` 以正式 UTI 声明为 AndDrive 所有（dev 模式由手工 `.app` bundle 提供同样声明的关联）；投屏参数唤起时取主进程最新全局配置 |
 | scrcpy 全局参数持久化 | `electron/scrcpyConfig.js`、`src/composables/useScrcpyPreferences.js` | 参数存主进程 userData/scrcpy-config.json，渲染层经 IPC 读写，冷启动唤起投屏也能拿到最新参数 |

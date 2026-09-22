@@ -22,9 +22,11 @@ const current = {
 
 /** 当前窗口对应的虚拟显示尺寸（像素倍率与 dpi 都在 `computeDisplayMetrics` 里定）。 */
 function viewportDisplay() {
+  // 档位取本会话建立时那份 config：dpi 在建显示时定死，中途换档会让 1dp ≠ 1 CSS px。
   return computeDisplayMetrics(
     document.documentElement.clientWidth,
     document.documentElement.clientHeight,
+    current.info?.config?.quality,
   );
 }
 
@@ -37,12 +39,13 @@ function viewportDisplay() {
  *   onEnded: () => void,
  *   onReflowStart?: (size: { width: number, height: number }) => void,
  *   onReflowAbort?: () => void,
+ *   onReflowSent?: () => void,
  *   onStolen?: (stolen: boolean) => void,
  * }} handlers
  */
 export async function startSession(
   info,
-  { onMeta, onVideoPacket, onAudioPacket, onEnded, onReflowStart, onReflowAbort, onStolen },
+  { onMeta, onVideoPacket, onAudioPacket, onEnded, onReflowStart, onReflowAbort, onReflowSent, onStolen },
 ) {
   current.info = info;
   const adb = await acquireDeviceAdb(getServerClient(), info.serial);
@@ -134,7 +137,7 @@ export async function startSession(
 
   // 虚拟显示跟随窗口（scrcpy `--flex-display` / -x 语义）：官方 resizeDisplay
   // 控制消息驱动，窗口一变化虚拟显示即按窗口尺寸重排（排版随之变化）。
-  // 像素 = 窗口 CSS × DISPLAY_PIXEL_SCALE；1dp = DISPLAY_ZOOM CSS px。
+  // 像素 = 窗口 CSS × 画质档位倍率（`config.quality`，开会话时定死）；1dp = 1 CSS px。
   //
   // 只在尺寸真的变化时才下发：初始尺寸已用于创建虚拟显示（`connect.js` 的
   // `newDisplay`），启动阶段再补发一条完全相同的请求会让服务端白走一次
@@ -151,6 +154,7 @@ export async function startSession(
     // 如果合并下来发现尺寸没变（拖出去又拖回来），用 `onSkip` 让页面把遮罩撤掉。
     onIntent: (size) => onReflowStart?.(size),
     onSkip: () => onReflowAbort?.(),
+    onSent: () => onReflowSent?.(),
     send: (size) => controller?.resizeDisplay({ width: size.width, height: size.height }),
   });
   follower.seed(initialDisplay);

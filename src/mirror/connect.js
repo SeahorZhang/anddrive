@@ -39,7 +39,7 @@ export function createScid() {
  * 返回启动时**实际用于创建虚拟显示**的尺寸：调用方据此初始化「跟随窗口」的
  * 请求合并器，避免启动阶段再下发一条完全相同的 resizeDisplay。
  * @param {{ adb: unknown, serverPath: string, config: unknown }} params
- * @returns {Promise<{ client: unknown, display: { width: number, height: number, dpi: number } }>}
+ * @returns {Promise<{ client: unknown, display: { width: number, height: number, dpi: number, scale: number } }>}
  */
 export async function startScrcpy({ adb, serverPath, config }) {
   const { AdbScrcpyClient, AdbScrcpyOptions4_0 } = req("@yume-chan/adb-scrcpy");
@@ -55,11 +55,12 @@ export async function startScrcpy({ adb, serverPath, config }) {
   if (downgraded) {
     console.warn(`[mirror] 自研引擎暂不支持所选编码，改用 ${codec}`);
   }
-  // 初始虚拟显示 = 窗口 CSS × DISPLAY_PIXEL_SCALE（像素倍率与 dpi 一起定，1dp = DISPLAY_ZOOM CSS px）；
+  // 初始虚拟显示 = 窗口 CSS × 画质档位倍率（dpi = 160 × 倍率，于是 1dp = 1 CSS px）；
   // 之后由 resizeDisplay 跟随窗口。
   const display = computeDisplayMetrics(
     document.documentElement.clientWidth,
     document.documentElement.clientHeight,
+    config?.quality,
   );
   const newDisplay = `${display.width}x${display.height}/${display.dpi}`;
   const file = ReadableStream.from(createReadStream(serverPath));

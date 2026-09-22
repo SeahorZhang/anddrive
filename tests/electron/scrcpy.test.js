@@ -28,7 +28,9 @@ describe('normalizeScrcpyConfig', () => {
       fullscreen: true,
       engine: 'native',
     })
+    // 用 defaults + 覆盖项做基线，而不是逐个字段抄一遍：加字段时这里不该跟着改。
     expect(config).toEqual({
+      ...DEFAULT_SCRCPY_CONFIG,
       bitRate: '8M',
       maxFps: 90,
       videoCodec: 'av1',

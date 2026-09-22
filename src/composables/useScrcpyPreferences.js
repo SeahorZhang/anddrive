@@ -1,25 +1,16 @@
 import { reactive, watch } from "vue";
 import { getScrcpyConfigApi, setScrcpyConfigApi } from "@/api";
+import { DEFAULT_SCRCPY_CONFIG } from "../../shared/scrcpyConfig.js";
 
 /**
  * scrcpy 全局默认参数（模块级单例，设置页与启动对话框共用）。
  *
  * 持久化在主进程（userData/scrcpy-config.json），渲染层经 IPC 读写——桌面快捷
  * 方式在冷启动唤起投屏时主进程要能独立拿到最新参数，所以参数不能只存 localStorage。
- * 字段与主进程 DEFAULT_SCRCPY_CONFIG 对齐。
  */
 
-export const SCRCPY_DEFAULTS = Object.freeze({
-  bitRate: "24M",
-  maxFps: 60,
-  videoCodec: "h265",
-  audio: false,
-  screenMode: "keepActive",
-  alwaysOnTop: false,
-  fullscreen: false,
-  /** 默认引擎：`native` 自研渲染引擎 · `scrcpy` 原生窗口（兼容回退）。 */
-  engine: "native",
-});
+// 默认值只有 shared/scrcpyConfig.js 一份：以前这里手抄过一遍，加字段就会两边不一致。
+export const SCRCPY_DEFAULTS = DEFAULT_SCRCPY_CONFIG;
 
 /** 旧版本把参数存在 localStorage，升级后迁移一次到主进程。 */
 const LEGACY_STORAGE_KEY = "anddrive.scrcpyConfig";

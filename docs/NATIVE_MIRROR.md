@@ -23,7 +23,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 | 能力 | 位置 | 说明 |
 | --- | --- | --- |
 | 协议与连接 | `src/mirror/connect.js` | Tango 官方 `AdbServerNodeJsClient` + `AdbScrcpyClient`；push server、`AdbScrcpyOptions4_0`、scid 由官方库直接处理 |
-| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.0 选项；编码回落、窗口/息屏偏好（息屏**不是**服务端启动选项，靠会话建立后的 `setDisplayPower(false)` 控制消息；曾误映射成 `stayAwake`）、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口 CSS × DISPLAY_PIXEL_SCALE` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`），dpi 同步乘，于是 **1dp = 1 CSS px**、画面比例恒等于窗口比例。镜像只有大屏一种形态，不再压 600dp dpi 下限、也没有平板 1.5x（两者都已删除），见 §P3「真横屏虚拟显示」|
+| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.0 选项；编码回落、窗口/息屏偏好（息屏**不是**服务端启动选项，靠会话建立后的 `setDisplayPower(false)` 控制消息；曾误映射成 `stayAwake`）、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口 CSS × 画质档位倍率` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`，档位表 `DISPLAY_QUALITY_TIERS`：compat 1.5 / native 2 / sharp 3，会话建立时定死），dpi 同步乘，于是 **1dp = 1 CSS px**、画面比例恒等于窗口比例。镜像只有大屏一种形态，不再压 600dp dpi 下限、也没有平板 1.5x（两者都已删除），见 §P3「真横屏虚拟显示」|
 | 显示跟随去重 | `src/mirror/displayFollow.js` | 只在尺寸**真的变化**时下发 `resizeDisplay`：初始尺寸已用于创建虚拟显示，重复下发会让服务端白走一次 `virtualDisplay.resize()` → capture reset，设备侧应用随之重新决定方向（表现为画面反复旋转）；**停手 `RESIZE_SETTLE_MS`（250ms）后才发最终尺寸**（debounce，不是 throttle）。见 §3 排查记录 |
 | 会话生命周期 | `electron/mirror/session.js` | 窗口管理、会话记录、断开/退出清理；`src/mirror/session.js` / `direct-session.js` 与官方流的接线；横屏虚拟显示由随包 server 的 `VirtualDisplayConfig` 开关决定，见 §P3「真横屏虚拟显示」 |
 | 输入控制 | `electron/mirror/control.js`、`src/mirror/useMirrorInput.js` | 单指触控、滚轮、键盘（特殊键 + 文本注入）；序列化全在 Tango（`injectTouch/...`），Android 键值/metaState 用官方 `AndroidKeyCode` / `AndroidKeyEventMeta` / `AndroidMotionEventAction` 常量 |
@@ -72,7 +72,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 
 ### P3 引擎收尾
 
-- [x] **虚拟显示跟随窗口**（2026-09-16 完成，2026-09-17 改为默认行为）：恒定 `flexDisplay` 服务端选项 + 官方 `resizeDisplay`，窗口尺寸变化即重排虚拟显示；对话框不再暴露 `newDisplay`/`renderFit`，虚拟显示尺寸按窗口 × `DISPLAY_PIXEL_SCALE` 计算（1dp = 1 CSS px；倍率不再跟 devicePixelRatio，理由见下面「px 写死的控件」）
+- [x] **虚拟显示跟随窗口**（2026-09-16 完成，2026-09-17 改为默认行为）：恒定 `flexDisplay` 服务端选项 + 官方 `resizeDisplay`，窗口尺寸变化即重排虚拟显示；对话框不再暴露 `newDisplay`/`renderFit`，虚拟显示尺寸按窗口 × 倍率计算（1dp = 1 CSS px；当时是常量 `DISPLAY_PIXEL_SCALE`，2026-09-23 起改为画质档位 `DISPLAY_QUALITY_TIERS`；倍率不再跟 devicePixelRatio，理由见下面「px 写死的控件」）
 
 - [x] **跟随请求去重**（2026-09-19 完成）：启动阶段不再补发与 `newDisplay` 完全相同的 `resizeDisplay`，窗口拖动期间的多次变化合并为一次（`src/mirror/displayFollow.js` + `tests/mirror/displayFollow.test.js`）
 - [x] **拖宽时画面反复重排 → 改成停手才发**（2026-09-19）：原来的 150ms 是 **throttle**（第一次变化起计时，期间每 150ms 仍发一条），拖一次宽度要发十几条。真机量过：每 150ms 发一步把 920 宽拖到 1880，服务端 300ms 去抖**并没有**合掉中间值，每一步都真的改了显示 → app 每一步重新决定布局（`≤1560x1800` 跟着填满，`1720x1800` 翻成固定比例竖条 + 左右黑边，`1880x1800` 又重排），就是「转好几次」。改成 **debounce**（每次变化都把定时器推后，`RESIZE_SETTLE_MS = 250`），一次拖拽只剩最后一次重排。
@@ -87,7 +87,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
     `cd /Users/xh/code/scrcpy-4.0-patched/server && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ANDROID_HOME=~/Library/Android/sdk ANDROID_PLATFORM=36 ANDROID_BUILD_TOOLS=36.1.0 BUILD_DIR=/tmp/vd-build ./build_without_gradle.sh`，产物 `/tmp/vd-build/scrcpy-server` 覆盖到 `resources/scrcpy/scrcpy-server`。替换前已用同一份 client 链路验证视频（h265）+ 音频（Opus，6s 内 245 个音频包）+ `new-display` + `startApp` 全部正常。
   - 同时删除：`electron/mirror/padMode.js`（compat + 物理屏改写 + 重启轮询那套配方）、`mirror:padMode` IPC、`LARGE_SCREEN_COMPAT` 常量、`adb.js` 里只为配方服务的 `setLargeScreenCompat` / `overrideDisplayGeometry` / `resetDisplayGeometry` / `getAppWindowGeometry`。
   - 已删的历史方案：`tablet` 平板模式（1.5x 上报）与「dpi 下限把 sw 钉在 600dp 以下」的小屏方案；`computeDisplayMetrics` 就是 `窗口 × DISPLAY_PIXEL_SCALE` + `dpi = 160 × DISPLAY_PIXEL_SCALE`，即 1dp = 1 CSS px。旧参数存盘里的 `tablet` 字段由 `normalizeScrcpyConfig` 静默丢弃。
-  - **px 写死的控件 → `DISPLAY_PIXEL_SCALE` 是个对数旋钮（当前 2.5）**：抖音有一批控件按 px 写死，顶部那排 tab 最明显 —— 真机量过 dpi 480 下它的字高只有 ~16 物理像素（14sp 本该 42），且 `settings put system font_scale 1.3` 对它**完全无效**（前后两帧一模一样，抖音不吃系统字体缩放）。唯一能动它的是「同样 dp 少给像素」：倍率减半、dp 不变（布局完全一样），那排字相对画面大一倍；对照实验是同一块 588dp 显示的 `1766x2412` 与 `882x1206` 两帧。**但倍率 1 会把整帧放大 2 倍铺到 Retina 背衬上**，用户实测「不光字不清晰，整个画面都不清晰」→ 定回 2（清晰度优先），字随之回到小。两个诉求物理上顶着，只能选落点（1.5 是中间档）。2026-09-20 真横屏之后用户反馈「抖音上边文字有点大」→ 抬到 **2.5**（那排字小约 20%，dp 布局不变；超过 2 属于过采样，码流按平方涨，觉得发软就回 2）。
+  - **px 写死的控件 → 倍率现在做成「画质档位」`DISPLAY_QUALITY_TIERS`（compat 1.5 / native 2 / sharp 3，默认 sharp = 老行为）**：抖音有一批控件按 px 写死，顶部那排 tab 最明显 —— 真机量过 dpi 480 下它的字高只有 ~16 物理像素（14sp 本该 42），且 `settings put system font_scale 1.3` 对它**完全无效**（前后两帧一模一样，抖音不吃系统字体缩放）。唯一能动它的是「同样 dp 少给像素」：倍率减半、dp 不变（布局完全一样），那排字相对画面大一倍；对照实验是同一块 588dp 显示的 `1766x2412` 与 `882x1206` 两帧。**但倍率 1 会把整帧放大 2 倍铺到 Retina 背衬上**，用户实测「不光字不清晰，整个画面都不清晰」→ 定回 2（清晰度优先），字随之回到小。两个诉求物理上顶着，只能选落点（1.5 是中间档）。2026-09-20 真横屏之后用户反馈「抖音上边文字有点大」→ 抬到 **2.5**（那排字小约 20%，dp 布局不变；超过 2 属于过采样，码流按平方涨，觉得发软就回 2）。
     还剩一条**未验**的两全路子：那排字也可能是按**物理屏 density**（恒 480）算的而不是真写死 —— 若是，开会话时临时抬 `wm density` 就能撑大它同时保住 2 倍像素。这条要手机处于解锁状态才能测（设备有锁屏密码，adb 的 swipe 解不开）。
   - 未验：只有竖屏排版、没有宽布局的 app 在横形显示上会怎样（大概是被拉成横屏后排版变形）；真机反馈后再决定要不要按包豁免。
   - 已回退的历史结论（2026-09-19 记录，2026-09-20 推翻）：当时判断「Android 16 只认物理屏为大屏，所以 compat 只在物理屏生效、虚拟显示拿不到横屏」。那是对**没有** `ignoreActivitySizeRestrictions` 的显示做的四种顺序测量得出的，结论只适用于官方 scrcpy 的创建方式。
@@ -146,6 +146,28 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 
 
 
+排查记录（2026-09-22 大窗口画面卡 → 2026-09-23 干净复测定案）：
+
+1. 现象：镜像窗口拖大后播放发卡。
+2. 第一版结论（"11.5MP → 入站 33.8fps，降到 6MP 预算 → 67.9fps"）**作废**，两个测量错误叠加：
+   - 手机上同时跑着**两个 `app_process` 采集会话**（用户自己那个 2784x2154 的镜像窗口 + 探针），
+     并发抢编码器与 Wi-Fi。`ps -A -o PID,NAME | grep app_process` 数出 2 才暴露。
+   - scrcpy **只在画面变化时出帧**：没有受控运动源时「每秒入站包数」量的是内容动静，不是设备能力。
+     更早就还踩过第三个坑 —— `input swipe` 不带 `-d <displayId>` 会打到手机主屏，镜像画面根本没动。
+3. 按 §4.0 重测（唯一会话 + 打开系统设置列表 + 来回匀速滑动 + 按秒统计入站包），三档实测：
+   `1200x2400`(2.9MP) / `1600x3200`(5.1MP) / `2400x4800`(11.5MP) **稳态都是 60fps**，码率分别是
+   ~5 / ~5.2 / ~27Mbps（最后一档吃满并越过设定的 24M 上限）。同尺寸把码率上限从 24M 压到 8M，
+   帧率仍是 60（实测吞吐 21.0 → 13.6Mbps）。
+4. **所以"像素多 → 掉帧"不成立，"卡"更可能出在 Wi-Fi 带宽被大突发打满**。落地改动：
+   - 删掉建在坏数据上的 `MAX_DISPLAY_PIXELS` 面积预算，改成**画质档位**（compat 1.5 / native 2 /
+     sharp 3，默认 sharp 保持老观感），设置面板可直接换档；`computeDisplayMetrics` 按档位算倍率。
+   - 遮罩收尾改成**等关键帧**（`createReflowGate`：下发过 resize 之后要凑齐 configuration + 关键帧
+     这一对，时间到了但没等到就再延 150ms，总时长仍被 3s 上限卡住）。
+5. 未解的代价与下一步：scrcpy 的 `resizeDisplay` 不带 dpi，dpi 在建显示时定死 → **档位只在开会话时
+   生效**（中途换档会造成 1dp ≠ 1 CSS px），所以 `viewportDisplay()` 固定读会话建立时那份 config。
+   AndroMeld 的 resize 命令带 dpi（三个 int w/h/dpi），我们要跟就得扩自己的协议 —— 那才能真正做到
+   "拖窗口任意大也不掉清晰度/不漂移"。
+
 ## 4. 验证与排查
 
 - 图形验证：`pnpm dev` → 连接设备 → 应用右键「启动镜像」→ 勾选实验引擎。
@@ -160,6 +182,16 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 | `skipDraw` 增长、`shown` 约等于 `draw` | 同一 vsync 内合并多帧（降延迟的预期行为） |
 | `audio>0` 但 `ad=0` | 音频解码未推进：配置包被守卫拦下或 pts BigInt 未转换（历史上出现过，现为已修复形态） |
 | `astate=suspended` | 自动播放策略拦了 AudioContext：确认镜像窗口 `autoplayPolicy` 设置 |
+
+### 4.0 帧率怎么量才不会自欺（2026-09-22 踩过才写下的）
+
+- **先确认只有一个采集会话**：`adb shell ps -A -o PID,NAME | grep -c app_process` 必须是 1。并发会话会互相抢
+  手机编码器与 Wi-Fi 带宽，任何 fps 数字都不可比 —— 我就是这么把一组 A/B 结论做废的。
+- **必须有受控运动源**：scrcpy 只在画面变化时出帧，静止画面下「每秒入站包数」≈ 内容动静而不是设备能力。
+  用固定节奏的滑动驱动：`adb shell "while true; do input swipe <cx> <y0> <cx> <y1> 200; done"`，
+  坐标按显示尺寸取百分比，这样**不同分辨率下视觉滚动速度一致**，fps 才可比。
+- 顺手记两个旁证：`dumpsys display` 里 `DisplayDeviceInfo{"scrcpy"… renderFrameRate …}`（显示自己的天花板），
+  以及实测码率 bytes×8/秒 —— 「设了 24M 上限」不等于「跑满 24M」，静止内容只用 6-8Mbps。
 
 ### 4.1 快捷方式双击没反应 / 打开了旧版本
 

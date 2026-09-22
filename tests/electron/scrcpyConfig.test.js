@@ -16,6 +16,7 @@ const {
   computeDisplayMetrics,
   DISPLAY_BASE_DPI,
   DISPLAY_PIXEL_SCALE,
+  DISPLAY_QUALITY_TIERS,
   loadScrcpyConfig,
   saveScrcpyConfig,
   currentScrcpyConfig,
@@ -42,8 +43,11 @@ describe('normalizeScrcpyConfig', () => {
         alwaysOnTop: true,
         fullscreen: true,
         engine: 'native',
+        quality: 'native',
       }),
+      // 基线 = 默认值 + 被覆盖的字段：以后加字段不用回来补这张表。
     ).toEqual({
+      ...DEFAULT_SCRCPY_CONFIG,
       bitRate: '8M',
       maxFps: 90,
       videoCodec: 'av1',
@@ -52,7 +56,13 @@ describe('normalizeScrcpyConfig', () => {
       alwaysOnTop: true,
       fullscreen: true,
       engine: 'native',
+      quality: 'native',
     })
+  })
+
+  it('未知画质档位回落到默认档（不能把任意字符串带进显示尺寸计算）', () => {
+    expect(normalizeScrcpyConfig({ quality: '10G' }).quality).toBe(DEFAULT_SCRCPY_CONFIG.quality)
+    expect(normalizeScrcpyConfig({ quality: 3 }).quality).toBe(DEFAULT_SCRCPY_CONFIG.quality)
   })
 
   it('drops removed legacy fields (newDisplay / renderFit / flex / tablet)', () => {
@@ -68,13 +78,45 @@ describe('normalizeScrcpyConfig', () => {
 })
 
 describe('computeDisplayMetrics', () => {
-  it('像素与 dpi 都按 DISPLAY_PIXEL_SCALE 走，1dp = 1 CSS px', () => {
-    const { width, height, dpi } = computeDisplayMetrics(1280, 720)
-    expect(width).toBe(Math.round(1280 * DISPLAY_PIXEL_SCALE))
-    expect(height).toBe(Math.round(720 * DISPLAY_PIXEL_SCALE))
-    expect(dpi).toBe(Math.round(DISPLAY_BASE_DPI * DISPLAY_PIXEL_SCALE))
-    // dp 与倍率无关：倍率同时缩放像素与 dpi。
-    expect((Math.min(width, height) * DISPLAY_BASE_DPI) / dpi).toBe(720)
+  it('默认档位（sharp）沿用倍率 3：像素与 dpi 同倍，1dp = 1 CSS px', () => {
+    const { width, height, dpi, scale } = computeDisplayMetrics(800, 1600)
+    expect(scale).toBe(DISPLAY_PIXEL_SCALE)
+    expect([width, height, dpi]).toEqual([2400, 4800, 480])
+    expect((height * DISPLAY_BASE_DPI) / dpi).toBe(1600)
+  })
+
+  it('每个档位都保持 1dp = 1 CSS px 与窗口比例', () => {
+    for (const [tier, scale] of Object.entries(DISPLAY_QUALITY_TIERS)) {
+      const m = computeDisplayMetrics(800, 1600, tier)
+      expect(m.scale).toBe(scale)
+      expect(m.width / m.height).toBeCloseTo(800 / 1600, 3)
+      expect((m.height * DISPLAY_BASE_DPI) / m.dpi).toBeCloseTo(1600, 1)
+    }
+  })
+
+  it('三档的实际显示像素（对应实测的带宽差别）', () => {
+    // 2026-09-23 干净复测：三档稳态都是 60fps，差别在带宽 —— 均衡档 ~5Mbps，清晰档 ~27Mbps。
+    expect(computeDisplayMetrics(800, 1600, 'compat')).toMatchObject({
+      width: 1200,
+      height: 2400,
+      dpi: 240,
+    })
+    expect(computeDisplayMetrics(800, 1600, 'native')).toMatchObject({
+      width: 1600,
+      height: 3200,
+      dpi: 320,
+    })
+    expect(computeDisplayMetrics(800, 1600, 'sharp')).toMatchObject({
+      width: 2400,
+      height: 4800,
+      dpi: 480,
+    })
+  })
+
+  it('未知档位与异常尺寸都不炸', () => {
+    expect(computeDisplayMetrics(800, 1600, 'nope').scale).toBe(DISPLAY_PIXEL_SCALE)
+    expect(computeDisplayMetrics(0, 0).width).toBeGreaterThanOrEqual(2)
+    expect(computeDisplayMetrics(NaN, 300).height).toBeGreaterThan(0)
   })
 })
 

@@ -36,6 +36,7 @@ export function displaySizeKey(size) {
  * @param {{
  *   send: (size: { width: number, height: number }) => unknown,
  *   onIntent?: (size: { width: number, height: number }) => void,
+ *   onSent?: (size: { width: number, height: number }) => void,
  *   onSkip?: () => void,
  *   settleMs?: number,
  *   setTimer?: (callback: () => void, ms: number) => unknown,
@@ -45,6 +46,7 @@ export function displaySizeKey(size) {
 export function createDisplayFollower({
   send,
   onIntent,
+  onSent,
   onSkip,
   settleMs = RESIZE_SETTLE_MS,
   setTimer = (callback, ms) => setTimeout(callback, ms),
@@ -71,13 +73,20 @@ export function createDisplayFollower({
       return;
     }
     lastSent = key;
-    try {
-      Promise.resolve(send(size)).catch(() => {
-        // 下发失败（连接已断等）：清掉记录，让后续尺寸变化仍可重试。
-        lastSent = "";
-      });
-    } catch {
+    // 「确实发出去了」与「用户有意图」是两件事：前者才需要等关键帧（见 createReflowGate）。
+    onSent?.(size);
+    // 下发失败：回滚记录让后续尺寸能重试，并回调 onSkip 撤遮罩——否则页面的重排门闩
+    // 已被 arm，配置包永远不来，只能干等到 COVER_MAX_MS 兜底才揭。
+    // 只有 lastSent 仍是自己时才算数：更新的下发已经接班的话，别动它的遮罩/门闩状态。
+    const fail = () => {
+      if (lastSent !== key) return;
       lastSent = "";
+      onSkip?.();
+    };
+    try {
+      Promise.resolve(send(size)).catch(fail);
+    } catch {
+      fail();
     }
   }
 
@@ -97,7 +106,7 @@ export function createDisplayFollower({
      *
      * 但「要重排了」这件事在第一次请求时就该让页面知道（遮罩要在手一拖就盖上，
      * 不是停手才盖），所以每次请求都回调 `onIntent`；合并完发现尺寸其实没变（拖出去
-     * 又拖回来）时回调 `onSkip`，页面据此撤罩。
+     * 又拖回来）、或下发失败时回调 `onSkip`，页面据此撤罩。
      * @param {{ width: number, height: number }} size
      */
     request(size) {
@@ -133,4 +142,48 @@ export function aspectDiffers(windowRatio, frameRatio, tolerance = 0.02) {
   if (!Number.isFinite(windowRatio) || !Number.isFinite(frameRatio)) return false;
   if (windowRatio <= 0 || frameRatio <= 0) return false;
   return Math.abs(windowRatio / frameRatio - 1) > tolerance;
+}
+
+/**
+ * 「重排之后等到关键帧再揭遮罩」的门闩（纯逻辑，便于单测）。
+ *
+ * 为什么需要：设备端每次 `resizeDisplay` 都会 reset capture、重启编码器，重配后的
+ * 第一个**可解码**画面必然是关键帧（前面还有一个新的 configuration 包）。只按时间
+ * 揭遮罩（原来就是这么做的）会露出半帧或拖影 —— AndroMeld 那边同样有重排遮罩，
+ * 但它多做了这一步（符号：`awaitingKeyFrameAfterReconfiguration`、强制 IDR 的
+ * `request-sync`），我们照这个思路补。
+ *
+ * 只认「下发之后」的 configuration + 关键帧这一对；早到的关键帧不算数。
+ */
+export function createReflowGate() {
+  let waiting = false;
+  let sawConfig = false;
+  return {
+    /** 刚下发过一次 resizeDisplay：需要一对新的 configuration + 关键帧才算重排完成。 */
+    arm() {
+      waiting = true;
+      sawConfig = false;
+    },
+    /** 收到流配置包（编码器重启的标志）。 */
+    configuration() {
+      if (waiting) sawConfig = true;
+    },
+    /**
+     * 收到关键帧。
+     * @returns {boolean} true 表示门闩满足，可以揭遮罩了。
+     */
+    keyFrame() {
+      if (!waiting || !sawConfig) return false;
+      waiting = false;
+      sawConfig = false;
+      return true;
+    },
+    /** 还在等关键帧（页面据此把遮罩再延一点，总时长仍有上限）。 */
+    isWaiting: () => waiting,
+    /** 换会话 / 遮罩从别的路径撤掉时清账。 */
+    reset() {
+      waiting = false;
+      sawConfig = false;
+    },
+  };
 }

@@ -12,67 +12,73 @@ export const DEFAULT_SCRCPY_CONFIG = Object.freeze({
   fullscreen: false,
   /** 默认引擎：`native` 自研渲染引擎 · `scrcpy` 原生窗口（兼容回退）。 */
   engine: "native",
+  /** 画质档位：见 DISPLAY_QUALITY_TIERS。默认 sharp = 与老版本一致（倍率 3）。 */
+  quality: "sharp",
 });
 
-/** 虚拟显示基准密度：1dp = 1px（实际下发 dpi = 该值 × DISPLAY_PIXEL_SCALE）。 */
+/** 虚拟显示基准密度：1dp = 1px（实际下发 dpi = 该值 × 档位倍率）。 */
 export const DISPLAY_BASE_DPI = 160;
 
 /**
- * 虚拟显示的像素倍率：显示像素 = 窗口 CSS × 该值，dpi = `160 × 该值`，于是
- * **1dp = 1 CSS px**（与倍率无关，布局松紧不变）。
+ * 画质档位 = 虚拟显示的像素倍率：显示像素 = 窗口 CSS × 倍率，dpi = `160 × 倍率`，
+ * 于是**任何档位都保持 1dp = 1 CSS px**（布局松紧与倍率无关），换档只换两件事：
+ * 画面的清晰度，以及编码/传输的负载。
  *
- * 这是一个**清晰度 ↔ px 写死控件大小**的对数旋钮，两个诉求物理上顶着：
- * - 倍率 = 2（锐度基准）：1 显示像素 = 1 Retina 背衬像素，画面最锐。
- * - 倍率越低：像素越少、dp 不变（布局完全一样），抖音那批**按 px 写死**的控件
- *   （顶部那排 tab 最明显）相对画面越大；但整帧被放大铺到背衬上 → 倍率 1 时用户实测反馈
- *   「不光字不清晰，整个画面都不清晰」。
- * - 倍率越高：那排字相对越小，且超过 2 之后属于过采样（合成时被缩回背衬），码流按平方涨。
+ * 实测（测试机 Redmi 2509FPN0BC / HyperOS、h265、60fps 上限、码率上限 24M；每一档都是
+ * 「设备上只有这一个采集会话 + 打开系统设置列表 + 匀速来回滑动」后按秒统计入站包）：
  *
- * 已实测排除的「两全」路子：改 dpi 无效（dpi 480 下那排字只有 ~16 物理像素，14sp 本该 42）；
- * `settings put system font_scale 1.3` 也无效（前后两帧一模一样，抖音不吃系统字体缩放）。
- * 还剩一条**未验**：那排字可能是按**物理屏 density**（恒 480）算的而不是真写死 —— 若是，
- * 开会话时临时抬 `wm density` 就能把它撑大同时保住背衬像素。这条要手机解锁状态才能测。
- * 注：2 是按 Retina 主屏调的；若以后在非 Retina 外接屏上用，改成 1 更省码流。
+ * | 档位 | 800x1600 CSS 窗口的显示 | 稳态帧率 | 稳态码率 |
+ * | --- | --- | --- | --- |
+ * | compat 1.5x | 1200x2400（2.9MP） | 60 | ~5Mbps |
+ * | native 2x | 1600x3200（5.1MP） | 60 | ~5.2Mbps |
+ * | sharp 3x | 2400x4800（11.5MP） | 60 | **~27Mbps，吃满并越过 24M 上限** |
  *
- * 2026-09-20 真横屏落地后用户反馈「抖音上边文字有点大」→ 定到 **2.5**（那排字小约 20%，
- * dp 布局与 1dp=1CSS px 都不受影响）。再想小就往 3（约小 33%）；觉得画面发软就往回 2。
- * 定到 3 之后（2026-09-22）用户又反馈窗口拖大画面会被切/超出 —— 根因不在倍率，见下一段。
+ * 两点值得记住：
+ * - **像素多少不影响这台机器的帧率**（1.3MP 与 11.5MP 都稳 60fps）—— 别拿"防掉帧"当降档
+ *   的理由。我一度就是这么写的，那组数字出自被并发会话污染的测量，已作废。
+ * - 真实差别是**带宽**：3 档比 2 档多花约 4 倍流量，还经常顶穿设定码率。Wi-Fi 环境差时
+ *   优先降档；单纯压码率上限会让编码器丢帧。
  *
- * **窗口很大时会撞到设备编码上限**（真机量的，Redmi 2509FPN0BC / HyperOS、h265：
- * **短边 ≤ 4320、长边 ≤ 8192**；倍率 3 下即窗口某一边超过 ~1440 CSS px 就开始触发）。
- * 上游 scrcpy 的 flex display 约束是**逐维裁剪**，越界时把 5600x5600 裁成 5600x4320、
- * 把 4320x9000 裁成 4320x8192 —— 显示形状和窗口脱钩，应用按错掉的形状重排，
- * 画面就出现「超出窗口 / 显示不完整」（2026-09-22 用户反馈）。
- * 2026-09-22 试过把随包自编 server 的这三处约束改成按比例收缩（形状就保住了），**但用户实测
- * 症状照旧，改动已回退**（`resources/scrcpy/scrcpy-server` 回到 85b7fb1 之前那份，fork 源码同步回退）。
- * 结论：这条路径没修好他看到的问题，下次别再从「比例被裁」入手。实测数据与回退记录见
- * docs/NATIVE_MIRROR.md 的 2026-09-22 排查记录。
+ * `sharp` 是历史默认（倍率 3），保留它是因为窗口里那排按 px 写死的控件（抖音顶部 tab 最
+ * 明显）在高倍率下相对更小 —— 那是观感选择，不是清晰度选择（超过 2x 已是过采样）。
  */
-export const DISPLAY_PIXEL_SCALE = 3;
+export const DISPLAY_QUALITY_TIERS = Object.freeze({
+  compat: 1.5,
+  native: 2,
+  sharp: 3,
+});
+
+/** 老注释与调用点里的「倍率」= 默认档位的倍率。 */
+export const DISPLAY_PIXEL_SCALE = DISPLAY_QUALITY_TIERS.sharp;
 
 /**
- * 由窗口 CSS 尺寸算出虚拟显示的像素尺寸与密度：`窗口 CSS × DISPLAY_PIXEL_SCALE`，
- * dpi = `160 × DISPLAY_PIXEL_SCALE`，于是 1dp = 1 CSS px，画面比例恒等于窗口比例
- * （contain 下不会出现黑边）。
+ * 窗口尺寸 → 虚拟显示的像素尺寸与密度：`窗口 CSS × 档位倍率`，dpi = `160 × 档位倍率`，
+ * 于是 1dp = 1 CSS px，画面比例恒等于窗口比例（contain 下不会出现黑边）。
  *
- * 窗口宽大于高时这里给出的是横形尺寸（logical width > height），随附的 scrcpy-server
- * 在建这个虚拟显示时打开了「忽略应用尺寸限制」，所以固定竖屏的 app 也会真的按横屏铺满，
- * 而不是被 size-compat 压成中间一条竖屏带 —— 详见 docs/NATIVE_MIRROR.md。
+ * 档位在整个会话内保持不变（取自开会话时的 config）：scrcpy 的 `resizeDisplay` **只带
+ * 宽高、不带 dpi**，而 dpi 在建显示时定死，中途换档会让 1dp ≠ 1 CSS px。对照 AndroMeld：
+ * 它的 resize 命令带三个 int（w/h/dpi），所以没有这个约束 —— 要跟上得扩我们自己的协议。
  * @param {number} cssWidth
  * @param {number} cssHeight
- * @returns {{ width: number, height: number, dpi: number }}
+ * @param {keyof typeof DISPLAY_QUALITY_TIERS} [quality]
+ * @returns {{ width: number, height: number, dpi: number, scale: number }}
  */
-export function computeDisplayMetrics(cssWidth, cssHeight) {
+export function computeDisplayMetrics(cssWidth, cssHeight, quality) {
+  const scale = DISPLAY_QUALITY_TIERS[quality] ?? DISPLAY_PIXEL_SCALE;
+  const width = Math.max(1, Math.round(cssWidth) || 1);
+  const height = Math.max(1, Math.round(cssHeight) || 1);
   return {
-    width: Math.round(cssWidth * DISPLAY_PIXEL_SCALE),
-    height: Math.round(cssHeight * DISPLAY_PIXEL_SCALE),
-    dpi: Math.round(DISPLAY_BASE_DPI * DISPLAY_PIXEL_SCALE),
+    width: Math.max(2, Math.round(width * scale)),
+    height: Math.max(2, Math.round(height * scale)),
+    dpi: Math.round(DISPLAY_BASE_DPI * scale),
+    scale,
   };
 }
 
 const VIDEO_CODECS = new Set(["h264", "h265", "av1"]);
 const ENGINES = new Set(["scrcpy", "native"]);
 const SCREEN_MODES = new Set(["keepActive", "turnOff", "normal"]);
+const QUALITIES = new Set(Object.keys(DISPLAY_QUALITY_TIERS));
 const BIT_RATE_RE = /^\d{1,4}[KMG]?$/;
 
 /**
@@ -98,6 +104,7 @@ export function normalizeScrcpyConfig(input) {
     screenMode: SCREEN_MODES.has(raw.screenMode)
       ? raw.screenMode
       : DEFAULT_SCRCPY_CONFIG.screenMode,
+    quality: QUALITIES.has(raw.quality) ? raw.quality : DEFAULT_SCRCPY_CONFIG.quality,
     alwaysOnTop: raw.alwaysOnTop === true,
     fullscreen: raw.fullscreen === true,
     engine: ENGINES.has(raw.engine) ? raw.engine : DEFAULT_SCRCPY_CONFIG.engine,

@@ -3,7 +3,7 @@ import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } fr
 import { useMirrorInput } from './useMirrorInput.js'
 import { bootstrap, dispose as disposeSession, reclaimApp, getSessionInfo } from './session.js'
 import { CHANNELS } from '../../electron/ipcContract.js'
-import { aspectDiffers } from './displayFollow.js'
+import { aspectDiffers, createReflowGate } from './displayFollow.js'
 
 // 镜像窗口（渲染层直连）：adb/scrcpy 全在本进程内由 Tango 官方库建立，
 // 视频包直接写 WebCodecs 解码器、音频包直接播放，主进程不参与帧路径。
@@ -81,20 +81,33 @@ function attachCanvas() {
  */
 /**
  * 拖窗口时的遮罩：设备侧每次重排都会 reset 采集、画面会跳/翻，所以在那一刻盖上。
- * 出现得快（90ms）、消失得慢（320ms 渐变），元素常驻只切 opacity。
+ * 消失的时机不只看时间：重排后第一个可解码画面必然是关键帧，所以时间到了但关键帧
+ * 还没来时再多等一会儿（总时长仍被 COVER_MAX_MS 卡住），否则会露出半帧或拖影。
  */
 const covering = ref(false)
 /** 画面尺寸连续这么久不再变化，才认为设备重排完了（它往往要变好几下：先翻方向再改尺寸）。 */
 const COVER_UNTIL_STABLE_MS = 420
 /** 兜底：设备一直没回传新尺寸（会话断了等）也不能把画面一直盖着。 */
 const COVER_MAX_MS = 3000
+/** 等到关键帧后再多留一点，让那一帧真正画上屏。 */
+const COVER_AFTER_KEYFRAME_MS = 80
+/** 时间到了但还在等关键帧时的轮询步长。 */
+const COVER_GATE_POLL_MS = 150
 let coverTimer = null
 let coverDeadline = 0
+/** 重排门闩：下发过 resize 之后，等一对 configuration + 关键帧。 */
+const reflowGate = createReflowGate()
 /** 当前画面比例，由 syncCanvasBox 从解码器尺寸刷新。 */
 let frameRatio = 0
 
 function endCover() {
   coverTimer = null
+  if (covering.value && reflowGate.isWaiting() && Date.now() < coverDeadline) {
+    // 关键帧还没到，先别揭 —— 下一步继续问，越过 coverDeadline 就无条件放行。
+    armCover(COVER_GATE_POLL_MS)
+    return
+  }
+  reflowGate.reset()
   covering.value = false
 }
 
@@ -103,6 +116,11 @@ function armCover(ms) {
   if (coverTimer) clearTimeout(coverTimer)
   const wait = Math.min(ms, Math.max(0, coverDeadline - Date.now()))
   coverTimer = setTimeout(endCover, wait)
+}
+
+/** `displayFollow` 真的发出了一条 resizeDisplay。 */
+function onReflowSent() {
+  reflowGate.arm()
 }
 
 /**
@@ -124,7 +142,8 @@ function cancelCover() {
   if (coverTimer) clearTimeout(coverTimer)
   coverTimer = null
   coverDeadline = 0
-  if (covering.value) endCover()
+  reflowGate.reset()
+  covering.value = false
 }
 
 function onFrameSizeChanged() {
@@ -251,10 +270,16 @@ function startDecoder(info) {
 }
 
 function onPacket(packet) {
-  if (packet.type === 'configuration') hud.configs += 1
-  else if (packet.type === 'data') {
+  if (packet.type === 'configuration') {
+    hud.configs += 1
+    reflowGate.configuration()
+  } else if (packet.type === 'data') {
     hud.packets += 1
     hud.bytes += packet.data?.byteLength || 0
+    // 重排后的第一帧关键帧到了：按「再多等一点让画上屏」收尾，不等就继续按时间兜底。
+    if (packet.keyframe && reflowGate.keyFrame() && covering.value) {
+      armCover(COVER_AFTER_KEYFRAME_MS)
+    }
   }
   if (!writer) {
     // 解码器在 meta 到达时创建；期间到达的包先缓冲。
@@ -316,6 +341,7 @@ async function booted() {
     hooks: {
       onReflowStart: coverForReflow,
       onReflowAbort: cancelCover,
+      onReflowSent,
       onStolen: (value) => {
         stolen.value = value
         if (value) void loadIcon()

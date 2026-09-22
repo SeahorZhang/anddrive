@@ -8,6 +8,7 @@ import {
   computeDisplayMetrics,
   DISPLAY_BASE_DPI,
   DISPLAY_PIXEL_SCALE,
+  DISPLAY_QUALITY_TIERS,
 } from "../shared/scrcpyConfig.js";
 
 // ---------------------------------------------------------------------------
@@ -26,6 +27,7 @@ export {
   computeDisplayMetrics,
   DISPLAY_BASE_DPI,
   DISPLAY_PIXEL_SCALE,
+  DISPLAY_QUALITY_TIERS,
 };
 
 

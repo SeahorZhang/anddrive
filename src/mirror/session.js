@@ -25,6 +25,7 @@ let player = null;
  *   audioStats: (stats: Record<string, number>) => void,
  *   hooks: { onMeta?: (meta) => void, onAudioError?: (message: string) => void,
  *            onReflowStart?: (size) => void, onReflowAbort?: () => void,
+ *            onReflowSent?: () => void,
  *            onStolen?: (stolen) => void },
  * }} apply App 侧管线接线
  */
@@ -48,6 +49,7 @@ export async function bootstrap(apply) {
     onMeta: (meta) => apply.hooks.onMeta?.(meta),
     onReflowStart: (size) => apply.hooks.onReflowStart?.(size),
     onReflowAbort: () => apply.hooks.onReflowAbort?.(),
+    onReflowSent: () => apply.hooks.onReflowSent?.(),
     onStolen: (stolen) => apply.hooks.onStolen?.(stolen),
     onEnded: (detail) => {
       // server 端自发退出（设备断开 / server 异常）。

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { RESIZE_SETTLE_MS, aspectDiffers, createDisplayFollower, displaySizeKey } from '../../src/mirror/displayFollow.js'
+import {
+  RESIZE_SETTLE_MS,
+  aspectDiffers,
+  createDisplayFollower,
+  createReflowGate,
+  displaySizeKey,
+} from '../../src/mirror/displayFollow.js'
 
 /** 让真实定时器 + promise 回调跑完（coalesceMs 为 0 的场景用）。 */
 function settle() {
@@ -11,6 +17,7 @@ function settle() {
 function createHarness({ settleMs = RESIZE_SETTLE_MS, lastSent = null } = {}) {
   const sent = []
   const intents = []
+  const sents = []
   const skips = []
   const timers = new Map()
   let seq = 0
@@ -21,6 +28,7 @@ function createHarness({ settleMs = RESIZE_SETTLE_MS, lastSent = null } = {}) {
       sent.push(`${size.width}x${size.height}`)
     },
     onIntent: (size) => intents.push(`${size.width}x${size.height}`),
+    onSent: (size) => sents.push(`${size.width}x${size.height}`),
     onSkip: () => skips.push(clock),
     settleMs,
     setTimer: (callback, ms) => {
@@ -45,7 +53,7 @@ function createHarness({ settleMs = RESIZE_SETTLE_MS, lastSent = null } = {}) {
     }
   }
 
-  return { follower, sent, intents, skips, advance, pendingTimers: () => timers.size }
+  return { follower, sent, intents, sents, skips, advance, pendingTimers: () => timers.size }
 }
 
 describe('displaySizeKey', () => {
@@ -123,27 +131,54 @@ describe('createDisplayFollower', () => {
 
   it('ignores invalid sizes and lets a failed send retry', async () => {
     const sent = []
+    const skips = []
     const follower = createDisplayFollower({
       send: (size) => {
         sent.push(`${size.width}x${size.height}`)
         if (sent.length === 1) return Promise.reject(new Error('socket closed'))
         return undefined
       },
+      onSkip: () => skips.push(sent.length),
       settleMs: 0,
     })
 
     follower.request({ width: 0, height: 0 })
     await settle()
     expect(sent).toEqual([])
+    expect(skips).toEqual([0]) // 非法尺寸本来就会 skip
 
     follower.request({ width: 920, height: 1800 })
     await settle()
     expect(sent).toEqual(['920x1800'])
+    // 下发失败也要回调 onSkip：页面据此撤遮罩，别让已 arm 的重排门闩干等 3s 兜底。
+    expect(skips).toEqual([0, 1])
 
     // 第一次下发失败后记录被清空，同样的尺寸允许重试。
     follower.request({ width: 920, height: 1800 })
     await settle()
     expect(sent).toEqual(['920x1800', '920x1800'])
+    expect(skips).toEqual([0, 1])
+  })
+
+  it('onSent 先于 send：同步抛错也回滚并回调 onSkip', async () => {
+    const sent = []
+    const skips = []
+    const sents = []
+    const follower = createDisplayFollower({
+      send: (size) => {
+        sent.push(`${size.width}x${size.height}`)
+        throw new Error('control socket gone')
+      },
+      onSent: (size) => sents.push(`${size.width}x${size.height}`),
+      onSkip: () => skips.push(1),
+      settleMs: 0,
+    })
+
+    follower.request({ width: 920, height: 1800 })
+    await settle()
+    expect(sents).toEqual(['920x1800'])
+    expect(skips).toEqual([1])
+    expect(follower.lastSentKey).toBe('')
   })
 
   it('reports every size change as intent, while the burst is still merging', () => {
@@ -190,6 +225,57 @@ describe('createDisplayFollower', () => {
     expect(pendingTimers()).toBe(0)
     advance(1000)
     expect(sent).toEqual([])
+  })
+
+  it('onSent 只在真的下发时回调，被合并/被丢弃的意图不算', () => {
+    const { follower, sent, intents, sents, advance } = createHarness()
+    follower.seed({ width: 920, height: 1800 })
+
+    // 拖出去又拖回来：有意图，但最终尺寸没变 → 不该 arm 重排门闩。
+    follower.request({ width: 1000, height: 1800 })
+    follower.request({ width: 920, height: 1800 })
+    advance(RESIZE_SETTLE_MS)
+    expect(intents.length).toBe(2)
+    expect(sent).toEqual([])
+    expect(sents).toEqual([])
+
+    follower.request({ width: 1100, height: 1800 })
+    follower.request({ width: 1200, height: 1800 })
+    advance(RESIZE_SETTLE_MS)
+    expect(sents).toEqual(['1200x1800']) // 一次拖拽只发一条
+  })
+})
+
+describe('createReflowGate', () => {
+  it('重排后要凑齐 configuration + 关键帧这一对才算完成', () => {
+    const gate = createReflowGate()
+    expect(gate.isWaiting()).toBe(false)
+
+    gate.arm()
+    expect(gate.isWaiting()).toBe(true)
+    // 早到的关键帧（上一个 GOP 的）不作数：必须先看到新的 configuration 包。
+    expect(gate.keyFrame()).toBe(false)
+    gate.configuration()
+    expect(gate.keyFrame()).toBe(true)
+    expect(gate.isWaiting()).toBe(false)
+    // 了结之后再来的关键帧不再报告满足，避免页面反复收尾。
+    expect(gate.keyFrame()).toBe(false)
+  })
+
+  it('没 arm 时收包不产生任何效果', () => {
+    const gate = createReflowGate()
+    gate.configuration()
+    expect(gate.keyFrame()).toBe(false)
+    expect(gate.isWaiting()).toBe(false)
+  })
+
+  it('reset 清账（撤遮罩 / 换会话）', () => {
+    const gate = createReflowGate()
+    gate.arm()
+    gate.configuration()
+    gate.reset()
+    expect(gate.isWaiting()).toBe(false)
+    expect(gate.keyFrame()).toBe(false)
   })
 })
 

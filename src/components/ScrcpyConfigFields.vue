@@ -1,5 +1,6 @@
 <script setup>
 import SwitchToggle from './SwitchToggle.vue'
+import { DISPLAY_QUALITY_TIERS } from '../../shared/scrcpyConfig.js'
 
 /**
  * scrcpy 参数表单。无内部状态：读取 `config`，字段变化时 emit `change(key, value)`，
@@ -21,6 +22,16 @@ const CODEC_OPTIONS = [
   { value: 'h265', label: 'H.265' },
   { value: 'av1', label: 'AV1' },
 ]
+// 倍率从 DISPLAY_QUALITY_TIERS 取，标签里不再手抄数字（档位数值改了这里跟着变）。
+const QUALITY_META = {
+  compat: { name: '兼容', note: '给排版的异常应用' },
+  native: { name: '均衡', note: '屏幕原生精度' },
+  sharp: { name: '清晰', note: '最费带宽' },
+}
+const QUALITY_OPTIONS = Object.entries(DISPLAY_QUALITY_TIERS).map(([value, scale]) => {
+  const meta = QUALITY_META[value] ?? { name: value, note: '' }
+  return { value, label: `${meta.name}（${scale}x${meta.note ? `，${meta.note}` : ''}）` }
+})
 const SCREEN_OPTIONS = [
   { value: 'keepActive', label: '保持亮屏' },
   { value: 'turnOff', label: '启动后息屏' },
@@ -67,6 +78,22 @@ function update(key, value) {
         @change="update('videoCodec', $event.target.value)">
         <option v-for="codec in CODEC_OPTIONS" :key="codec.value" :value="codec.value">
           {{ codec.label }}
+        </option>
+      </select>
+    </div>
+
+    <div class="flex items-center gap-3 px-4 py-2.5">
+      <div class="min-w-0 flex-1">
+        <div class="text-[13px] text-black/70">画质档位</div>
+        <div class="mt-0.5 text-[11px] text-black/40">
+          镜像画面的像素倍率，会话建立时读取（改动不影响进行中的镜像）。
+          实测只影响清晰度与带宽、不影响帧率：Wi-Fi 不稳时降到均衡
+        </div>
+      </div>
+      <select :class="SELECT_CLASS" :value="props.config.quality" :disabled="disabled"
+        @change="update('quality', $event.target.value)">
+        <option v-for="tier in QUALITY_OPTIONS" :key="tier.value" :value="tier.value">
+          {{ tier.label }}
         </option>
       </select>
     </div>
