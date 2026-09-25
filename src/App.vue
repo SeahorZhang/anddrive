@@ -220,7 +220,10 @@ async function discoverLoop() {
     try {
       const devices = await listConnectDevicesApi();
       if (device.value || token !== discoveryToken) break;
-      const connected = autoAdopt ? devices.find((d) => d.connected) : null;
+      // 扫码弹窗开着时**不接管**：人正在等着看有哪些手机能连，直接抢进首页就把
+      // 右上角那份列表清空了（`discoveredDevices` 在接管分支里根本不会被赋值）。
+      const connected =
+        autoAdopt && !deviceDialogVisible.value ? devices.find((d) => d.connected) : null;
       if (connected) {
         adoptDevice(connected);
         break;
