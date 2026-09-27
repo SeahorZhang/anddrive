@@ -168,6 +168,48 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
    AndroMeld 的 resize 命令带 dpi（三个 int w/h/dpi），我们要跟就得扩自己的协议 —— 那才能真正做到
    "拖窗口任意大也不掉清晰度/不漂移"。
 
+### 2026-09-27~28 结案：抖音直播「上下裁」= 抖音按「设备类别」选版式，镜像侧无解（本文档相关代码已全部移除，仓库不留单 app 适配）
+
+**结论先行**：裁切发生在抖音 App 内部（播放器 cover 稳态），与显示几何、虚拟性、ISR、镜像链路全部无关；
+它在设备级判定里选「phone 分支」就永远 cover。非 root 手机无任何可行触发器，唯一出路是**换信源**
+（平板 AVD / 真平板 / 折叠机，均已实测：同一条 AndDrive 链路直播版式天然正常）。
+
+取证链（全部单变量，判据 = `dumpsys SurfaceFlinger` 里 visible 那层 live-player 的 `toDisplayTransform`，
+`ty=0,tx≠0`=FIT / `ty=-(缩放高-显示高)/2`=CROP；截图走 `screencap -d <SF 显示 id>`）：
+
+1. **平板 AVD 对照（Medium_Tablet / Pixel Tablet / Android 15）**：内置屏与 **scrcpy `--new-display` 建的虚拟显示**
+   （sw700dp/800dp 横形，与手机上出裁切的几何完全相同）上直播都是 FIT 双列（视频竖列 + 弹幕列 + 信息列）。
+   附带：AVD 上 `setIgnoreActivitySizeRestrictions` 不存在（NoSuchMethod，随包 server 静默回退公开 API）
+   仍全屏 land → ISR 也不是门。
+2. **root（KernelSU）复刻**：`resetprop` 整套指纹换 Pixel Tablet + `pm clear` 抖音 → 手机虚拟显示上出平板版式。
+   单变量隔离矩阵：还原 model 仍平板（model 无关）；还原 `ro.build.characteristics` 掉回裁切（必要）；
+   全还原只留 characteristics=tablet 仍平板（充分）。**改 prop 必须配 `pm clear`**（判定结果缓存在应用数据）。
+3. **APK 逆向（jadx 拆 40.7.0，classes54/classes48）**：判定是两个「按品牌分发」的识别器——
+   - `PadIdentifyUtils`：小米/Redmi = `ro.build.characteristics == "tablet" && isMiui()`；vivo = `FtDeviceInfo.getDeviceType()`；
+     OPPO = `oplus.hardware.type.tablet` feature；华为 = `SystemPropertiesEx`；一加 = characteristics 列表；联想 = 4 个 prop；
+     其他品牌 = characteristics &&（`screenLayout≥large` 或 **xdpi 对角线 ≥ 7.0″**）。结果缓存 Keva（`pad_identify`）。
+   - `FoldIdentifyUtils`：小米折叠 = `persist.sys.muiltdisplay_type == 2`（一个 prop）；华为/荣耀 = posture PM feature；
+     vivo = `FtDeviceInfo=="foldable"`；三星/OPPO 私有；**无通用兜底分支** → 折叠机走 `DuxWindowAdaptManager`
+     的 `"fold_screen"` 形态进双列版式，全程不读 characteristics（用户「折叠机不依赖它」的判断被代码证实）。
+   - 另有服务端 AB：`android_pad_model_white_list` / `PadModelBlackList`。
+4. **非 root 判死**：`ro.*` 与 `persist.sys.*` 的 SELinux 标签（`system_prop`）adb shell（uid 2000）写不动
+   （模拟器 user 镜像实测被拒）。手机上试过的替代触发器全部落空：显示 dpi/比例/对角线（含 1:1 方形）、
+   真 freeform 多窗（`--windowingMode 5` + `cmd activity task resize` 横浮窗仍 CROP）、`cmd uimode car`、
+   物理屏 `wm density`、「屏幕镜像：大屏扩展播放中」（那是投屏遥控面板的起播前瞬态，视频一起播就回 cover）。
+5. **平板 AVD 当信源的工程注意**（模拟器编码器与真机不同）：
+   - **h265：建显示 3000x1800 没问题，但 `resizeDisplay` 完全不生效**（任意尺寸静默失败）→ 模拟器信源会话
+     要么固定显示尺寸不跟随，要么走 h264。
+   - h264：resize 生效但**高度被钳到 ≤1024**（2000x1200→2000x1024，比例丢）→ 显示尺寸要按设备上限**等比**预钳。
+   - 快照易被强杀打坏（`goldfish_pipe`/`goldfish_address_space` 加载失败）→ `-no-snapshot-load` 冷启动可救。
+   - WiFi 虚拟热点（AndroidWifi）会死（scan 空）→ `adb reboot` 救不回，需重启模拟器进程。
+6. **已知未落地的修复**：deep-link 冷启动开会话时初始虚拟显示 = 512x512/480 —— `startScrcpy` 读
+   `document.documentElement.clientWidth/Height` 拿到布局完成前的占位值。修法已验证（typecheck + 197 测试全过，
+   未入库）：`mirrorInitGet` 返回 `win.getContentBounds()` 作 `initialCss`，`connect.js` 优先用它、DOM 兜底。
+
+**仓库现状**：本主题历史上产生过的单 app 适配代码（`padMode.js` 配方、`kickDisplaySize`、`relayout.js` 手动重排、
+`frameProbe.js` 探针、`tablet` 模式、按包豁免等）**已全部删除**，镜像链路里不存在任何针对特定包名的分支；
+仅注释与测试 fixture 中保留抖音作为历史取证示例。
+
 ## 4. 验证与排查
 
 - 图形验证：`pnpm dev` → 连接设备 → 应用右键「启动镜像」→ 勾选实验引擎。
