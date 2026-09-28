@@ -57,7 +57,7 @@ Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的无线 AD
 - **ROM 怪癖嗅探**：卸载「报 Failure 却退出 1」、装 Helper 与 `clearAppData` 靠 stdout 里 `/Success/i` 判定、`exportApk` 靠 `N files pulled` 正则、helper 输出取最外层 `{`…`}` 以躲 linker/ART 噪声（都在 `adb.js`：`uninstallHelper` / `installHelper` / `clearAppData` / `exportApk` 与 `normalizeListOutput`）。这些丑但**是真需要的**。
 - **投屏时手机静音**：服务端 `ROUTE_FLAG_LOOP_BACK`（不传 `audio_dup`）是刻意的 —— 只回环、不在本机渲染。副作用也已知：会话结束、AudioPolicy 撤销后手机当场出声，这不是 bug。要两边同时出声才需要 `audioDup`。
 - **`displayFollow` 用 debounce 不用 throttle**：`RESIZE_SETTLE_MS = 250`（`src/mirror/displayFollow.js:13-23`）。真机量过：throttle 每 150ms 发一步，服务端 300ms 去抖**并没有**合掉中间值，每一步都真的重排虚拟显示 → 画面"转好几次"。相同尺寸直接丢弃，因为重复 `resizeDisplay` 会让服务端白走一次 `virtualDisplay.resize()` → capture reset。
-- **`debug.anddrive.vd.isr` prop**：随包 server 是自编 scrcpy 4.0（`VirtualDisplayConfig.setIgnoreActivitySizeRestrictions`），该 prop 默认 `"1"`、留作 A/B 逃生口，系统缺 @hide API 时自动退回公开 `createVirtualDisplay`。既定接口，不要改成启动参数。
+- **`debug.anddrive.vd.isr` prop**：随包 server 是自编 scrcpy 4.1（`VirtualDisplayConfig.setIgnoreActivitySizeRestrictions`），该 prop 默认 `"1"`、留作 A/B 逃生口，系统缺 @hide API 时自动退回公开 `createVirtualDisplay`。既定接口，不要改成启动参数。
 - **`.catch` 吞掉的分寸**：设备侧探测类失败（读第三个 prop、卸载已卸载的 helper）允许吞；**用户操作的结果不许吞**（收藏写盘失败必须抛，渲染层据此回滚星标）。
 - **虚拟显示尺寸只有一个主人**：显示像素只在 `src/mirror/direct-session.js` 的 `displayFor(css)` 一处算（建显示与后续 `resizeDisplay` 同源），`src/mirror/connect.js` 的 `startScrcpy` 只**接收**算好的 `display`；建显示用的 CSS 优先取主进程传来的 `pendingInit.initialCss`（窗口内容区），读不到才回落 DOM —— 深链冷启动时页面还没排版完，读 DOM 会拿到 Electron 默认的 512x512。相应地 `buildMirrorOptions` 的 `newDisplay` 是**必填**（缺了就抛），拼串走 `formatNewDisplay`：**别再加兜底默认尺寸**，任何写死的 `WxH/dpi` 都与画质档位的 dpi 不符，会静默开出一块错密度的显示。
 - **镜像页不碰设备缓存**：接回横幅要的那个图标随启动参数走（`startMirrorSession` 的 `request.iconUrl` → `sanitizeIcon` → `pendingInit.iconUrl`），不是去 `adb:getCachedApps` 读全量再 find —— 为一格图标花一整轮 IO，且 `.adr` 冷启动时缓存根本还没建。
@@ -93,7 +93,7 @@ electron/
   menu.js            自定义菜单：⌘Q 只关镜像窗口，⌥⌘Q 硬退出
   mdns.js            手写 DNS-SD 报文（UDP 5353）
   mirror/
-    options.js       ScrcpyConfig → scrcpy 4.0 选项、编码回落、窗口 bounds（纯函数，双端共用）
+    options.js       ScrcpyConfig → scrcpy 4.1 选项、编码解析（auto 落地）、窗口 bounds（纯函数，双端共用）
     session.js       窗口/记录生命周期、断开清理、异常退出通知（不做帧转发）
     appSession.js    同设备同应用复用判定      control.js  DOM 事件 → Tango writer 入参（只有 touch/scroll/key/text；`kind:'action'` 那套已删）
 src/mirror/

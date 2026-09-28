@@ -20,6 +20,7 @@ const {
   getAppInfo,
   exportApk,
   getDeviceStats,
+  getVideoCodecs,
 } = window.electronAPI.adb;
 
 const { platform } = window.electronAPI;
@@ -108,6 +109,9 @@ export const exportApkApi = (serial, packageName) => exportApk(serial, packageNa
 
 // 读取设备信息（型号 / 系统 / 存储 / 电量 / 网络 / CPU / 内存），force 跳过缓存
 export const getDeviceStatsApi = (serial, force = false) => getDeviceStats(serial, force);
+
+/** 设备侧能编码哪些视频（h264/h265/av1）。设置页标记与 `auto` 落地都用它。 */
+export const getVideoCodecsApi = (serial) => getVideoCodecs(serial);
 
 // 通过自研客户端启动原生镜像窗口（实验）
 export const startMirrorApi = (options) => startMirror(options);

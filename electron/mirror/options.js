@@ -1,11 +1,11 @@
-import { normalizeScrcpyConfig } from "../../shared/scrcpyConfig.js";
+import { normalizeScrcpyConfig, resolveVideoCodec } from "../../shared/scrcpyConfig.js";
 
 // ---------------------------------------------------------------------------
 // ScrcpyConfig → scrcpy-server 参数（自研客户端）
 //
-// 纯映射，不依赖 Electron / Tango：这里只产出 scrcpy 4.0 的选项对象，
-// 直连形态下由 src/mirror/connect.js 包成 `AdbScrcpyOptions4_0` 交给 Tango。
-// 字段名对应 @yume-chan/scrcpy 的 ScrcpyOptions4_0.Init。
+// 纯映射，不依赖 Electron / Tango：这里只产出 scrcpy 4.1 的选项对象，
+// 直连形态下由 src/mirror/connect.js 包成 `AdbScrcpyOptions4_1` 交给 Tango。
+// 字段名对应 @yume-chan/scrcpy 的 ScrcpyOptions4_1.Init。
 // ---------------------------------------------------------------------------
 
 /** scrcpy 码率后缀按十进制换算（与官方 client 的 parse_bit_rate 一致）。 */
@@ -53,6 +53,11 @@ export function buildMirrorOptions(input, overrides = {}) {
   }
   const config = { ...normalizeScrcpyConfig(input) };
   if (overrides.videoCodec) config.videoCodec = overrides.videoCodec;
+  // `auto` 只存在于设置里；进命令行的必须是按能力表解析过的那一个（`resolveNativeCodec`）。
+  // 这里不留兜底值：静默挑一个编码 = 出问题时看不出来（同 newDisplay 那条教训）。
+  if (config.videoCodec === "auto") {
+    throw new Error("缺少 videoCodec：`auto` 必须由调用方按设备/本机能力解析后传入");
+  }
   /** @type {Record<string, unknown>} */
   const options = {
     video: true,
@@ -90,20 +95,13 @@ export function buildMirrorOptions(input, overrides = {}) {
 }
 
 /**
- * 自研引擎当前启用的编码。AV1 尚未验证，先回落。
- * H.265 依赖平台 WebCodecs HEVC 解码能力，不支持时解码会报错。
- */
-export const NATIVE_SUPPORTED_CODECS = Object.freeze(["h264", "h265"]);
-
-/**
- * 选出自研引擎实际使用的编码：不支持的编码回落到 H.264。
- * @param {unknown} input
+ * 选出自研引擎实际下发的编码（`auto` 在这里落地）。能力表由调用方给：
+ * `device` = 设备端有没有那个编码器，`local` = 本机 WebCodecs 能不能解。
+ * @param {unknown} input @param {{device?: Record<string, boolean> | null, local?: Record<string, boolean> | null}} [caps]
  * @returns {{ codec: string, downgraded: boolean }}
  */
-export function resolveNativeCodec(input) {
-  const requested = normalizeScrcpyConfig(input).videoCodec;
-  if (NATIVE_SUPPORTED_CODECS.includes(requested)) return { codec: requested, downgraded: false };
-  return { codec: NATIVE_SUPPORTED_CODECS[0], downgraded: true };
+export function resolveNativeCodec(input, caps) {
+  return resolveVideoCodec(normalizeScrcpyConfig(input).videoCodec, caps);
 }
 
 /**

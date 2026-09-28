@@ -32,7 +32,7 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 const CONNECTION_TOAST_KEY = "connection";
 
 const pageType = ref("loading"); // loading | home | addDevice | settings
-const settingsReturn = ref("addDevice");
+const settingsReturn = ref("home");
 const deviceDialogVisible = ref(false);
 const device = ref(null);
 const discoveredDevices = ref([]);
@@ -79,6 +79,8 @@ async function healthLoop() {
 function handleConnectionLost(target, state) {
   if (device.value !== target) return;
   device.value = null;
+  // 设备没了就没有「这台能编什么」可问，设置页不许停留在无设备状态（入口也只在首页给）。
+  if (pageType.value === "settings") pageType.value = "addDevice";
   lostDevice = target;
   const label = target.label || target.name || "设备";
   const offline = state === "offline" || state === "unauthorized";
@@ -286,7 +288,7 @@ async function disconnect() {
 }
 
 function openSettings() {
-  settingsReturn.value = pageType.value === "home" ? "home" : "addDevice";
+  settingsReturn.value = pageType.value;
   pageType.value = "settings";
 }
 
@@ -308,7 +310,8 @@ function closeSettings() {
        在首页直接连另一台设备会留着上一台的列表。 -->
   <PageHome v-else-if="pageType === 'home'" :key="device.address" :device="device" />
 
-  <PageSettings v-else-if="pageType === 'settings'" />
+  <!-- 编码列表要按「这台设备能不能编」筛，所以把当前设备地址带进设置页，与右键启动对话框同一套判据。 -->
+  <PageSettings v-else-if="pageType === 'settings'" :key="device.address" :serial="device.address" />
 
   <AddDevice v-else-if="pageType === 'addDevice'" v-model="deviceDialogVisible" />
   <AddDeviceDialog v-model="deviceDialogVisible" @paired="connectTo" />

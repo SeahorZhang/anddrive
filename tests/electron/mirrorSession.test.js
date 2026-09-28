@@ -70,6 +70,7 @@ vi.mock('../../electron/adb.js', () => ({
   getPhysicalScreenSize: async () => ({ width: 1200, height: 2608 }),
   onDeviceTeardown: () => {},
   isMiuiDevice: async () => false,
+  getDeviceVideoCodecs: async () => ({ h264: true, h265: true, av1: false }),
   setSecureSetting: async () => {},
 }))
 

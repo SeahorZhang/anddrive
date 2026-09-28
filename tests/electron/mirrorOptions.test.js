@@ -33,7 +33,7 @@ describe('buildMirrorOptions', () => {
   /** newDisplay 已改成必填（调用方按窗口 CSS × 画质档位算），测试里统一给一个。 */
   const NEW_DISPLAY = { newDisplay: '1080x2400/320' }
   const optionsFor = (config, overrides = {}) =>
-    buildMirrorOptions(config, { ...NEW_DISPLAY, ...overrides })
+    buildMirrorOptions(config, { videoCodec: 'h265', ...NEW_DISPLAY, ...overrides })
 
   it('默认转视频 + 控制，音频按设置默认关', () => {
     expect(optionsFor(undefined)).toMatchObject({
@@ -119,8 +119,29 @@ describe('resolveNativeCodec', () => {
     expect(resolveNativeCodec({ videoCodec: 'h265' })).toEqual({ codec: 'h265', downgraded: false })
   })
 
-  it('downgrades unsupported codecs to H.264', () => {
-    expect(resolveNativeCodec({ videoCodec: 'av1' })).toEqual({ codec: 'h264', downgraded: true })
+  it('auto：H.265 优先，两头任一说「不行」就退到 H.264', () => {
+    const both = { device: { h264: true, h265: true }, local: { h264: true, h265: true } }
+    expect(resolveNativeCodec({ videoCodec: 'auto' }, both)).toEqual({ codec: 'h265', downgraded: false })
+    expect(resolveNativeCodec({ videoCodec: 'auto' }, { ...both, local: { h264: true, h265: false } }))
+      .toEqual({ codec: 'h264', downgraded: false })
+    expect(resolveNativeCodec({ videoCodec: 'auto' }, { ...both, device: { h264: true, h265: false } }))
+      .toEqual({ codec: 'h264', downgraded: false })
+  })
+
+  it('能力没探测到（null）就当未知，不拦用户选的编码', () => {
+    expect(resolveNativeCodec({ videoCodec: 'auto' }, { device: null, local: null }))
+      .toEqual({ codec: 'h265', downgraded: false })
+    expect(resolveNativeCodec({ videoCodec: 'av1' }, null)).toEqual({ codec: 'av1', downgraded: false })
+  })
+
+  it('显式选了不支持的编码：回落并报告 downgraded', () => {
+    const caps = { device: { h264: true, h265: false }, local: { h264: true, h265: true } }
+    expect(resolveNativeCodec({ videoCodec: 'h265' }, caps)).toEqual({ codec: 'h264', downgraded: true })
+  })
+
+  it('默认值是 auto', () => {
+    expect(resolveNativeCodec(undefined, { device: null, local: { h264: true, h265: false } }))
+      .toEqual({ codec: 'h264', downgraded: false })
   })
 })
 

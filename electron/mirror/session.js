@@ -3,6 +3,7 @@ import path from "node:path";
 import { CHANNELS } from "../ipcContract.js";
 import {
   ensureServer,
+  getDeviceVideoCodecs,
   getPhysicalScreenSize,
   isMiuiDevice,
   onDeviceTeardown,
@@ -148,6 +149,8 @@ export async function startMirrorSession(request) {
   const prefs = resolveRuntimePrefs(request?.config);
   // 窗口形状按设备分辨率算；查不到就走兜底比例，不值得为它挡住开会话。
   const screenSize = await getPhysicalScreenSize(serial).catch(() => null);
+  // 设备能编码哪些：给镜像页落地 `auto`，也顺带进 pendingInit（渲染层不再自己查）。
+  const deviceEncoders = await getDeviceVideoCodecs(serial).catch(() => null);
   const bounds = mirrorWindowBounds(screenSize, screen.getPrimaryDisplay().workAreaSize);
 
   /** @type {MirrorSession} */
@@ -187,6 +190,8 @@ export async function startMirrorSession(request) {
     config: request?.config ?? null,
     prefs,
     initialCss: { width: content.width, height: content.height },
+    // 只把「能用的那几个」带给镜像页落地 auto；全量清单是设置页的事。
+    deviceCodecs: deviceEncoders?.usable ?? null,
     // 图标随启动参数一起给：镜像页为「接回」横幅取一个图标，不该去读整台设备的
     // 图标缓存（`.adr` 冷启动那条路径缓存还没建，读了也是空）。渲染层会把它直接当
     // `<img>` 的 src，所以过一道 `sanitizeIcon`，非 PNG data URL 一律丢掉。

@@ -4,7 +4,7 @@
 // 可选把裸码流写成文件，用 `ffprobe -show_frames` 检查关键帧/分辨率。
 //
 // 用法：
-//   node scripts/mirror-spike.mjs <serial> [h264|h265|av1] [raw-out.h264] [秒数]
+//   node scripts/mirror-spike.mjs <serial> [h264|h265|av1|vp8|vp9] [raw-out.h264] [秒数]
 //
 // 例：
 //   node scripts/mirror-spike.mjs adb-XXXX._adb-tls-connect._tcp h265 /tmp/mirror.h265 15
@@ -15,7 +15,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AdbServerNodeJsClient } from "@yume-chan/adb-server-node-tcp";
-import { AdbScrcpyClient, AdbScrcpyOptions4_0 } from "@yume-chan/adb-scrcpy";
+import { AdbScrcpyClient, AdbScrcpyOptions4_1 } from "@yume-chan/adb-scrcpy";
 import { DefaultServerPath, ScrcpyVideoCodecNameMap } from "@yume-chan/scrcpy";
 import { ReadableStream } from "@yume-chan/stream-extra";
 
@@ -39,7 +39,7 @@ console.log("[spike] 推送 scrcpy-server…");
 const source = ReadableStream.from(createReadStream(serverPath));
 await AdbScrcpyClient.pushServer(adb, source, DefaultServerPath);
 
-const options = new AdbScrcpyOptions4_0({
+const options = new AdbScrcpyOptions4_1({
   video: true,
   audio: false,
   control: true,

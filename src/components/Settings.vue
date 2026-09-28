@@ -10,6 +10,14 @@ import {
 import { notifyError } from '@/composables/useNotifications'
 import { autoReconnect } from '@/composables/useConnectionPreferences'
 import { scrcpyConfig, resetScrcpyConfig } from '@/composables/useScrcpyPreferences'
+import { useDeviceCodecs, useLocalCodecs } from '@/composables/useCodecCaps'
+
+/** 当前设备地址：编码列表要按「这台能不能编」筛，没有设备时只按本机能力。 */
+const props = defineProps({ serial: { type: String, default: '' } })
+
+// 与右键启动对话框同一套判据：协议认得 ∩ 这台设备能编 ∩ 本机能解。
+const localCodecs = useLocalCodecs()
+const deviceCodecs = useDeviceCodecs(() => props.serial)
 
 function formatTime(value) {
   const date = new Date(value)
@@ -147,7 +155,8 @@ onMounted(refreshPermissions)
           恢复默认
         </button>
       </div>
-      <ScrcpyConfigFields :config="scrcpyConfig" @change="(key, value) => (scrcpyConfig[key] = value)" />
+      <ScrcpyConfigFields :config="scrcpyConfig" :local-codecs="localCodecs" :device-codecs="deviceCodecs"
+        @change="(key, value) => (scrcpyConfig[key] = value)" />
     </section>
 
     <section v-if="isMac">

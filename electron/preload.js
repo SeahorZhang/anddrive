@@ -51,6 +51,7 @@ expose("electronAPI", {
     getAppInfo: (serial, packageName) => invoke(CHANNELS.adbAppInfo, serial, packageName),
     exportApk: (serial, packageName) => invoke(CHANNELS.adbExportApk, serial, packageName),
     getDeviceStats: (serial, force) => invoke(CHANNELS.adbGetDeviceStats, serial, force),
+    getVideoCodecs: (serial) => invoke(CHANNELS.adbVideoCodecs, serial),
   },
   permissions: {
     getStatus: () => invoke(CHANNELS.permissionsStatus),

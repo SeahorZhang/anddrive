@@ -6,6 +6,7 @@ import { startMirrorApi } from '@/api'
 import { readableError } from '@/utils/errors'
 import { notify } from '@/composables/useNotifications'
 import { refreshScrcpySessions } from '@/composables/useScrcpySessions'
+import { useDeviceCodecs, useLocalCodecs } from '@/composables/useCodecCaps'
 import {
   scrcpyConfig,
   SCRCPY_DEFAULTS,
@@ -18,6 +19,10 @@ const props = defineProps({
   label: { type: String, default: '' },
   iconUrl: { type: String, default: '' },
 })
+
+// 编码下拉里的标记：本机能力 + 这台设备的能力（对话框打开时目标设备就定了）。
+const localCodecs = useLocalCodecs()
+const deviceCodecs = useDeviceCodecs(() => props.serial)
 
 /** 单次启动草稿：打开时从全局默认复制，修改只影响本次启动。 */
 const draft = reactive({ ...SCRCPY_DEFAULTS })
@@ -86,7 +91,8 @@ async function launch() {
         <p class="px-5 pb-2 text-[11px] text-black/40">本次启动参数仅对当前窗口生效，可勾选保存为默认。</p>
 
         <div class="min-h-0 flex-1 overflow-y-auto px-5 pb-2">
-          <ScrcpyConfigFields :config="draft" :disabled="launching" @change="onChange" />
+          <ScrcpyConfigFields :config="draft" :disabled="launching" :local-codecs="localCodecs"
+            :device-codecs="deviceCodecs" @change="onChange" />
           <label class="mt-3 flex cursor-pointer items-center gap-2 px-1 text-[12px] text-black/60">
             <input v-model="saveAsDefault" type="checkbox" class="size-3.5 accent-[#007aff]" />
             同时保存为默认参数

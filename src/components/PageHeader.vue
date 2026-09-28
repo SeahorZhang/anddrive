@@ -16,11 +16,11 @@ const actions = computed(() => {
   if (props.pageType === 'settings') {
     return [{ icon: 'lucide:arrow-left', tip: '返回', event: 'closeSettings' }]
   }
-  const list = []
-  if (props.pageType === 'home')
-    list.push({ icon: 'lucide:unplug', tip: '断开连接', event: 'disconnect' })
-  list.push({ icon: 'lucide:settings', tip: '设置', event: 'openSettings' })
-  return list
+  // 只有首页（= 连着设备）才有设置入口：投屏参数里那一串「这台设备能编什么」的列表
+  // 没有设备就算不出来，给个半空的页面进去只会误导人。
+  if (props.pageType !== 'home') return []
+  return [{ icon: 'lucide:unplug', tip: '断开连接', event: 'disconnect' }]
+    .concat([{ icon: 'lucide:settings', tip: '设置', event: 'openSettings' }])
 })
 
 function onAction(event) {

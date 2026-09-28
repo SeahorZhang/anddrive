@@ -32,6 +32,8 @@ export const CHANNELS = {
 
   /** 设备信息面板（electron/adb.js）。 */
   adbGetDeviceStats: 'adb:getDeviceStats',
+  /** 设备侧能编码哪些视频（设置页标记 + 会话落地 `auto`）。 */
+  adbVideoCodecs: 'adb:videoCodecs',
 
   /** 自研镜像客户端（electron/mirror/session.js）。 */
   mirrorStart: 'mirror:start',

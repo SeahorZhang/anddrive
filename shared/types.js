@@ -27,7 +27,7 @@
  * @typedef {object} ScrcpyConfig
  * @property {string} bitRate 视频码率，如 `24M`
  * @property {number} maxFps 帧率上限
- * @property {string} videoCodec h264 | h265 | av1
+ * @property {string} videoCodec auto | h264 | h265 | av1 | vp8 | vp9（auto 在建立会话时按能力表落地）
  * @property {boolean} audio 是否转发音频
  * @property {boolean} alwaysOnTop 窗口置顶
  * @property {boolean} fullscreen 全屏启动

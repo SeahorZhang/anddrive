@@ -35,7 +35,7 @@ export function createScid() {
 }
 
 /**
- * 推送并启动 scrcpy（官方 AdbScrcpyClient / AdbScrcpyOptions4_0 直用）。
+ * 推送并启动 scrcpy（官方 AdbScrcpyClient / AdbScrcpyOptions4_1 直用；随包 server 是 4.1）。
  * 虚拟显示尺寸由调用方算好后传入（`direct-session.js` 是全项目唯一算它的地方），
  * 这里只拼成协议字符串；返回该尺寸供调用方初始化「跟随窗口」的请求合并器，
  * 避免启动阶段再下发一条完全相同的 resizeDisplay。
@@ -43,8 +43,8 @@ export function createScid() {
  *           display: { width: number, height: number, dpi: number } }} params
  * @returns {Promise<{ client: unknown, display: { width: number, height: number, dpi: number } }>}
  */
-export async function startScrcpy({ adb, serverPath, config, display }) {
-  const { AdbScrcpyClient, AdbScrcpyOptions4_0 } = req("@yume-chan/adb-scrcpy");
+export async function startScrcpy({ adb, serverPath, config, display, caps }) {
+  const { AdbScrcpyClient, AdbScrcpyOptions4_1 } = req("@yume-chan/adb-scrcpy");
   const { DefaultServerPath } = req("@yume-chan/scrcpy");
   const { ReadableStream } = req("@yume-chan/stream-extra");
   const { createReadStream } = req("node:fs");
@@ -52,14 +52,14 @@ export async function startScrcpy({ adb, serverPath, config, display }) {
     "../../electron/mirror/options.js"
   );
 
-  const { codec, downgraded } = resolveNativeCodec(config);
+  const { codec, downgraded } = resolveNativeCodec(config, caps);
   if (downgraded) {
     console.warn(`[mirror] 自研引擎暂不支持所选编码，改用 ${codec}`);
   }
   const newDisplay = formatNewDisplay(display);
   const file = ReadableStream.from(createReadStream(serverPath));
   await AdbScrcpyClient.pushServer(adb, file, DefaultServerPath);
-  const options = new AdbScrcpyOptions4_0({
+  const options = new AdbScrcpyOptions4_1({
     ...buildMirrorOptions(config, { videoCodec: codec, newDisplay }),
     scid: createScid(),
   });

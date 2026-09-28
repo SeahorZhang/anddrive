@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { CHANNELS } from "./ipcContract.js";
 import { browse } from "./mdns.js";
 import { pickStableId } from "./deviceIdentity.js";
+import { parseEncoderMimes, VIDEO_ENCODER_PROBE_CMD } from "../shared/scrcpyConfig.js";
 import { iconPngBuffer, MAX_ICON_BYTES, PNG_DATA_URL_PREFIX } from "./iconImage.js";
 import helperVersion from "../resources/helper-app.version.json" with { type: "json" };
 
@@ -1436,6 +1437,29 @@ export async function setSecureSetting(serial, key, value) {
   return adbExecSafe("-s", serial, "shell", "settings", "put", "secure", key, String(value));
 }
 
+const videoCodecCapsCache = new Map();
+
+/**
+ * 设备侧能编码哪些视频（设置页用它列出选项，会话建立用它落地 `auto`）。
+ * @param {string} serial @returns {Promise<{usable: Record<string, boolean>, mimes: Array<{mime: string, codec: string | null, label: string}>}>}
+ */
+export async function getDeviceVideoCodecs(serial) {
+  assertSerial(serial);
+  const cached = videoCodecCapsCache.get(serial);
+  if (cached) return cached;
+  await ensureServer();
+  const { stdout } = await adbExecSafe(
+    "-s",
+    serial,
+    "shell",
+    VIDEO_ENCODER_PROBE_CMD,
+  );
+  const caps = parseEncoderMimes(stdout);
+  // 一条都没有多半是没读到文件（权限/路径因 ROM 而异），不缓存，下次再试。
+  if (caps.mimes.length > 0) videoCodecCapsCache.set(serial, caps);
+  return caps;
+}
+
 /** 强制停止应用。 */
 export async function forceStopApp(serial, packageName) {
   assertSerial(serial);
@@ -1829,6 +1853,7 @@ ipcMain.handle(CHANNELS.adbDisconnect, async (_, rawSerial) => {
   const serial = normalizeDisconnectSerial(rawSerial);
   await runDeviceTeardown(serial);
   deviceStatsCache.delete(serial);
+  videoCodecCapsCache.delete(serial);
   return disconnectTransport(serial);
 });
 
@@ -1879,3 +1904,4 @@ ipcMain.handle(CHANNELS.adbExportApk, (_, serial, pkg) => exportApk(serial, pkg)
 
 // 设备信息：型号 / 系统 / 存储 / 电量 / 网络 / CPU / 内存（force=true 跳过缓存）
 ipcMain.handle(CHANNELS.adbGetDeviceStats, (_, serial, force) => getDeviceStats(serial, force === true));
+ipcMain.handle(CHANNELS.adbVideoCodecs, (_, serial) => getDeviceVideoCodecs(serial));

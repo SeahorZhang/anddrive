@@ -24,26 +24,36 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 | 能力 | 位置 | 说明 |
 | --- | --- | --- |
 | 协议与连接 | `src/mirror/connect.js` | Tango 官方 `AdbServerNodeJsClient` + `AdbScrcpyClient`；push server、`AdbScrcpyOptions4_0`、scid 由官方库直接处理 |
-| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.0 选项；编码回落、不干预设备屏幕（原「屏幕策略」三选已于 2026-09-29 删除：`keepActive` 不再下发，`setDisplayPower(false)` 那条控制消息也删了）、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口 CSS × 画质档位倍率` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`，档位表 `DISPLAY_QUALITY_TIERS`：compat 1.5 / native 2 / sharp 3，会话建立时定死），dpi 同步乘，于是 **1dp = 1 CSS px**、画面比例恒等于窗口比例。镜像只有大屏一种形态，不再压 600dp dpi 下限、也没有平板 1.5x（两者都已删除），见 §P3「真横屏虚拟显示」。**这条等式只在同一个会话内成立**：`resizeDisplay` 只带宽高、不带 dpi，而 dpi 在建显示时定死，所以档位取自开会话时那份 config 并整场不变，中途换档不会改变已开的窗口（详见 `shared/scrcpyConfig.js:56-59` 的注释与 [`TODO.md`](TODO.md) §3）|
+| 编码能力 | `shared/scrcpyConfig.js` + `src/utils/codecCaps.js` + `src/composables/useCodecCaps.js` | 设备侧扫 `media_codecs*.xml`（`electron/adb.js` 的 `getDeviceVideoCodecs`，按序列号缓存、断开时清），本机侧 `VideoDecoder.isConfigSupported`；两头的能力表喂给 `resolveVideoCodec` 落地 `auto`，设置页与启动对话框用它标记下拉项 |
+| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.1 选项；不干预设备屏幕（原「屏幕策略」三选已于 2026-09-29 删除：`keepActive` 不再下发，`setDisplayPower(false)` 那条控制消息也删了）、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口 CSS × 画质档位倍率` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`，档位表 `DISPLAY_QUALITY_TIERS`：compat 1.5 / native 2 / sharp 3，会话建立时定死），dpi 同步乘，于是 **1dp = 1 CSS px**、画面比例恒等于窗口比例。镜像只有大屏一种形态，不再压 600dp dpi 下限、也没有平板 1.5x（两者都已删除），见 §P3「真横屏虚拟显示」。**这条等式只在同一个会话内成立**：`resizeDisplay` 只带宽高、不带 dpi，而 dpi 在建显示时定死，所以档位取自开会话时那份 config 并整场不变，中途换档不会改变已开的窗口（详见 `shared/scrcpyConfig.js:56-59` 的注释与 [`TODO.md`](TODO.md) §3）|
 | 显示跟随去重 | `src/mirror/displayFollow.js` | 只在尺寸**真的变化**时下发 `resizeDisplay`：初始尺寸已用于创建虚拟显示，重复下发会让服务端白走一次 `virtualDisplay.resize()` → capture reset，设备侧应用随之重新决定方向（表现为画面反复旋转）；**停手 `RESIZE_SETTLE_MS`（250ms）后才发最终尺寸**（debounce，不是 throttle）。见 §3 排查记录 |
 | 息屏协同保活 | `electron/mirror/miProjection.js` | HyperOS 在息屏时会停止合成那块虚拟显示（画面定住）。做法照小米互联：开会话往 `Settings.Secure` 写 `synergy_mode=1`（等价于它的 `beginSynergy()`），关会话写 0。**每个 MIUI/HyperOS 会话都生效**，且置位必须赶在息屏之前落地。机制与取证见 §3 排查记录 2026-09-29 |
 | 会话生命周期 | `electron/mirror/session.js` | 窗口管理、会话记录、断开/退出清理；`src/mirror/session.js` / `direct-session.js` 与官方流的接线；横屏虚拟显示由随包 server 的 `VirtualDisplayConfig` 开关决定，见 §P3「真横屏虚拟显示」 |
 | 输入控制 | `electron/mirror/control.js`、`src/mirror/useMirrorInput.js` | 单指触控、滚轮、键盘（特殊键 + 文本注入）；序列化全在 Tango（`injectTouch/...`），Android 键值/metaState 用官方 `AndroidKeyCode` / `AndroidKeyEventMeta` / `AndroidMotionEventAction` 常量。**系统动作键、旋转、通知栏、息屏亮屏这类 `kind:'action'` 消息已于 2026-09-28 按产品决策整体删除**（设备屏幕现在完全不干预，`setDisplayPower` 那条直调也已删除）|
 | 解码渲染 | `src/mirror/App.vue` | WebCodecs 解码；`AutoCanvasRenderer` 优先 WebGL，按显示尺寸出图；HUD 诊断 |
-| 音频转发 | `src/mirror/audio.js` | scrcpy 4.0 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放；音频不可用时自动降级纯画面 |
+| 音频转发 | `src/mirror/audio.js` | scrcpy 服务端 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放；音频不可用时自动降级纯画面 |
 | 会话管理 UI | `src/composables/useScrcpySessions.js`、`src/components/ScrcpySessions.vue` | 与 scrcpy 会话合并展示，支持聚焦/关闭/全部关闭（2s 轮询主进程会话记录，见 [`TODO.md`](TODO.md) §5.1） |
 | 无界面调试 | `scripts/mirror-spike.mjs` | `pnpm mirror:spike <serial> [h264\|h265] [raw-out] [秒数]` |
 
 ### 2.1 关键约束
 
-- **协议层依赖 Tango beta**：scrcpy 4.0 支持位于 `3.0.0-beta.2`，版本已在 `package.json` 锁定，升级需回归。
+- **协议层依赖 Tango beta**：scrcpy 4.0 / **4.1**（`AdbScrcpyOptions4_1`，VP8/VP9 与 `getEncoders`）都在 `3.0.0-beta.2` 里，版本已在 `package.json` 锁定，升级需回归。
 - **全用官方库、同一模块副本**：渲染层所有 `@yume-chan/*` 包必须经 preload 注入的
   `window.require` 获取（`sandbox:false` + `nodeIntegration`）。Vite 静态打包镜像侧的
   `@yume-chan/*` 会产生第二份模块实例，stream 内部类（`PushReadableStream`、
   `MaybeConsumable`）跨拷贝时写流会挂死——此坑已验证，改代码时务必保持
   `src/mirror/connect.js` 不静态 import 原生包。
-- **编码**：启用 `h264` / `h265`（依赖平台 WebCodecs 硬解）；`av1` 未验证，自动回落 `h264`（`resolveNativeCodec`）。
-- **音频仅 Opus**：scrcpy 4.0 的音频链路只支持 `opus`（`ScrcpyAudioCodec.Opus`），WebCodecs 直接解码；配置包是 `OpusHead`，preskip 在播放侧裁掉（`src/mirror/audio.js`）。音频不可用（disabled/errored）时自动降级纯画面。
+- **编码**：设置里默认 `auto` —— 由「设备能编 + 本机 WebCodecs 能解」两头挑（H.265 优先）。清单 = 随包 server 的 `VideoCodec.java`，
+  4.1 起含 **VP8 / VP9**（`c2.android.vp8.encoder` 真机出过帧）；**AV1 / VP8 / VP9 都不进自动档** —— AV1 没验过，VP8/VP9 设备上多是软件编码器，自动挑过去就是拿延迟换码率。
+  设备侧能力 = 扫 `media_codecs*.xml` 里 encoder 行的 mime（`parseEncoderMimes`，多 SKU 取并集，**可能多报**），
+  本机侧 = `VideoDecoder.isConfigSupported` 探测。已知格式全在 `VIDEO_CODEC_CATALOG` 一张表里（10 项，
+  `protocol: true` = 随包 server 的 `VideoCodec` 枚举里有位置）；**下拉只列「协议认得 ∩ 设备能编 ∩ 本机能解」**，
+  设备多出来但带不动的（APV / H.263 / Dolby Vision / MV-HEVC…）不进下拉，只在下面一行小字里带原因
+  （`投屏协议带不动` / `本机不能解`）。这套筛选是纯函数 `planCodecList`（有单测），组件只渲染。
+  某一头整表没探测到（null）按未知放行，不因为探测失败把能用的藏掉；存盘里的值在当前设备不可用时
+  仍列出来、标灰并写原因，不让下拉对着空选项。
+  `auto` 只活在设置里：`buildMirrorOptions` 收到没解析过的 `auto` 直接抛错，不留静默兜底。
+- **音频仅 Opus**：scrcpy 服务端的音频链路只支持 `opus`（`ScrcpyAudioCodec.Opus`），WebCodecs 直接解码；配置包是 `OpusHead`，preskip 在播放侧裁掉（`src/mirror/audio.js`）。音频不可用（disabled/errored）时自动降级纯画面。
 - **帧率上限来自显示器**：可见帧率受屏幕刷新率限制（例如 4K@60 屏最高 60fps），与渲染管线无关。
 - **只读之外的能力**：剪贴板、中文 IME、多指手势尚未接入。
 - **构建请注意 chunk 隔离**：镜像页与主页共享模块被 rolldown 合并进主页入口 chunk 会导致镜像页执行主页的 `createApp().mount('#app')`，`vite.config.js` 里已用 `advancedChunks` 把共享代码拆成独立 `mirror-support` chunk，勿删。
@@ -87,7 +97,13 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
   - **不动主屏**：全程没有 `wm size`/`wm density`、没有 compat 开关、没有 force-stop + 重启 app。开会话前后 `wm size` 都只有 `Physical size: 1200x2608`（无 Override），手机本体画面不变，之前「先在手机上打开 app 又消失」的闪动随配方一起消失。
   - 开关位置：server 侧 `debug.anddrive.vd.isr`（默认 `"1"` 生效，设 `0` 可临时关掉做对比）；系统没有该 @hide API 时 `NewDisplayCapture` 自动退回公开 `createVirtualDisplay(name,w,h,dpi,surface,flags)`，老设备不受影响。
   - 重编方式（改动在 `NewDisplayCapture.startNew` 与 `wrappers/DisplayManager.createNewVirtualDisplay(..., ignoreActivitySizeRestrictions, homeSupported)`）：
-    `cd /Users/xh/code/scrcpy-4.0-patched/server && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ANDROID_HOME=~/Library/Android/sdk ANDROID_PLATFORM=36 ANDROID_BUILD_TOOLS=36.1.0 BUILD_DIR=/tmp/vd-build ./build_without_gradle.sh`，产物 `/tmp/vd-build/scrcpy-server` 覆盖到 `resources/scrcpy/scrcpy-server`。替换前已用同一份 client 链路验证视频（h265）+ 音频（Opus，6s 内 245 个音频包）+ `new-display` + `startApp` 全部正常。
+    `cd /Users/xh/code/scrcpy-4.1-patched/server && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ANDROID_HOME=~/Library/Android/sdk ANDROID_PLATFORM=36 ANDROID_BUILD_TOOLS=36.1.0 BUILD_DIR=/tmp/vd-build ./build_without_gradle.sh`，产物 `/tmp/vd-build/scrcpy-server` 覆盖到 `resources/scrcpy/scrcpy-server`。替换前已用同一份 client 链路验证视频（h265）+ 音频（Opus，6s 内 245 个音频包）+ `new-display` + `startApp` 全部正常。
+  - **升级到新版本 scrcpy 的做法（2026-09-29 从 4.0 → 4.1 走过一遍，可复用）**：我们的补丁只碰**两个文件** ——
+    `video/NewDisplayCapture.java`（三个 `debug.anddrive.vd.*` prop 钩子 + flags 日志 + 无 VirtualDisplayConfig 时的回退）与
+    `wrappers/DisplayManager.java`（反射 `VirtualDisplayConfig.Builder` 的那条 `createNewVirtualDisplay(..., ignoreActivitySizeRestrictions, homeSupported)` + `tryOptional`）。
+    步骤：下载**上游同版本**与**旧版本**源码 → `diff -u --label a/... --label b/...` 从旧 patched 树抽出补丁 → 在新版本树里 `patch -p1`（4.1 两处上下文没变，直接过）→
+    `BUILD_DIR` 要先 `mkdir`（脚本不会自己建）→ 编出的 server 版本烤成 `SCRCPY_VERSION_NAME`，**客户端必须同步换 `AdbScrcpyOptions4_x`**，否则版本对不上。
+    验证：server stdout 里要看到 `anddrive vd flags=0x… ignoreSizeRestrictions=true`，这行在就说明补丁没丢。
   - 同时删除：`electron/mirror/padMode.js`（compat + 物理屏改写 + 重启轮询那套配方）、`mirror:padMode` IPC、`LARGE_SCREEN_COMPAT` 常量、`adb.js` 里只为配方服务的 `setLargeScreenCompat` / `overrideDisplayGeometry` / `resetDisplayGeometry` / `getAppWindowGeometry`。
   - 已删的历史方案：`tablet` 平板模式（1.5x 上报）与「dpi 下限把 sw 钉在 600dp 以下」的小屏方案；`computeDisplayMetrics` 就是 `窗口 × DISPLAY_PIXEL_SCALE` + `dpi = 160 × DISPLAY_PIXEL_SCALE`，即 1dp = 1 CSS px。旧参数存盘里的 `tablet` 字段由 `normalizeScrcpyConfig` 静默丢弃。
   - **px 写死的控件 → 倍率现在做成「画质档位」`DISPLAY_QUALITY_TIERS`（compat 1.5 / native 2 / sharp 3，默认 sharp = 老行为）**：抖音有一批控件按 px 写死，顶部那排 tab 最明显 —— 真机量过 dpi 480 下它的字高只有 ~16 物理像素（14sp 本该 42），且 `settings put system font_scale 1.3` 对它**完全无效**（前后两帧一模一样，抖音不吃系统字体缩放）。唯一能动它的是「同样 dp 少给像素」：倍率减半、dp 不变（布局完全一样），那排字相对画面大一倍；对照实验是同一块 588dp 显示的 `1766x2412` 与 `882x1206` 两帧。**但倍率 1 会把整帧放大 2 倍铺到 Retina 背衬上**，用户实测「不光字不清晰，整个画面都不清晰」→ 定回 2（清晰度优先），字随之回到小。两个诉求物理上顶着，只能选落点（1.5 是中间档）。2026-09-20 真横屏之后用户反馈「抖音上边文字有点大」→ 抬到 **2.5**（那排字小约 20%，dp 布局不变；超过 2 属于过采样，码流按平方涨，觉得发软就回 2）。
@@ -106,12 +122,12 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 - [x] **镜像窗口绿色按钮 = 全屏**（2026-09-19 完成）：`electron/mirror/session.js` 显式 `fullscreenable: true`。Electron 44 上只要构造时显式传了 `fullscreen`（未勾「全屏启动」即 `false`），窗口就被标成不可全屏，macOS 绿色按钮退化成 zoom（最大化、保留菜单栏）；置顶与全屏启动两种组合下均已验证为可全屏
 - [ ] **设备侧旋转的剩余观感**：虚拟显示带 `VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT`，方向由设备上的应用决定；应用自身在启动过程中换向（例如抖音）仍会让画面转一次。可选缓解：`--no-vd-system-decorations`（不渲染虚拟显示里的 launcher/系统装饰）、或把启动应用放到服务端侧，避免「先显示 launcher 再启动应用」这段换向窗口
 
-- [x] **音频转发**（2026-09-16 完成；2026-09-21 修两处）：scrcpy 4.0 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放，preskip 裁剪、落后丢帧。
+- [x] **音频转发**（2026-09-16 完成；2026-09-21 修两处）：scrcpy 服务端 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放，preskip 裁剪、落后丢帧。
   - **音频开关以前是死的**：`buildMirrorOptions` 把 `audio: true` 写死、完全不读 `config.audio`，所以设置页那个开关没有任何作用（实测存盘 `audio:true` 也掩盖了这点）。现在按设置下发，关掉的会话不建音频采集。
   - **投屏时手机静音是刻意的**：服务端 `AudioPlaybackCapture(keepPlayingOnDevice)` 为 false（scrcpy 默认，即不传 `audio_dup`）时给 `AudioMix` 设 `ROUTE_FLAG_LOOP_BACK` —— 只回环、**不在本机渲染**，所以声音只在电脑上出。用户 2026-09-21 明确要求「投屏时手机不要发出声音」，因此我们不开 `audioDup`。要知道的副作用：会话结束、AudioPolicy 撤销后手机恢复渲染，正在播的内容会当场出声（这正是「电脑上结束投屏，手机立马响起声音」的由来，不是 bug）；要两边同时出声才需要 `audioDup: true`（`ROUTE_FLAG_LOOP_BACK_RENDER`）。真机验证过两种都能跑：`c2.android.opus.encoder`、5 秒 253 个 Opus 包。
   - 默认值仍是**关**（`DEFAULT_SCRCPY_CONFIG.audio = false`，早先实际行为等于常开）；要声音去设置页打开「音频转发」。
 - [x] **渲染层直连**（2026-09-16 完成）：镜像窗口 `nodeIntegration` + 官方 Tango 库直连 adb server；去掉主进程 per-packet 转发（曾做 ws 桥方案后替换为官方 connector）
-- [ ] **AV1 支持**：验证平台解码并移出回落名单
+- [ ] **AV1 进自动档**：真机验过设备编码 + 本机硬解之后，把它加进 `AUTO_ORDER`（现在只能手动强选）
 - [ ] **控制错误可见性**：控制失败目前仅 `console.warn`，可上报到会话 UI
 - [ ] **服务端输出采集**：消费 `client.output`，把 scrcpy 报错并入异常退出提示
 - [x] **移除旧 scrcpy 引擎**（2026-09-16 完成）：删除 `electron/adb.js` 的 `startScrcpy`/命令行/会话管理路径、`electron/scrcpyApp.js`、随包 `resources/scrcpy/scrcpy` 二进制（8.6MB）、相关 IPC/preload/API/UI；`.adr`/`anddrive://` 唤起改走自研镜像窗口
@@ -304,7 +320,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 
 ```text
 electron/mirror/
-  options.js    ScrcpyConfig → scrcpy 4.0 选项、编码回落、运行时偏好（纯函数，双端共用）
+  options.js    ScrcpyConfig → scrcpy 4.0 选项、编码解析（auto 落地）、运行时偏好（纯函数，双端共用）
   control.js    DOM 语义事件 → Tango writer 入参映射（序列化在 Tango）
   session.js    窗口/记录生命周期、断开清理、异常退出通知（不做帧转发）
   miProjection.js  HyperOS「投屏登记」：会话期间置 synergy_mode，让息屏后 SF 继续合成（纯逻辑 + 单测）

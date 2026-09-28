@@ -1,6 +1,6 @@
 <script setup>
 import SwitchToggle from './SwitchToggle.vue'
-import { DISPLAY_QUALITY_TIERS } from '../../shared/scrcpyConfig.js'
+import { DISPLAY_QUALITY_TIERS, planCodecList } from '../../shared/scrcpyConfig.js'
 
 /**
  * scrcpy 参数表单。无内部状态：读取 `config`，字段变化时 emit `change(key, value)`，
@@ -9,6 +9,10 @@ import { DISPLAY_QUALITY_TIERS } from '../../shared/scrcpyConfig.js'
 const props = defineProps({
   config: { type: Object, required: true },
   disabled: Boolean,
+  /** 设备侧能编哪些（`{usable, mimes}`），null = 还不知道（设置页没有目标设备）。 */
+  deviceCodecs: { type: Object, default: null },
+  /** 本机 WebCodecs 能解哪些，null = 探测还没回来。 */
+  localCodecs: { type: Object, default: null },
 })
 const emit = defineEmits(['change'])
 
@@ -17,11 +21,22 @@ const SELECT_CLASS =
 
 const BIT_RATE_OPTIONS = ['8M', '16M', '24M', '32M']
 const FPS_OPTIONS = [30, 60, 90, 120]
-const CODEC_OPTIONS = [
-  { value: 'h264', label: 'H.264' },
-  { value: 'h265', label: 'H.265' },
-  { value: 'av1', label: 'AV1' },
-]
+/** 某一头明确说「不行」才标记；null（没探测到）不标，免得凭猜测拦用户。 */
+/**
+ * 编码下拉与被挡清单全由 `planCodecList` 算（纯函数，单测覆盖）：
+ * 协议认得 ∩ 设备能编 ∩ 本机能解才进下拉，所以换一台设备这份列表就不一样。
+ */
+const codecPlan = computed(() =>
+  planCodecList({
+    mimes: props.deviceCodecs?.mimes ?? [],
+    device: props.deviceCodecs?.usable ?? null,
+    local: props.localCodecs,
+    current: props.config.videoCodec,
+  }),
+)
+const codecOptions = computed(() => codecPlan.value.options)
+const blockedCodecs = computed(() => codecPlan.value.blocked)
+
 // 倍率从 DISPLAY_QUALITY_TIERS 取，标签里不再手抄数字（档位数值改了这里跟着变）。
 const QUALITY_META = {
   compat: { name: '兼容', note: '给排版的异常应用' },
@@ -67,11 +82,17 @@ function update(key, value) {
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
         <div class="text-[13px] text-black/70">视频编码</div>
-        <div class="mt-0.5 text-[11px] text-black/40">H.265/AV1 更省流量，部分设备可能不支持</div>
+        <div class="mt-0.5 text-[11px] text-black/40">
+          只列「设备能编 + 本机也能解」的格式，换设备这份列表会变{{
+            blockedCodecs.length
+              ? `；设备还有 ${blockedCodecs.map((entry) => entry.label + (entry.reason ? `（${entry.reason}）` : '')).join(' / ')}`
+              : ''
+          }}
+        </div>
       </div>
       <select :class="SELECT_CLASS" :value="props.config.videoCodec" :disabled="disabled"
         @change="update('videoCodec', $event.target.value)">
-        <option v-for="codec in CODEC_OPTIONS" :key="codec.value" :value="codec.value">
+        <option v-for="codec in codecOptions" :key="codec.value" :value="codec.value" :disabled="codec.disabled">
           {{ codec.label }}
         </option>
       </select>

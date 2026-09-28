@@ -2,6 +2,7 @@ import { CHANNELS } from "../../electron/ipcContract.js";
 import { getServerClient, acquireDeviceAdb, startScrcpy, codecName } from "./connect.js";
 import { computeDisplayMetrics } from "../../shared/scrcpyConfig.js";
 import { createDisplayFollower } from "./displayFollow.js";
+import { probeLocalCodecs } from "../utils/codecCaps.js";
 
 // ---------------------------------------------------------------------------
 // 直连会话（每窗口一个 scrcpy client）：adb/scrcpy 全用 Tango 官方库建立
@@ -71,6 +72,8 @@ export async function startSession(
     serverPath: info.serverPath,
     config: info.config,
     display: initialDisplay(info),
+    // `auto` 在这里落地：设备能编哪些由主进程探好随启动参数带来，本机能不能解现场探测。
+    caps: { device: info.deviceCodecs ?? null, local: await probeLocalCodecs() },
   });
   current.client = client;
 
