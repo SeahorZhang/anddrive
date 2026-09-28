@@ -8,7 +8,7 @@
 
 ## 0. 一分钟结论
 
-1. ~~B1 正式版静默丢音频~~ **已于 2026-09-28 修掉**（生产构建产物已验证 null 调用消失）。剩下三个真 bug：B2 动作键没接线、B4 `installHelpera` 拼错进契约、O10 配对弹窗未捕获异常。
+1. **§1 那批真 bug 已全部关闭（2026-09-28）**：B1 静默丢音频、B3 `beforeunload` 重复注册、B4 `installHelpera` 拼错、O10 配对弹窗未捕获异常、D4 图标并发丢写、D7 跨设备地址解析 —— 已修；B2 动作键按你的决策整套删除。**待办表里已经没有"已确认未修的真 bug"了**，剩下的都是优化 / 结构 / 功能。
 2. **画面「卡住」问题目前零防线在跑**：9-28 那版「息屏弹醒一次 + 90s 冷却」已从工作树整体消失（全仓 grep `watchSleepBounce` / `wakeDisplay` / `mirrorWake*` 零命中）。三类根因（A 断链 / B1 系统收回 / B2 停合成）、统一理论与**已判死的七条救法**现已补进 `NATIVE_MIRROR.md` §排查记录 2026-09-28 —— 之前只存在于对话里、从未进过提交。要不要重做是产品决策，先拍板（§9 第 3 批）。
 3. **轮询/定时器 15 处**（§5）。可收口的是三条"UI 想知道设备状态"的轮询，以及建了不拆的 mDNS socket。
 4. **按包名/机型的 app 特殊定制在可执行代码里已经清零**（§4）。别再去找"哪里在特判抖音"。
@@ -22,20 +22,19 @@
 | # | 现象 | 证据 | 建议 | 规模 |
 | --- | --- | --- | --- | --- |
 | B1 ✅ **已修（2026-09-28）** | ~~正式版收到第一个音频包就崩~~ 真实症状是**静默丢音频**：`debugAudio` 非 DEV 时为 `null`，`:332` 裸调抛 `TypeError` → 被 `src/mirror/direct-session.js:199-201` 的 `catch { break }` 吞掉 → **`pumpLoop` 跳出，音频流不再被读取**；`:94` 是 `void`，所以既不崩进程也不提示，视频与输入全程正常。只在**开了音频转发**时触发（默认 `audio: false`） | 旧位置 `src/mirror/App.vue:313`/`:332`。坑在假信号：`:331` 计数在抛错**之前**执行，HUD 显示 `audio>0` 却 `ad=0`，按 `NATIVE_MIRROR.md` 那张表会去查 `AudioDecoder`/`astate`，方向全错 | 采方案 A：删掉 dev-only 闭包，回调只留 `hud.audioPackets += 1`（dev 观测能力 HUD 本来就有，零损失）。已用生产构建验证：产物里 `audio:()=>{…audioPackets+=1}`，旧 `packet.type` 签名 0 命中 | S |
-| B2 | 镜像窗口没有 Home / 多任务 / 音量 / 电源，只有 Esc 当返回 | 动作分支与 keycode 表早就写好：`electron/mirror/control.js:82-123`（`case 'action'` + `TAP_ACTIONS`）；唯一发控制消息的 `src/mirror/useMirrorInput.js:14` 只发 `touch/scroll/key/text`；`shared/keys.js:35` 只有 `Escape: back` | = **D2 / F4**，控制条 UI 在 2026-09-16 被删后一直没接线。加悬浮或菜单栏入口挂 5 个动作，或先做快捷键。注意带 Cmd 的组合一律不发设备（`useMirrorInput.js:89-90`，为让 ⌘Q/⌘W 归系统），所以 **Cmd+V 不会贴进手机** | S–M |
-| B3 | `beforeunload` 每次 `bootstrap()` 重复注册 → 接管/复用路径挂多份监听 | `src/mirror/session.js:36`（注册）；`:21-22` 注释明说 `bootstrap()` 可重复调用 | 注册移到模块顶层做一次 | S |
-| B4 | 拼错的 `installHelpera` 已进 API 契约 | `electron/preload.js:41` → `src/api/index.js:11,81` | 改 `installHelper`；与 §5 X 组的"删 api 透传壳"一起做 | S |
-| O10 | 配对弹窗有一处未捕获异常：`findDeviceApi()` 落在 `try` 之外，失败即 unhandled rejection，界面停在「等待设备扫码」，且无超时/取消 | `src/components/AddDeviceDialog.vue:24`（try 从 `:26` 才起） | 纳入 try + 加超时和取消入口 | S |
-| D4 | 多个图标批次互相**丢写**，且每批重写整个设备缓存 JSON | `electron/adb.js` `readAppCache`→内存合并→`writeAppCache` 无按设备串行；渲染层并发 3 个 worker（`src/components/home/AppList.vue:35-37`、`:168-192`） | 主进程按稳定标识串 promise 链；或图标单独按包名落文件（= 同一改动的两面，顺带解决 **O6**） | M |
-| D7 | 多台在线时可能**解析到另一台**的地址 | `resolveConnectAddress()` 不接参数却被当"按 serial 解析"调（`electron/adb.js:249` vs `:1507,1510`）；底层 `waitForMdnsService` 只返回第一个匹配条目 | 按服务实例名里嵌的稳定标识过滤（`adb-<serial>-xxxx._adb-tls-connect._tcp`）。单设备原则下不致命，做 **P3-1/P3-2** 必踩 | S–M |
+| B4 ✅ **已修（2026-09-28）** | 拼错的 `installHelpera` 已进 API 契约 | 旧位置 `electron/preload.js:41` → `src/api/index.js:11,81`。这类错误 tsc 抓不到（`window.electronAPI.adb` 无类型标注），所以**改完直接对产物**：`vite build` 后 preload 侧 `installHelper:e=>n(t.adbInstallHelper,...)`、渲染层解构 `installHelper:je}=window.electronAPI.adb`，全 dist `installHelpera` 0 命中 | 已改成 `installHelper` | S |
+| O10 ✅ **已修（2026-09-28）** | 配对弹窗 `findDeviceApi()` 落在 `try` 之外 → unhandled rejection，界面永久停在「等待设备扫码」，既无超时也无取消 | `src/components/AddDeviceDialog.vue`（旧 `:24`，try 从 `:26` 才起） | 三步都进 try + 90s 超时 + 失败出「重新等待设备扫码」按钮；弹窗关闭/卸载作废在途流程（令牌是**实例级**的 —— 组件在 `src/App.vue:314` 常驻挂载，只有弹窗内容走 v-if，所以它跨开关存活）| S |
+| D4 ✅ **已修（2026-09-28）** | 多个图标批次互相**丢写**，每批重写整个设备缓存 JSON | 旧：`readAppCache`→内存合并→`writeAppCache` 无按设备串行，渲染层并发 3 worker（`src/components/home/AppList.vue:35-37`） | **两层一起解决**：① 图标拆成文件（见 §2 O6），一批只写自己的 png，**根本不再参与快照的读-改-写**；② 剩下的快照写路径统一走 `mutateAppCache`（按缓存文件串行，锁键用**同步**的 `stableIdOf`，这里绝不 spawn adb，否则测试会变成"插着真机才会红"）。**回归测试已证伪**：把锁旁路掉、或让迁移读清洗后的数据，用例立刻红。残留：别名表尚未建立的极短窗口内同机两地址会分到两把锁（连接/心跳通常会先填好） | M |
+| D7 ✅ **已修（2026-09-28）** | 多台在线时可能**解析到另一台**的地址 | 旧：`resolveConnectAddress()` 不接参数却被当"按 serial 解析"调；`waitForMdnsService` 只取第一个匹配 | 现在传**刚才那个配对服务** `{name, address}`，按两个独立信号挑：设备标识段（`adb-<token>[-<随机>]` → `token`）> 同主机 IP > 退化成"第一个"（旧行为，绝不让配对卡死）。纯函数 `serviceDeviceToken` / `pickMdnsService` 已导出并带 5 条单测。⚠️ **未上真机验证**：多台同时广播时的实际命名需实测确认 | S |
 
 ---
 
 ## 2. 工程优化与文档事实
 
 - **O1 拆 `electron/adb.js`（1615 行，8 职责）**：adb 执行与错误归一 / 输出解析 / mDNS 发现与设备名 / 健康与重连 / 应用缓存与图标 / 稳定标识别名 / 应用操作 / 设备信息 / IPC 注册（这文件自己就注册 23 个 handler，全仓 39 个）。`tests/electron/` 已按这些主题分文件，主进程按同一刀切最自然。⚠️ 拆前必须解决"再导出对测试承重"（见 §5 X 组）。**L**
-- **O5 应用列表 300+ 应用时的成本**：没虚拟化（每格一套 ContextMenu/Portal，`AppList.vue:460-537`）、`patchIcons` 整数组替换（`:81-89`）→ 每 20 个图标全表重排、`sections` 过滤两遍（`:68-78`）、搜索无 debounce（`:58-62`）。顺序：debounce + `sections` 合成一遍 → 图标按包名增量合并 → 真要扛 1000 个再上虚拟化。**M**
-- **O6 图标走 base64 data URL**（上限 512KB，`electron/iconImage.js:23` `MAX_ICON_BYTES`），渲染只有 44px（`size-11`，`src/components/home/AppList.vue:477`）：helper 已按 128px 缩过（`helper-app/.../ListMain.java:33`），可落盘成文件用 `file://` 引用，省 IPC 与缓存体积（与 D4 同解）。**M**
+- **O5 应用列表 300+ 应用时的成本**：没虚拟化（每格一套 ContextMenu/Portal，`AppList.vue:460-537`）、`patchIcons` 整数组替换（`:81-89`）→ 每 20 个图标全表重排、`sections` 过滤两遍（`:68-78`）、搜索无 debounce（`:58-62`）。~~图标按包名增量合并~~ 已随 **O6** 落定，剩下的顺序：debounce + `sections` 合成一遍 → 真要扛 1000 个再上虚拟化。**M**
+- **O6 ✅ 图标已拆成文件（2026-09-28）**：原先 base64 内联在设备快照里（上限 512KB/张，`electron/iconImage.js:23` `MAX_ICON_BYTES`），现改为 `userData/app-cache/icons-v1/<稳定标识>/<sha256(包名)>.png`，**图标年龄 = 文件 mtime**，快照里不再存图标本体也不存图标时间。收益：一批图标只写自己那几个 png（不再为改 20 条而 parse+序列化整份 JSON）。冷启动秒开靠主进程读本地文件补 `iconUrl`（**渲染层零改动**）；没有用 `file://` —— dev 页面是 `http://localhost`（`electron/main.js:183`），Electron 默认 webSecurity 会拦 http 页里的 file 资源。旧格式在读到时**自动迁移**（`migrateInlineIcons`）。
+  - ⚠️ **留了一条我自己造的双人所有**：图标有效期现在有两处常量 —— 主进程 `electron/adb.js` 的 `ICON_TTL_MS`（决定文件还给不给）与渲染层 `src/components/home/AppList.vue:39` 的 `ICON_REFRESH_MS`（决定要不要再要一批）。两者都是 7 天，但**没有共同来源**，改一个忘一个的后果是"每次都重拉"或"过期了还不重拉"。收成一个常量（渲染层经 IPC 拿，或干脆只信主进程：它不给就是缺）留给 §9 第 2 批一起做。**S**
 - **O9 对话框是手搓的 Motion div**（`AppInfoDialog.vue:37-95`、`AddDeviceDialog.vue`）：无焦点陷阱、无 Esc、无 dialog 角色；reka-ui 已在依赖里且已用其 Dialog/ContextMenu，换过去白拿可达性。**S–M**
 - **O11 设备信息面板无数据时是空白**（`DeviceStats.vue:116` 只有 `v-else-if="stats"`，无空态/错误态）；写着「更新于」但不会自动刷新。**S**
 - **O8 可达性细节**：几处 `outline-none` 没补焦点环（`Settings.vue:146,156`、`DeviceStats.vue:93,175`、`ScrcpySessions.vue:72,96,101`）；纯图标按钮无可访问名称（`PageHeader.vue:57`、`AppList.vue:405-427`）；`<html lang="">` 是空的（`index.html:2`、`mirror.html:2`）；`prefers-reduced-motion` 只在镜像页处理（`src/mirror/App.vue:459`）。**S–M**
@@ -103,7 +102,7 @@
 | `src/mirror/App.vue:89-119,164-172` | 420/3000/80/150/2400ms | 遮罩状态机 + 提示自消 | 见 §3，随遮罩收口一起简化 |
 | `src/mirror/displayFollow.js:23,117` | 250ms | **debounce，刻意设计 + 有单测** | **别当轮询删**（理由见 `ARCHITECTURE.md` §4） |
 | `src/mirror/audio.js:8-10,74-75,142` | 0.08/0.4/0.03s | 音频排程余量、队列阈值 120 | 保留 |
-| `AppList.vue:35-39` | 20 / 3 / 7天 | 图标批次与并发 | 与 D4/O5 一起 |
+| `AppList.vue:35-39` | 20 / 3 / 7天 | 图标批次与并发 | 丢写与整表重写已被 D4+O6 拆掉；剩 O5 的渲染重排成本 |
 
 > 顺带纠正一处误记：代码里**唯一的「90」是 `adb.js:450` `CACHE_MAX_AGE_MS = 90 天`**（应用快照过期），不存在 90s 冷却。
 
@@ -112,9 +111,9 @@
 - `electron/fsUtil.js:16,29` — `pruneStaleEntries`、`onceAsync` **全仓零调用**（已复核），文件塌成只留 `pathExists`。**S**
 - `engine: "native"\|"scrcpy"` **没有任何代码分支读它**，却在各处活着：`shared/scrcpyConfig.js:14,79,110`、`src/components/ScrcpyLaunchDialog.vue:26`（写死 `native`）、`shared/types.js:33,47-56`（其中 `ScrcpySession.pid` typedef 已失效，pid 早就不存在）。= **O4**，与 `normalizeScrcpyConfig` 里的 `ENGINES` 一起删；渲染层默认参数改为 import shared 那份，别再手抄第二份（`useScrcpyPreferences.js:12-22`）。**S**
 - `electron/adb.js:1162-1174` — 导出的 `launchApp` 无主进程也无 IPC 调用方。**S**
-- `electron/adb.js:1507,1510` 把 `serial` 传给无参的 `resolveConnectAddress()`（= **D7**）；`:1570-1599` 六个 handler 的 `event` 参数未用。**S**
+- `electron/adb.js:1570-1599` 若干 handler 的 `event` 参数未用。（曾有的「把 `serial` 传给无参 `resolveConnectAddress()`」= **D7**，已于 2026-09-28 修：现在如实接收 `{name, address}` 配对线索。）**S**
 - **四个从未调用的 `use*()` 包装**：`useScrcpySessions.js:43`、`useNotifications.js:126`、`useConnectionPreferences.js:11`、`useScrcpyPreferences.js:62`；`useFavorites.js:62` 的 `favorites`/`reload` 唯一消费者不用；`useNotifications.js:112` 的 `notify.info` 从未用。**S**
-- `src/api/index.js` — 约 40 个一行透传壳，纯重复 preload 命名（含 **B4**）。删层或删壳，二选一。**M**
+- `src/api/index.js` — 约 40 个一行透传壳，纯重复 preload 命名。删层或删壳，二选一。**M**
 - `ConfirmDialog.vue:13,20-29` — `cancel` 与 `close` 两个 emit 行为相同，调用点还都绑一样（`AppList.vue:558`、`PageHeader.vue:71`）。**S**
 - `src/mirror/displayFollow.js:128` `lastSentKey` getter 只有测试用；`src/mirror/direct-session.js:212` `getController` 单调用方；`src/mirror/session.js`（88 行）是 8 个 handler 1:1 的转发壳 → **并进 `direct-session.js`**；`electron/mirror/appSession.js`（34 行）单调用方 → 可内联。**M**
 - 迁移类遗留（可设到期日一次性删）：`electron/favorites.js:68-90` `collapseLegacy`（带 `.bak` + 进程标志）、`electron/scrcpyConfig.js:38-39,48-49` 的 `stored` 标志、`src/composables/useScrcpyPreferences.js:15-26,40-55` 渲染侧版本（localStorage → 主进程的一次性搬迁，两边各存一份）。**S**
@@ -126,6 +125,8 @@
 - 已核实的一条同类死重：`electron/scrcpyConfig.js:24-31` 整块再导出（`computeDisplayMetrics` / `DISPLAY_BASE_DPI` / `DISPLAY_PIXEL_SCALE` / `DISPLAY_QUALITY_TIERS`）—— **渲染层三个消费点全部直接 import `shared/scrcpyConfig.js`**（`src/mirror/direct-session.js:3`、`src/mirror/connect.js:52`、`src/components/ScrcpyConfigFields.vue:3`），主进程侧也没人从这块取。可整块删。**S**
 
 ### 5.3 会话归属与跨层混淆（改动要谨慎）
+
+- ⚠️ **镜像窗口为取一个图标而读整台设备的图标**（本轮把图标拆成文件后**没有变差、但也没变好**，值得单独收一刀）：`src/mirror/App.vue:185-191` 调 `adb:getCachedApps` 拿全量列表再 `find` 那一个包名 —— 以前是把整份含 base64 的 JSON 读一遍，现在是 readdir + 每张 png 一次 stat/read，量级相同。正解很便宜：**开会话时就已经带著 iconUrl**（`startMirrorSession` 的 request 里有，`AppList.vue:217` 传进来的），把它放进 `pendingInit` 即可，镜像页从此不碰缓存。顺带还能修掉 `.adr` 冷启动路径拿不到图标的老问题。**S**
 
 - 两套「session」概念撞车：`useScrcpySessions`（主进程窗口注册表，UI 轮询）vs `direct-session.current`（每窗口 scrcpy 客户端）；`direct-session.js:50,58` 把 `current.info` **写两次**。
 - 字段所有权倒挂：`electron/mirror/session.js:244-256` 把 codec/hasAudio 这些**渲染层拥有**的字段存进主进程记录；复用与新起两条路径返回**不同形状**（`:129` vs `:177`）；`:256` 大括号缩进错位。
@@ -144,7 +145,7 @@
 | F1 | 一键截图到 Mac（同时进剪贴板） | `exec-out` 通道仓库已在用，`screencap -p` 无需权限 | S | P2-3 |
 | F2 | 文件互传（拖拽 push/pull + 进度） | `adb pull` 已用于导 APK；进度按字节算，别解析 pull 的 stderr | M | P2-2 |
 | F3 | APK 拖拽批量安装 | 安装链路已跑通（`install -r`） | S–M | P2-1 |
-| F4 | 镜像里的系统动作键 | 就是 **B2/D2**，代码早写完，缺调用方 | S | — |
+| F4 | ~~镜像里的系统动作键（返回/Home/多任务/音量/电源）~~ | **已结案，2026-09-28 整套删除**（编号保留不重排，见 §8）。原 `D2/B2` 一并关闭 | — | — |
 | F5 | 应用元信息增强：标注「固定竖屏 / 不可调整」 | helper 自己拼 JSON，加字段便宜（`helper-app/.../ListMain.java` 的类注释是契约）。正好解释用户常问的"为什么这个 app 投出来中间一条" | S–M | — |
 | F6 | 权限 / appops 面板 | shell uid 有这些权限；MIUI/HyperOS 可能拦，要按 OEM 分支并给失败出口 | S–M | — |
 | F7 | 「把手机带到无线调试二维码页」 | helper 里的 `QrPairActivity`（manifest `:11`）**Mac 侧从来没调用过**；已连接时一条 `am start` 就够。适合放进"添加第二台设备 / 无线调试失效"两个入口 | S | P3-5 |
@@ -164,7 +165,7 @@
 - **H1 专注投屏**：镜像开着时自动静音 Mac 通知（DND API）+ 设备侧免打扰，结束自动恢复。对"投屏看视频/演示"是实打实的体验差。
 - **H2 菜单栏常驻会话**：把当前会话放进 macOS 菜单栏（`Tray`），一键聚焦/关闭/接回（接回逻辑已有）。和已做好的 ⌘Q 语义（`electron/menu.js`）是一套。
 - **H3 「工作台」预设**：多块镜像的窗口位置/尺寸/应用存成布局一键恢复（`mirrorWindowBounds` 已算好初始尺寸，缺持久化与恢复）。
-- **H4 Presenter 模式**：只推画面、Mac 当遥控器（翻页/音量/播放暂停走 F4），配合已有的全屏启动 —— 手机当演示笔。
+- **H4 Presenter 模式**：只推画面、Mac 侧当遥控器（翻页/音量/播放暂停原本要走 F4 动作键，**F4 已删** → 这条得改为直接给 Tango `injectKeyCode` 注入具体键值，不再恢复 `kind:'action'` 那层），配合已有的全屏启动 —— 手机当演示笔。
 - **H5 软键盘策略**：`displayImePolicy` 我们现在完全忽略（`options.js` 未映射）。加开关避免"投屏时手机弹键盘占半屏"。
 - **H6 使用时长本地统计**：`dumpsys usagestats` shell 可读，首页给"今天最常用"，并给 MRU 排序（P1-4）提供真实数据源。
 - **H7 镜像画面标注/截图卡片**：截一帧连应用名+时间戳存成卡片（截图见 F1，图标能力已在 `iconImage.js`），做"今天在手机上看过的东西"留痕。
@@ -183,8 +184,8 @@
 | P1-4 | MRU 跨会话持久化 | 按设备记录最近启动 + 上限淘汰 + 损坏降级为空；数据源可用 H6 |
 | P2-4 | 快捷键与命令面板 | ⌘K 面板、⌘R 刷新、⌘, 设置、Esc 关闭 |
 | P2-5 | 分组、标签与隐藏 | 自定义分组/标签/隐藏/显示名，本地持久化 |
-| P3-1 | 多设备支持 | **待决策**，与"单设备优先"冲突；建议默认单设备 + 显式进入多设备模式。做之前先修 D7 |
-| P3-2 | 记忆设备与启动自动重连 | 启动读上次 serial → mDNS 解析 → connect → 直接进首页。同样先修 D7 |
+| P3-1 | 多设备支持 | **待决策**，与"单设备优先"冲突；建议默认单设备 + 显式进入多设备模式。~~做之前先修 D7~~（D7 已于 2026-09-28 修，但**未上真机验证过多台同时广播的命名**） |
+| P3-2 | 记忆设备与启动自动重连 | 启动读上次 serial → mDNS 解析 → connect → 直接进首页。同样依赖 D7（已修）；冷启动时别名表还没建立，解析要能容错 |
 | P3-3 | 自动更新与提示 | 自签名 + 非公证，`electron-updater` 需适配；建议先做"更新提示 + 手动安装" |
 | P3-4 | 深色模式与 i18n | = O7 + 文案抽离 |
 | P3-5 | 新手引导与帮助 | 首次启动分步引导（开无线调试 → 扫码 → 浏览/启动）；F7 是它的廉价前半 |
@@ -200,6 +201,7 @@
 ## 8. 已结案 / 明确不做（避免反复讨论）
 
 - **抖音直播「上下裁」= 镜像侧无解**：裁切发生在抖音内部（播放器 cover 稳态），与显示几何、虚拟性、ISR 无关。必要且充分变量是 `ro.build.characteristics` 含 tablet；改 prop 必须配 `pm clear` 重注册。品牌分发已逆向（小米/Redmi 看 characteristics+isMiui、vivo 看 `FtDeviceInfo`、OPPO 看 feature、其他品牌看 characteristics &&（`screenLayout≥large` 或 xdpi 对角线 ≥7.0″），结果缓存 Keva）；折叠屏走 `FoldIdentifyUtils` **完全不读 characteristics**。非 root 判死（`ro.*`/`persist.sys.*` 是 `system_prop`，adb shell uid 2000 写不动）。唯一出路是换信源（平板 AVD / 真平板 / 折叠机，均已实测同一条 AndDrive 链路版式天然正常）。取证链全文见 `NATIVE_MIRROR.md` §2026-09-27~28。
+- **系统动作键那套能力已整体删除（2026-09-28，B2/D2/F4 结案）**：返回 / Home / 多任务 / 音量 / 电源、旋转、通知栏、以及 `kind:'action'` 消息通道 —— 按决策**不要**，代码已清空，**别再提"接线"**。删除范围：`electron/mirror/control.js` 的 `TAP_ACTIONS` + `applyAction` + `case 'action'`（连带 `KEY_CODES` 再导出）、`shared/keys.js` 里只为它服务的五个键值别名（home / appSwitch / power / volumeUp / volumeDown）。**不影响「启动后息屏」**：那条走 `src/mirror/direct-session.js:135` 直调 Tango `setDisplayPower(false)`，本来就不经过这层（原 B2 描述里把它算进动作键是错的）。回归测试已改成断言 `kind:'action'` 现在抛「未知控制消息」。若将来要做鼠标手势（NATIVE_MIRROR §P1 那条仍然开放），直接给 `controller.injectKeyCode` 传官方键值，不要恢复这层抽象。
 - **黑边的变量不是比例，是 Android 的 600dp 大屏门槛**（`smallestWidth ≥ 600dp` 时系统忽略 app 方向锁并 letterbox）。比例吸附、600dp dpi 下限、`tablet` 模式、`MAX_DISPLAY_PIXELS` 都已试过并删除。
 - **模糊遮罩挡不住重排闪烁**（透明度低于 ~95% 就看得见），现方案是不透明遮罩 + 等关键帧。
 - **`force-stop` 不是"把应用接回来"**：会冷启。正确做法 `am display move-stack`（真机验证 pid 不变）。「重新启动」按钮当天加了又删 —— 和"接回"并排会误点。
@@ -217,11 +219,11 @@
 | 批次 | 内容 | 为什么这么排 |
 | --- | --- | --- |
 | **第 1 批 ✅ 已完成**（2026-09-22） | D1 息屏、D3 收藏写失败要说话、D5 adb 全面超时、D6 换设备重载、D10 重复 `getDeviceState`、O0 六条死码、O2 通道收口 + CHANNELS 唯一性单测、README 五处漂移 | 都是"用户已会撞到但不知道为什么"，互不干扰 |
-| **第 2 批：零风险清理** | §5.2 的 X 组（`fsUtil`、`engine` 字段、四个 `use*` 包装、`launchApp`、未用参数、`main.js` 重复 import、版本漂移），B3/B4（**B1 ✅ 已修**） | 每条独立可验，删完跑 `pnpm lint && typecheck && test` 就是回归 |
+| **第 2 批：零风险清理** | §5.2 的 X 组（`fsUtil`、`engine` 字段、四个 `use*` 包装、`launchApp`、未用参数、`main.js` 重复 import、版本漂移）。**§1 真 bug 那批（B1/B3/B4/O10/D4/D7）已于 2026-09-28 全部关闭**，本批只剩 X 组 | 每条独立可验，删完跑 `pnpm lint && typecheck && test` 就是回归 |
 | **第 3 批：卡住问题拍板** | §0.2 那条：要不要重做「息屏弹醒」；不做就把 A/B1/B2 三类根因归档为已知限制 | 这是你点名的"最严重问题"，目前**零防线在跑**，别让它悬着 |
-| **第 4 批：链路收口** | §5.1 三条状态轮询合成一条事件推送、mDNS browser 补 stop、D8 改事件驱动、D7 按 serial 解析、D4+O5+O6 图标链路 | 第 4 批开始要动 UI/链路，需要小设计 |
+| **第 4 批：链路收口** | §5.1 三条状态轮询合成一条事件推送、mDNS browser 补 stop（D9）、D8 改事件驱动。~~D7 按 serial 解析~~、~~D4 丢写~~、~~O6 图标落文件~~ 已于 2026-09-28 修完 | 第 4 批开始要动 UI/链路，需要小设计 |
 | **第 5 批：结构与几何** | O1 拆 `adb.js`、§3 遮罩与几何单一主人化、§5.3 会话归属合并、`session.js` 并进 `direct-session.js` | 拆分与几何都要一次做透；**几何要先按 `NATIVE_MIRROR.md` §4.0 的纪律复现一次再改** |
-| **并行可插队** | B2/F4 动作键、F1 截图、F7 二维码页、O12 一条 CI、O9/O10 对话框与空态 | 便宜且用户可感 |
+| **并行可插队** | F1 截图、F7 二维码页、O12 一条 CI、O9 对话框换 reka-ui（O10 已修） | 便宜且用户可感（原首项「B2/F4 动作键」已于 2026-09-28 删除结案） |
 
 ---
 
@@ -229,6 +231,7 @@
 
 - 本文所有 `file:line` 由并行探查主进程 / 渲染层 / 文档三路后**逐条复核**；复核不上的（包括一些被夸大的性能说法）没写进来。
 - **安全边界已处理好**：包名进设备 shell 前有正则+长度校验（`adb.js` 起），`moveAppTaskToDisplay` 只接受校验过的整数；serial 走 `execFile` 参数数组而非拼 shell；dev launcher 脚本路径经 `shellQuote`（`shortcut.js:144`）；osascript 只接 argv（`iconImage.js:81`）；`.adr` 内容经 `URLSearchParams` 编解码并在读取时重新校验（`shortcutCore.js:67-93`）。
-- **并发与原子性已有守卫**：稳定标识解析有 in-flight 去重、缓存写 tmp+rename 原子、发现循环令牌化。D4 是"守卫不够细"，不是"没有守卫"。
-- **反馈链路已修过一轮**：P0-1（`useNotifications` + 列表/图标/Helper 失败提示）与 P0-2（心跳 + 退避重连）确实交付了。仍漏的死角：O10，以及 `useScrcpyPreferences.js:42` 那个 `.catch(() => {})` 把参数保存失败吞干净了。
-- **当前基线**：`adbExec` / `adbExecSafe` 每次调用都带超时（默认 15s、connect/pair 45s、安装卸载拉文件 5min），超时统一报「设备无响应」，`getDeviceState` 把超时归为 `offline`；`CHANNELS` 是唯一通道来源并有唯一性单测守着。**2026-09-28 复跑的绿灯**：`typecheck` 通过、`test` 197 passed / 1 skipped、`oxlint` 83 文件 0 错、`eslint` 0 错（原体检里的 **O0「lint 门是红的」确已修掉**，故不再列为待办）。
+- **并发与原子性已有守卫**：稳定标识解析有 in-flight 去重、缓存写 tmp+rename 原子、发现循环令牌化。**2026-09-28 补上第四道**：应用缓存的读-改-写按设备文件串行（`mutateAppCache`），D4 的丢写到此关闭 —— 注意它守的是「同一台设备的多个批次」，不是「多台设备」，多设备共用一个进程时各锁各的。
+- **反馈链路已修过两轮**：P0-1（`useNotifications` + 列表/图标/Helper 失败提示）与 P0-2（心跳 + 退避重连）确实交付了；**O10 配对弹窗于 2026-09-28 关闭**（三步都进 try + 90s 超时 + 重试按钮）。仍漏的死角只剩 `src/composables/useScrcpyPreferences.js:42` 那个 `.catch(() => {})` 把参数保存失败吞干净了。⚠️ O10 的**根因仍在**：主进程 `waitForMdnsService` 不返回、被取代时返回永不 settle 的 Promise（= **D9**），弹窗那侧只是自卫；真修要按 §5.1 改事件驱动。
+- **当前基线**：`adbExec` / `adbExecSafe` 每次调用都带超时（默认 15s、connect/pair 45s、安装卸载拉文件 5min），超时统一报「设备无响应」，`getDeviceState` 把超时归为 `offline`；`CHANNELS` 是唯一通道来源并有唯一性单测守着。**2026-09-28 复跑**：`typecheck` 通过、`test` **211 passed / 1 skipped**（本轮净增：动作键用例 -2、D4 串行 +1、D7 命名与择优 +7、O6 图标落盘与迁移 +5）、`oxlint` 0 错、`eslint` 0 错（原体检里的 **O0「lint 门是红的」确已修掉**，故不再列为待办）。
+- ⚠️ **`pnpm format:check` 现在是红的（56 个文件），与本轮改动无关**：拿未被触碰的 HEAD 版 `src/App.vue` 单独跑 `oxfmt --check` 同样报错 —— 是 `oxfmt` 升版（0.67 → 0.70，见 `9e3bfca`）后想重排全仓。**但它就是 O12 上 CI 的第一颗雷**：要么先单独跑一次 `pnpm format` 生成一个巨型重排提交（推荐单独一刀，别混在功能改动里），要么 CI 先不挂 `format:check`。

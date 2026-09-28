@@ -8,7 +8,7 @@ const {
   getConnectedDevice,
   getDeviceState,
   reconnect,
-  installHelpera,
+  installHelper,
   loadInstalledApps,
   getCachedApps,
   getAppIcons,
@@ -63,7 +63,7 @@ export const pairApi = (device, password) => pair(device, password);
 export const disconnectApi = (serial) => disconnect(serial);
 
 // 解析设备当前可用的连接地址（配对端口不能用于 adb connect）
-export const resolveConnectAddressApi = (serial) => resolveConnectAddress(serial);
+export const resolveConnectAddressApi = (pairingService) => resolveConnectAddress(pairingService);
 
 // 一次性列出当前可连接的设备（供持续发现轮询）
 export const listConnectDevicesApi = () => listConnectDevices();
@@ -78,7 +78,7 @@ export const getDeviceStateApi = (serial) => getDeviceState(serial);
 export const reconnectApi = (serial) => reconnect(serial);
 
 // 安装app
-export const installHelperApi = (address) => installHelpera(address);
+export const installHelperApi = (address) => installHelper(address);
 
 // 获取手机app列表，无图标
 export const loadInstalledAppsApi = (address) => loadInstalledApps(address);

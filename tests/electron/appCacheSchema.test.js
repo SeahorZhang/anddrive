@@ -35,8 +35,24 @@ function snapshot(overrides = {}) {
 }
 
 describe('app cache schema', () => {
-  it('sanitizes a valid snapshot', () => {
-    expect(sanitizeSnapshot(snapshot(), { now: NOW })).toEqual(snapshot())
+  // 图标不再进快照（O6）：本体在 icons-v1/ 单独成文件，年龄以文件 mtime 为准。
+  it('strips inline icons out of a legacy snapshot', () => {
+    expect(sanitizeSnapshot(snapshot(), { now: NOW })).toEqual(
+      snapshot({
+        apps: [
+          { packageName: 'com.example.app', label: 'Example', iconUrl: null, iconUpdatedAt: null },
+        ],
+      }),
+    )
+  })
+
+  it('keeps a snapshot whose apps carry no icon payload', () => {
+    const lean = snapshot({
+      apps: [{ packageName: 'com.example.app', label: 'Example' }],
+    })
+    expect(sanitizeSnapshot(lean, { now: NOW })).toEqual(
+      { ...lean, apps: [{ ...lean.apps[0], iconUrl: null, iconUpdatedAt: null }] },
+    )
   })
 
   it('rejects snapshots with the wrong version', () => {
@@ -49,14 +65,14 @@ describe('app cache schema', () => {
     expect(sanitizeSnapshot(expired, { now: NOW, allowExpired: true })).not.toBeNull()
   })
 
-  it('sanitizes icons and falls back to the package name for labels', () => {
+  it('never lets an icon survive into a cached app entry', () => {
     expect(sanitizeIcon('data:text/plain;base64,QQ==')).toBeNull()
-    expect(sanitizeApp({ packageName: 'com.example.app', label: '', iconUrl: 'invalid' })).toEqual({
-      packageName: 'com.example.app',
-      label: 'com.example.app',
-      iconUrl: null,
-      iconUpdatedAt: null,
-    })
+    expect(
+      sanitizeApp({ packageName: 'com.example.app', label: '', iconUrl, iconUpdatedAt: NOW }),
+    ).toEqual({ packageName: 'com.example.app', label: 'com.example.app', iconUrl: null, iconUpdatedAt: null })
+    expect(
+      sanitizeApp({ packageName: 'com.example.app', label: 'x', iconUrl: 'invalid' }),
+    ).toEqual({ packageName: 'com.example.app', label: 'x', iconUrl: null, iconUpdatedAt: null })
   })
 
   it('rejects duplicate packages', () => {

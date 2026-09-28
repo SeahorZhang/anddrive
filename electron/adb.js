@@ -8,7 +8,7 @@ import { CHANNELS } from "./ipcContract.js";
 import { browse } from "./mdns.js";
 import { pickStableId } from "./deviceIdentity.js";
 import { DEFAULT_SCRCPY_CONFIG, normalizeScrcpyConfig } from "./scrcpyConfig.js";
-import { sanitizeIcon } from "./iconImage.js";
+import { sanitizeIcon, iconPngBuffer, MAX_ICON_BYTES, PNG_DATA_URL_PREFIX } from "./iconImage.js";
 import helperVersion from "../resources/helper-app.version.json" with { type: "json" };
 
 // 归一化逻辑在 ./scrcpyConfig.js（主进程参数持久化），这里转发导出保持既有引用。
@@ -213,19 +213,62 @@ let discoveryToken = 0;
 /**
  * 轮询 `adb mdns services`，直到出现指定类型的服务。
  * @param {string} serviceType 如 `_adb-tls-pairing._tcp`
+ * @param {{ token?: string, host?: string }} [hint] 目标设备线索（见 matchServiceScore）
  * @returns {Promise<{ name: string, type: string, address: string }>}
  */
-async function waitForMdnsService(serviceType) {
+async function waitForMdnsService(serviceType, hint) {
   const token = ++discoveryToken;
   await ensureServer();
   while (token === discoveryToken) {
     const output = await adbExec("mdns", "services");
     if (token !== discoveryToken) break;
-    const service = parseMdnsServices(output).find((s) => s.type === serviceType);
+    const service = pickMdnsService(parseMdnsServices(output), serviceType, hint);
     if (service) return service;
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
   return new Promise(() => null);
+}
+
+/**
+ * mDNS 服务实例名里的设备标识段：`adb-af3d7abd` / `adb-af3d7abd-Zvci5V` → `af3d7abd`。
+ * 尾串是每次开无线调试现编的随机值，不能参与比较。
+ * @param {unknown} name
+ */
+export function serviceDeviceToken(name) {
+  const value = String(name ?? "").split("._adb-")[0].trim();
+  if (!value.startsWith("adb-")) return "";
+  const parts = value.slice(4).split("-");
+  return parts[0] === "" ? "" : parts[0].toLowerCase();
+}
+
+/**
+ * 多台设备同时广播时，「第一个匹配的服务」可能属于另一台（旧 D7）。
+ * 这里用两个独立信号打分：
+ * - **设备标识段相同** —— 最硬，同一台机器配对端口与连接端口共用它。
+ * - **主机 IP 相同** —— 同机的 pairing/connect 通常只是端口不同；跨设备只有整个
+ *   局域网共用一个 IP 时才会误伤，那种情况下本来也分不出主次。
+ * 两条线索都缺时退回「第一个」（与旧行为一致）：宁可不做，也不要让配对卡死。
+ * @param {{ name?: string, address?: string }} service
+ * @param {{ token?: string, host?: string }} hint
+ */
+export function matchServiceScore(service, hint) {
+  if (hint.token && serviceDeviceToken(service.name) === hint.token) return 3;
+  if (hint.host && String(service.address).split(":")[0] === hint.host) return 2;
+  return 0;
+}
+
+/**
+ * 从已解析的服务里挑目标设备的那一条。纯函数，便于单测（旧行为 = 无 hint 时取第一个）。
+ * @param {{ name: string, type: string, address: string }[]} services
+ * @param {string} serviceType
+ * @param {{ token?: string, host?: string }} [hint]
+ */
+export function pickMdnsService(services, serviceType, hint) {
+  const matching = services.filter((s) => s.type === serviceType);
+  if (!hint?.token && !hint?.host) return matching[0];
+  return [...matching].sort(
+    (a, b) => matchServiceScore(b, hint) - matchServiceScore(a, hint),
+  )[0];
 }
 
 /**
@@ -244,10 +287,28 @@ async function findDevice() {
  *
  * adb-tls-connect → 当前 ADB TLS Endpoint → adb connect
  *
+ * @param {{ name?: unknown, address?: unknown }} [pairingService] 刚才配对那台的服务，
+ *   用来在多台同时广播时锁定同一台（不可信输入，内部再校验）
  * @returns {Promise<{name: string, address: string}>}
  */
-async function resolveConnectAddress() {
-  return waitForMdnsService("_adb-tls-connect._tcp");
+async function resolveConnectAddress(pairingService) {
+  return waitForMdnsService("_adb-tls-connect._tcp", connectHintFromPairing(pairingService));
+}
+
+/** 从配对服务条目提出「这就是那台设备」的两条线索。 */
+function connectHintFromPairing(pairingService) {
+  const name =
+    typeof pairingService?.name === "string" && pairingService.name.length <= 256
+      ? pairingService.name
+      : "";
+  const address =
+    typeof pairingService?.address === "string" && pairingService.address.length <= 256
+      ? pairingService.address
+      : "";
+  return {
+    token: serviceDeviceToken(name),
+    host: address ? address.split(":")[0].trim() : "",
+  };
 }
 
 let connectBrowser = null;
@@ -471,12 +532,9 @@ export function sanitizeApp(value) {
   }
   const label =
     typeof entry.label === "string" && entry.label ? entry.label.slice(0, 1024) : entry.packageName;
-  const iconUrl = sanitizeIcon(entry.iconUrl);
-  const iconUpdatedAt =
-    iconUrl && validTimestamp(entry.iconUpdatedAt)
-      ? /** @type {number} */ (entry.iconUpdatedAt)
-      : null;
-  return { packageName: entry.packageName, label, iconUrl, iconUpdatedAt };
+  // 图标不进快照：它在 icons-v1/ 里单独成文件，「有没有 / 什么时候拿的」由文件 mtime 说。
+  // 旧格式的内联 base64 由 migrateInlineIcons 在读到时搬走，这里一律挡成 null。
+  return { packageName: entry.packageName, label, iconUrl: null, iconUpdatedAt: null };
 }
 
 /**
@@ -520,20 +578,175 @@ export function serializeSnapshot(snapshot) {
     { allowExpired: true },
   );
   if (!sanitized) return null;
-
-  let data = JSON.stringify(sanitized);
-  if (Buffer.byteLength(data) <= MAX_SNAPSHOT_BYTES) return data;
-  for (const cachedApp of sanitized.apps) {
-    cachedApp.iconUrl = null;
-    cachedApp.iconUpdatedAt = null;
-  }
-  data = JSON.stringify(sanitized);
+  // 图标拆到文件后快照只剩标签，正常情况下远够不到上限；这条判断是兜底，
+  // 以前的「超限就把图标全清空」分支已经没有意义（里面根本不再有图标）。
+  const data = JSON.stringify(sanitized);
   return Buffer.byteLength(data) <= MAX_SNAPSHOT_BYTES ? data : null;
 }
 
 const cacheRoot = () => path.join(app.getPath("userData"), "app-cache", "apps-v1");
 const cacheKey = (serial) => createHash("sha256").update(serial).digest("hex");
 const cachePath = (serial) => path.join(cacheRoot(), `${cacheKey(serial)}.json`);
+
+// ---------------------------------------------------------------------------
+// 图标落盘（O6）：图标 PNG 单独成文件，缓存 JSON 只存元数据。
+//
+// 原先图标以 base64 内联在快照里，后果是：一台 300 应用设备的缓存 JSON 能涨到几十 MB，
+// 而**每一个图标批次都要「读整份 → 改 → 序列化整份 → 重写整份」**（D4 的丢写正是这么来的，
+// 每批还要为改 20 条而 parse 一次 3000 条）。拆成文件后：一批只写自己那几个 png。
+//
+// 不用 `file://` 直接给 <img> 用：dev 页面是 http://localhost，Electron 默认
+// webSecurity 会拦 http 页里的 file 资源，等于开发环境图标全瞎。所以读侧在主进程
+// 拼回 data URL —— 冷启动一次 IPC 的体积和以前相当，但不再有整份 JSON 的读写放大。
+// ---------------------------------------------------------------------------
+
+const ICON_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** 同时打开的图标文件数：一台 3000 应用全量补齐时不要把 FD 一口气吃光。 */
+const ICON_READ_CONCURRENCY = 32;
+/** 每个设备目录一小时内最多清一次，别让 150 个图标批次各自扫全目录。 */
+const ICON_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+/** @type {Map<string, number>} dir → 上次 prune 的时间 */
+const iconPrunedAt = new Map();
+
+const iconRoot = () => path.join(app.getPath("userData"), "app-cache", "icons-v1");
+const iconDir = (stable) => path.join(iconRoot(), cacheKey(stable));
+const iconFileFrom = (dir, packageName) => path.join(dir, `${cacheKey(packageName)}.png`);
+
+/**
+ * 图标目录的候选键：稳定标识优先，再兜住「别名表还没建立时按传输地址写入」的那批。
+ * 与快照的 `cacheCandidates` 同一思路 —— 两边都要认，否则冷启动读不到刚迁移的图。
+ */
+function iconDirs(serial) {
+  const stable = stableIdOf(serial);
+  const dirs = [iconDir(stable)];
+  for (const other of aliasesOfStableId(stable)) {
+    if (other !== stable) dirs.push(iconDir(other));
+  }
+  const byAddress = iconDir(serial);
+  if (!dirs.includes(byAddress)) dirs.push(byAddress);
+  return dirs;
+}
+
+/** 写入一批图标，返回成功落盘的包名；单张失败只丢那张，不影响整批。 */
+export async function writeIconFiles(stable, entries) {
+  const dir = iconDir(stable);
+  const written = [];
+  try {
+    await fs.mkdir(dir, { recursive: true });
+  } catch (error) {
+    console.warn("Failed to create icon cache dir:", error);
+    return written;
+  }
+  await Promise.all(
+    entries.map(async ({ packageName, dataUrl }) => {
+      const png = iconPngBuffer(dataUrl);
+      if (!png || !packageName || packageName.length > 512) return;
+      const filePath = iconFileFrom(dir, packageName);
+      const tempPath = `${filePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+      try {
+        await fs.writeFile(tempPath, png, { mode: 0o600 });
+        await fs.rename(tempPath, filePath);
+        written.push(packageName);
+      } catch (error) {
+        console.warn("Failed to write icon:", error);
+        await removeFile(tempPath);
+      }
+    }),
+  );
+  if (Date.now() - (iconPrunedAt.get(dir) ?? 0) > ICON_PRUNE_INTERVAL_MS) {
+    iconPrunedAt.set(dir, Date.now());
+    await pruneIconFiles(dir);
+  }
+  return written;
+}
+
+/**
+ * 列出目录里已有的图标：`文件名 → mtime`。
+ * 一次 readdir 加一批 stat，取代「每个应用一次 open」—— 整表补齐时这是 3000 次 vs 1 次的差别。
+ */
+async function listIconFiles(dir) {
+  const index = new Map();
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return index; // 还没建过图标目录
+  }
+  const pngs = entries.filter((e) => e.isFile() && e.name.endsWith(".png"));
+  await Promise.all(
+    pngs.map(async (entry) => {
+      const filePath = path.join(dir, entry.name);
+      try {
+        const stats = await fs.stat(filePath);
+        index.set(entry.name, { filePath, mtimeMs: stats.mtimeMs, size: stats.size });
+      } catch {
+        // 刚被 prune 掉，忽略
+      }
+    }),
+  );
+  return index;
+}
+
+/**
+ * 读本地图标（**不问设备**）。返回 `{ 包名: { dataUrl, updatedAt } }`；过期的不给
+ * （交给正常刷新流程）。mtime 就是「什么时候拿的」—— 快照里不再存图标时间。
+ */
+export async function readIconFiles(serial, packages) {
+  const list = Array.isArray(packages) ? packages : [];
+  /** @type {Map<string, string>} 文件名 → 包名（磁盘上只有哈希，回给调用方要还原） */
+  const wanted = new Map();
+  for (const packageName of list) {
+    if (typeof packageName === "string" && packageName && packageName.length <= 512) {
+      wanted.set(`${cacheKey(packageName)}.png`, packageName);
+    }
+  }
+  if (wanted.size === 0) return {};
+
+  // 同名文件在多个候选目录里时，先出现的目录赢（iconDirs 已按稳定标识排在前）。
+  const found = new Map();
+  for (const dir of iconDirs(serial)) {
+    const index = await listIconFiles(dir);
+    for (const [name, hit] of index) {
+      if (wanted.has(name) && !found.has(name)) found.set(name, hit);
+    }
+  }
+
+  const now = Date.now();
+  const fresh = [...found].filter(([, hit]) => {
+    return now - hit.mtimeMs <= ICON_TTL_MS && hit.size <= MAX_ICON_BYTES;
+  });
+
+  const out = {};
+  for (let i = 0; i < fresh.length; i += ICON_READ_CONCURRENCY) {
+    const chunk = fresh.slice(i, i + ICON_READ_CONCURRENCY);
+    const buffers = await Promise.all(
+      chunk.map(([, hit]) => fs.readFile(hit.filePath).catch(() => null)),
+    );
+    chunk.forEach(([name, hit], offset) => {
+      const png = buffers[offset];
+      if (!png) return;
+      out[wanted.get(name)] = {
+        dataUrl: `${PNG_DATA_URL_PREFIX}${png.toString("base64")}`,
+        updatedAt: hit.mtimeMs,
+      };
+    });
+  }
+  return out;
+}
+
+/** 图标目录只留最近用过、且没过期太久的，避免卸载掉的应用把目录堆成垃圾场。 */
+async function pruneIconFiles(dir) {
+  const index = await listIconFiles(dir);
+  if (index.size === 0) return;
+  const now = Date.now();
+  const keep = [];
+  for (const [name, hit] of index) {
+    if (now - hit.mtimeMs > ICON_TTL_MS * 4) await removeFile(hit.filePath);
+    else keep.push({ name, mtimeMs: hit.mtimeMs });
+  }
+  keep.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  for (const entry of keep.slice(MAX_APPS)) await removeFile(path.join(dir, entry.name));
+}
 
 // ---------------------------------------------------------------------------
 // 稳定设备标识（背景见 ./deviceIdentity.js）
@@ -698,24 +911,60 @@ async function removeFile(filePath) {
 export async function readAppCache(serial) {
   if (typeof serial !== "string" || !serial || serial.length > 1024) return null;
   for (const filePath of cacheCandidates(serial)) {
-    const snapshot = await readCacheFile(filePath);
+    const snapshot = await readCacheFile(filePath, (raw, sanitized) =>
+      migrateInlineIcons(raw, sanitized, serial),
+    );
     // undefined = 这个路径不可用（没有 / 坏掉 / 过期），继续试下一个候选
     if (snapshot !== undefined) return snapshot;
   }
   return null;
 }
 
+/**
+ * 旧缓存（O6 之前）把图标 base64 内联在快照里。清洗那一步会直接把它抹成 null —— 照原样
+ * 读就等于**白白丢掉用户已有的图标**（下次还得向设备重要）。所以这里在清洗结果之外再看一眼
+ * 未清洗的原件，把图标搬进 icons-v1/，并就地重写一份不带图标的快照。
+ *
+ * 重写是必要的：不重写的话每次冷启动都重搬一遍，把 png 的 mtime 刷成"刚刚拿过"，
+ * 7 天过期就永远不会触发。
+ *
+ * 只在真读到内联图标时才动盘（正常路径零额外 IO）；用同步的 `stableIdOf` 而不是
+ * `resolveDeviceStableId` —— 读缓存是冷启动路径，不该在这里 spawn adb。
+ * 搬失败就原样返回清洗结果、不重写，下次再试。
+ */
+async function migrateInlineIcons(raw, sanitized, serial) {
+  const inline = (raw?.apps ?? []).filter(
+    (app) => typeof app?.iconUrl === "string" && app.iconUrl,
+  );
+  if (!inline.length) return sanitized;
+  const stable = stableIdOf(serial);
+  try {
+    await writeIconFiles(
+      stable,
+      inline.map((app) => ({ packageName: app.packageName, dataUrl: app.iconUrl })),
+    );
+  } catch (error) {
+    console.warn("Failed to migrate inline icons:", error);
+    return sanitized;
+  }
+  await writeSnapshotTo(cachePath(stable), sanitized);
+  return sanitized;
+}
+
 /** @returns {Promise<object | undefined>} */
-async function readCacheFile(filePath) {
+async function readCacheFile(filePath, transform = (value) => value) {
   try {
     const data = await fs.readFile(filePath);
     if (data.length > MAX_SNAPSHOT_BYTES) {
       await removeFile(filePath);
       return undefined;
     }
-    const snapshot = sanitizeSnapshot(JSON.parse(data.toString("utf8")));
+    const parsed = JSON.parse(data.toString("utf8"));
+    const snapshot = sanitizeSnapshot(parsed);
     if (!snapshot) await removeFile(filePath);
-    return snapshot ?? undefined;
+    // transform 同时拿到**未清洗的原始对象**与清洗后的快照：图标在清洗时会被抹成 null，
+    // 迁移必须看到原件。返回值才是给调用方的。
+    return snapshot ? await transform(parsed, snapshot) : undefined;
   } catch (error) {
     if (error?.code !== "ENOENT") {
       console.warn("Failed to read app cache:", error);
@@ -726,16 +975,34 @@ async function readCacheFile(filePath) {
 }
 
 /** Delete the cached snapshot of one device. Idempotent. */
-async function deleteAppCache(serial) {
+export async function deleteAppCache(serial) {
   if (typeof serial !== "string" || !serial || serial.length > 1024) return false;
   // 同一台设备可能留下过多个地址桶（每次重连一个），一起清干净
   for (const filePath of cacheCandidates(serial)) await removeFile(filePath);
+  // 图标现在住在单独目录里，不一起删的话「清除缓存」会立刻把旧图标原样端回来。
+  for (const dir of iconDirs(serial)) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+    } catch (error) {
+      if (error?.code !== "ENOENT") console.warn("Failed to remove icon dir:", error);
+    }
+  }
+  iconPrunedAt.delete(iconDir(stableIdOf(serial)));
   return true;
 }
 
-/** Cached app list for one device, or [] when absent. */
-async function getCachedApps(serial) {
-  return (await readAppCache(serial))?.apps || [];
+/** Cached app list for one device, or [] when absent. 图标从本地文件补齐（不问设备）。 */
+export async function getCachedApps(serial) {
+  const apps = (await readAppCache(serial))?.apps || [];
+  const local = await readIconFiles(
+    serial,
+    apps.map((app) => app.packageName),
+  );
+  return apps.map((app) => ({
+    ...app,
+    iconUrl: local[app.packageName]?.dataUrl ?? null,
+    iconUpdatedAt: local[app.packageName]?.updatedAt ?? null,
+  }));
 }
 
 async function pruneCaches(protectedPath) {
@@ -748,7 +1015,7 @@ async function pruneCaches(protectedPath) {
       if (!entry.isFile()) continue;
       if (entry.name.includes(".tmp")) {
         // Only reclaim stale temps: a fresh one may belong to a concurrent
-        // writeAppCache that is about to rename it into place.
+        // writeSnapshotTo that is about to rename it into place.
         try {
           const stats = await fs.stat(filePath);
           if (Date.now() - stats.mtimeMs > CACHE_TMP_MAX_AGE_MS) await removeFile(filePath);
@@ -775,13 +1042,10 @@ async function pruneCaches(protectedPath) {
 }
 
 /**
- * @param {string} serial
- * @param {import('../shared/types.js').AppCacheSnapshotInput} snapshot
+ * 落一份快照：tmp + rename，成功后顺手清理过期缓存。
+ * 唯一的写路径调用方是 `mutateAppCache`（图标已拆到文件，快照只在列表权威刷新时重写）。
  */
-export async function writeAppCache(serial, snapshot) {
-  if (typeof serial !== "string" || !serial || serial.length > 1024) return false;
-  // 写的时候设备必然是连着的，所以这里可以问出真正的稳定标识当键。
-  const filePath = cachePath(await resolveDeviceStableId(serial));
+async function writeSnapshotTo(filePath, snapshot) {
   const data = serializeSnapshot(snapshot);
   if (data == null) {
     await removeFile(filePath);
@@ -801,6 +1065,58 @@ export async function writeAppCache(serial, snapshot) {
     await removeFile(tempPath);
     return false;
   }
+}
+
+/**
+ * 一台设备缓存文件的读-改-写串行队列。
+ *
+ * 图标是分批发来的（渲染层同时跑 3 个 worker），每一批都是「读整份快照 → 并进
+ * 内存 → 写回整份」。不串行时后完成的那批拿的是自己那次读到的旧快照，会把先完成
+ * 那批的图标整块盖掉（旧 D4）。
+ *
+ * 键用 `stableIdOf`（只查已落盘的别名表，**绝不在这里 spawn adb**）：既让同一台设备的
+ * 两个传输地址共用一把锁，又不会把测试变成「插着真机才会红」。代价是别名表还没建立时
+ * （冷启动第一次刷列表，之前没人解析过）两个地址会分到两把锁 —— 实际链路里连接、心跳、
+ * 快捷方式解析都会先填好别名，剩下的窗口极短。
+ * @type {Map<string, Promise<unknown>>}
+ */
+const cacheChains = new Map();
+
+function withCacheLock(filePath, task) {
+  const key = filePath;
+  const previous = cacheChains.get(key) ?? Promise.resolve();
+  const run = previous.then(task, task);
+  cacheChains.set(
+    key,
+    run.then(
+      () => undefined,
+      () => undefined,
+    ),
+  );
+  return run.finally(() => {
+    if (cacheChains.get(key) === run) cacheChains.delete(key);
+  });
+}
+
+/**
+ * 对一台设备的应用缓存做一次原子的读-改-写。
+ * @param {string} serial
+ * @param {(snapshot: import('../shared/types.js').AppCacheSnapshot | null) => Promise<import('../shared/types.js').AppCacheSnapshotInput> | import('../shared/types.js').AppCacheSnapshotInput} mutate
+ *   拿到当前快照（可能没有），返回要写回的整份快照。慢的部分（跑 helper）**必须放在外面**，
+ *   否则一把锁会按批数串行化整条设备链路。
+ */
+export async function mutateAppCache(serial, mutate) {
+  if (typeof serial !== "string" || !serial || serial.length > 1024) {
+    throw new Error("设备序列号无效");
+  }
+  const stable = stableIdOf(serial);
+  const filePath = cachePath(stable);
+  return withCacheLock(filePath, async () => {
+    const current = await readAppCache(serial);
+    const next = await mutate(current);
+    await writeSnapshotTo(filePath, next);
+    return next;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -990,22 +1306,23 @@ async function loadInstalledApps(serial) {
   }
   const { stdout } = await runHelperList(serial);
   const apps = uniqueApps(normalizeListOutput(stdout));
-
-  // Phase 1 carries no icons; overlay the ones from the local cache so the
-  // renderer can paint a complete-looking list before batch fetching starts.
   const now = Date.now();
-  const cache = await readAppCache(serial);
-  const cachedByPackage = new Map((cache?.apps || []).map((app) => [app.packageName, app]));
-  const merged = apps.map((app) => {
-    const cachedIcon = cachedByPackage.get(app.packageName);
-    return {
-      ...app,
-      iconUrl: cachedIcon?.iconUrl || null,
-      iconUpdatedAt: cachedIcon?.iconUpdatedAt || null,
-    };
-  });
-  await writeAppCache(serial, snapshot(now, merged));
-  return merged;
+
+  // 快照只记「这台设备装了哪些应用、标签是什么」（秒开列表用），**不记图标**：
+  // 图标在 icons-v1/ 里单独成文件，年龄以 mtime 说。放在同一把锁里写，是因为这份整表
+  // 快照可能正和冷启动的图标迁移抢同一个文件。
+  await mutateAppCache(serial, () => snapshot(now, apps));
+
+  // 本地已有图标的直接随列表一起回去，让首页在图标批次跑起来之前就是满的（不问设备）。
+  const local = await readIconFiles(
+    serial,
+    apps.map((app) => app.packageName),
+  );
+  return apps.map((app) => ({
+    ...app,
+    iconUrl: local[app.packageName]?.dataUrl ?? null,
+    iconUpdatedAt: local[app.packageName]?.updatedAt ?? null,
+  }));
 }
 
 /** Shared snapshot shape for the app cache. */
@@ -1021,24 +1338,25 @@ function snapshot(now, apps) {
  */
 async function getAppIcons(serial, packages) {
   const { stdout } = await runHelperList(serial, ["--icons", packages.join(",")]);
-  const now = Date.now();
-  // Stamp the fetch time so the renderer can tell fresh icons from expired ones.
-  const fetched = normalizeListOutput(stdout)
-    .filter((app) => app.iconUrl)
-    .map((app) => ({ ...app, iconUpdatedAt: now }));
+  const fetched = normalizeListOutput(stdout).filter((app) => app.iconUrl);
 
-  // Persist each batch so the next cold start paints icons immediately.
-  const cache = await readAppCache(serial);
-  const byPackage = new Map((cache?.apps || []).map((app) => [app.packageName, { ...app }]));
-  for (const app of fetched) {
-    byPackage.set(app.packageName, {
-      ...(byPackage.get(app.packageName) || app),
-      iconUrl: app.iconUrl,
-      iconUpdatedAt: now,
-    });
-  }
-  await writeAppCache(serial, snapshot(cache?.authoritativeAt || now, [...byPackage.values()]));
-  return fetched;
+  // 一批只写自己那几个 png 文件：不读快照、不改快照，所以并发批次之间没有任何
+  // 共享状态要抢 —— 这正是旧 D4（整份 JSON 互相盖掉）消失的原因。
+  const stable = await resolveDeviceStableId(serial);
+  await writeIconFiles(
+    stable,
+    fetched.map((app) => ({ packageName: app.packageName, dataUrl: app.iconUrl })),
+  );
+
+  // 返回的 `iconUpdatedAt` 用文件 mtime，跟 readIconFiles 同一把尺子；
+  // 没落盘成功的（超限/写失败）不带时间，渲染层按「缺图标」下轮重试。
+  const stored = await readIconFiles(
+    serial,
+    fetched.map((app) => app.packageName),
+  );
+  return fetched
+    .filter((app) => stored[app.packageName])
+    .map((app) => ({ ...app, iconUpdatedAt: stored[app.packageName].updatedAt }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1506,8 +1824,11 @@ ipcMain.handle(CHANNELS.adbConnect, async (_, address) => {
 // 发现设备
 ipcMain.handle(CHANNELS.adbFindDevice, findDevice);
 
-// 通过 mDNS 解析设备当前的连接地址（adb-tls-connect 端口，与配对端口不同）
-ipcMain.handle(CHANNELS.adbResolveConnectAddress, (_, serial) => resolveConnectAddress(serial));
+// 通过 mDNS 解析设备当前的连接地址（adb-tls-connect 端口，与配对端口不同）。
+// 传的是刚才那个配对服务条目（{name, address}），不是 serial —— 多台同时广播时靠它锁定同一台。
+ipcMain.handle(CHANNELS.adbResolveConnectAddress, (_, pairingService) =>
+  resolveConnectAddress(pairingService),
+);
 
 // 一次性列出当前可连接的设备（供渲染层轮询展示）
 ipcMain.handle(CHANNELS.adbListConnectDevices, listConnectDevices);

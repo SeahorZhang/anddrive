@@ -3,11 +3,16 @@
 //
 // 只保留「语义事件 → Tango writer 入参」的应用层映射；scrcpy 控制协议的
 // 序列化由 Tango 的 `ScrcpyControlMessageWriter` 完成（injectTouch/
-// injectScroll/injectKeyCode/injectText/rotateDevice/setDisplayPower 等
-// 官方方法直用）。数值是稳定的 Android 常量，仅用于单测。
+// injectScroll/injectKeyCode/injectText 官方方法直用）。数值是稳定的 Android
+// 常量，仅用于单测。
+//
+// 系统动作键（返回/Home/多任务/音量/电源）、旋转、通知栏、息屏亮屏这一整类
+// `kind:'action'` 消息于 2026-09-28 按产品决策删除，**不要再加回来**：镜像窗口
+// 不提供这类入口。唯一还需要的息屏能力是会话建立后直调
+// `controller.setDisplayPower(false)`（见 `src/mirror/direct-session.js`）。
 // ---------------------------------------------------------------------------
 
-import { KEY_CODES, KEY_META } from "../../shared/keys.js";
+import { KEY_META } from "../../shared/keys.js";
 import { AndroidKeyEventAction, AndroidMotionEventAction, AndroidMotionEventButton } from "@yume-chan/scrcpy";
 
 /** 语义动作（组件层事件的小写名）→ Tango 官方 `AndroidMotionEventAction`。 */
@@ -24,7 +29,7 @@ export const TOUCH_BUTTON_PRIMARY = AndroidMotionEventButton.Primary;
 /** android.view.KeyEvent 动作：Tango `AndroidKeyEventAction`（Down=0/Up=1）。 */
 export const KEY_ACTION = AndroidKeyEventAction;
 
-export { KEY_CODES, KEY_META };
+export { KEY_META };
 
 /**
  * 键盘事件 → metaState 位。`preventDefault` 与否由渲染层判断（Cmd 组合键放行）。
@@ -79,15 +84,6 @@ export function toKeyMessage(message) {
   }
 }
 
-const TAP_ACTIONS = {
-  back: KEY_CODES.back,
-  home: KEY_CODES.home,
-  appSwitch: KEY_CODES.appSwitch,
-  power: KEY_CODES.power,
-  volumeUp: KEY_CODES.volumeUp,
-  volumeDown: KEY_CODES.volumeDown,
-};
-
 /**
  * 执行一条控制消息。会 await，调用方可 fire-and-forget。
  * @param {import("@yume-chan/scrcpy").ScrcpyControlMessageWriter} controller
@@ -103,21 +99,7 @@ export async function applyControl(controller, message) {
       return controller.injectKeyCode(toKeyMessage(message));
     case 'text':
       return controller.injectText(String(message.text ?? ''));
-    case 'action':
-      return applyAction(controller, String(message.action ?? ''));
     default:
       throw new Error(`未知控制消息：${message?.kind}`);
   }
-}
-
-/** @param {import("@yume-chan/scrcpy").ScrcpyControlMessageWriter} controller */
-async function applyAction(controller, action) {
-  if (action === 'rotate') return controller.rotateDevice();
-  if (action === 'notification') return controller.expandNotificationPanel();
-  if (action === 'screenOff') return controller.setDisplayPower(false);
-  if (action === 'screenOn') return controller.setDisplayPower(true);
-  const keyCode = TAP_ACTIONS[action];
-  if (keyCode === undefined) throw new Error(`未知控制动作：${action}`);
-  await controller.injectKeyCode({ action: KEY_ACTION.Down, keyCode, repeat: 0, metaState: 0 });
-  await controller.injectKeyCode({ action: KEY_ACTION.Up, keyCode, repeat: 0, metaState: 0 });
 }

@@ -66,40 +66,25 @@ describe('applyControl', () => {
       injectScroll: vi.fn().mockResolvedValue(undefined),
       injectKeyCode: vi.fn().mockResolvedValue(undefined),
       injectText: vi.fn().mockResolvedValue(undefined),
-      rotateDevice: vi.fn().mockResolvedValue(undefined),
-      expandNotificationPanel: vi.fn().mockResolvedValue(undefined),
-      setDisplayPower: vi.fn().mockResolvedValue(undefined),
     }
   }
 
-  it('dispatches touch, text and rotate', async () => {
+  it('dispatches touch, scroll, key and text', async () => {
     const controller = fakeController()
     await applyControl(controller, { kind: 'touch', action: 'down', x: 1, y: 1, width: 10, height: 10 })
+    await applyControl(controller, { kind: 'scroll', x: 1, y: 1, width: 10, height: 10, scrollX: 0, scrollY: 1 })
+    await applyControl(controller, { kind: 'key', action: 'down', keyCode: 4 })
     await applyControl(controller, { kind: 'text', text: 'hi' })
-    await applyControl(controller, { kind: 'action', action: 'rotate' })
     expect(controller.injectTouch).toHaveBeenCalledTimes(1)
+    expect(controller.injectScroll).toHaveBeenCalledTimes(1)
+    expect(controller.injectKeyCode).toHaveBeenCalledTimes(1)
     expect(controller.injectText).toHaveBeenCalledWith('hi')
-    expect(controller.rotateDevice).toHaveBeenCalledTimes(1)
   })
 
-  it('taps key actions with a down and an up', async () => {
-    const controller = fakeController()
-    await applyControl(controller, { kind: 'action', action: 'back' })
-    expect(controller.injectKeyCode).toHaveBeenCalledTimes(2)
-    expect(controller.injectKeyCode.mock.calls[0][0]).toMatchObject({ action: 0, keyCode: 4 })
-    expect(controller.injectKeyCode.mock.calls[1][0]).toMatchObject({ action: 1, keyCode: 4 })
-  })
-
-  it('maps screen power to setDisplayPower', async () => {
-    const controller = fakeController()
-    await applyControl(controller, { kind: 'action', action: 'screenOff' })
-    expect(controller.setDisplayPower).toHaveBeenCalledWith(false)
-  })
-
-  it('rejects unknown messages', async () => {
+  it('rejects unknown messages, including the removed action kind', async () => {
     await expect(applyControl(fakeController(), { kind: 'nope' })).rejects.toThrow('未知控制消息')
-    await expect(applyControl(fakeController(), { kind: 'action', action: 'nope' })).rejects.toThrow(
-      '未知控制动作',
+    await expect(applyControl(fakeController(), { kind: 'action', action: 'home' })).rejects.toThrow(
+      '未知控制消息',
     )
   })
 })

@@ -32,7 +32,7 @@ Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的无线 AD
 
 按域分组（`electron/ipcContract.js:8-73`）：连接发现与设备状态（`adb:*`）、应用操作（`adb:forceStop` / `clearData` / `uninstallApp` / `getAppInfo` / `exportApk`）、设备统计（`adb:getDeviceStats`）、镜像（`mirror:start|list|stop|stopAll|focus` + `mirror:initGet` 渲染层主动拉参数以避免时序竞态 + `mirror:exit` / `mirror:state` / `mirror:result` 三个下行事件）、镜像→设备的应用搬移（`mirror:appTask` / `mirror:moveTask`，注意**这两个注册在 `adb.js` 里**，不在 mirror 目录）、权限（`permissions:*`）、收藏（`favorites:*`）、全局参数（`scrcpyConfig:get|set`）、快捷方式（`shortcut:*`）。
 
-⚠️ 已知脏点：`installHelpera` 拼错已进契约（`electron/preload.js:41` → `src/api/index.js:11,81`）；各模块在 import 时自注册 handler（`electron/adb.js` 一个文件就注册 23 个，全仓 39 个），所以「谁提供哪个通道」只能靠 grep。
+⚠️ 已知脏点：各模块在 import 时自注册 handler（`electron/adb.js` 一个文件就注册 23 个，全仓 39 个），所以「谁提供哪个通道」只能靠 grep。（曾有的 `installHelpera` 拼错已在 2026-09-28 改正 —— 这类错误 tsc 抓不到，因为渲染层是从无类型标注的 `window.electronAPI.adb` 上解构，改完要**对构建产物**验两侧同名。）
 
 ## 3. 链路的真入口
 
@@ -42,7 +42,7 @@ Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的无线 AD
 | 发现与接管 | `src/App.vue:217-237` `discoverLoop` | 1s 轮询 `adb mdns services` + `adb devices`；连上即停；令牌递增让后一次调用取代前一次。**扫码弹窗开着时不接管**（`:223-226`，否则右上角列表被清空） |
 | 心跳与重连 | `src/App.vue:59-73` / `:122-145` | 5s 查 `getDeviceState`，3s 退避重连 ×10。超时被 `adb.js` 归为 `offline`，所以心跳真能发现掉线 |
 | 设备标识 | `electron/deviceIdentity.js` | 收藏、应用缓存、快捷方式都按 `ro.serialno` **稳定标识**存，落盘别名表 `device-aliases.json` 反查当前传输地址（无线重连一次地址就换，早期按地址存会裂成多个桶） |
-| 应用列表 | `electron/adb.js`（helper `app_process`）+ `src/components/home/AppList.vue` | 两阶段：先包名/标签，再补图标。`ICON_BATCH_SIZE=20`、并发 3、7 天过期（`AppList.vue:34-48`）；缓存 90 天、写盘 tmp+rename 原子 |
+| 应用列表 | `electron/adb.js`（helper `app_process`）+ `src/components/home/AppList.vue` | 两阶段：先包名/标签，再补图标。`ICON_BATCH_SIZE=20`、并发 3（`AppList.vue:34-39`）。**图标不在 JSON 里**：每张单独成文件 `userData/app-cache/icons-v1/<稳定标识哈希>/<包名哈希>.png`，年龄看文件 mtime（7 天过期）；快照 `apps-v1/<标识哈希>.json` 只存包名与标签，90 天过期、写盘 tmp+rename 原子。冷启动由主进程读本地文件把 `iconUrl` 补回返回值，渲染层拿到的仍是 data URL |
 | 列表排序 | `AppList.vue:68-78` | **收藏组置顶 + 设备返回原序**；没有 MRU、没有 `orderApps()`、没有 `appOrdering.js` |
 | 投屏启动 | `electron/mirror/session.js:100+` → `mirrorInitGet` → `src/mirror/session.js` → `direct-session.js` | 同设备同应用只开一个窗口（`findAppSession` 命中就 focus 并返回 `reused: true`）；会话起来后 `startApp` + `ensureAppHere` 搬任务 |
 | 画质档位 | `shared/scrcpyConfig.js` `DISPLAY_QUALITY_TIERS` | compat 1.5 / native 2 / sharp 3（默认 sharp）。虚拟显示尺寸 = 窗口 CSS × 倍率、dpi = 160 × 倍率，于是 **1dp = 1 CSS px**。倍率**只在开会话时生效**（`resizeDisplay` 不带 dpi） |
@@ -92,7 +92,7 @@ electron/
   mirror/
     options.js       ScrcpyConfig → scrcpy 4.0 选项、编码回落、窗口 bounds（纯函数，双端共用）
     session.js       窗口/记录生命周期、断开清理、异常退出通知（不做帧转发）
-    appSession.js    同设备同应用复用判定      control.js  DOM 事件 → Tango writer 入参映射
+    appSession.js    同设备同应用复用判定      control.js  DOM 事件 → Tango writer 入参（只有 touch/scroll/key/text；`kind:'action'` 那套已删）
 src/mirror/
   main.js 镜像页入口 · connect.js Tango 唯一接入口 · direct-session.js 会话建立/流泵/退出处理
   session.js App 访问层(bootstrap/sendControl/dispose) · displayFollow.js 跟随去重(有单测)

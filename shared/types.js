@@ -7,6 +7,8 @@
 
 /**
  * @typedef {InstalledApp & { iconUpdatedAt: number | null }} CachedInstalledApp
+ *   `iconUrl` / `iconUpdatedAt` 是**给渲染层的返回值**字段：图标本体存在 `icons-v1/` 的
+ *   png 文件里、时间取其 mtime，由主进程读侧补齐；落盘的快照里恒为 null。
  */
 
 /**

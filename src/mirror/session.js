@@ -16,6 +16,10 @@ const ipcRenderer =
 
 let player = null;
 
+// 关窗时收摊。注册一次就够：`bootstrap()` 可以重复调用（「接回画面」），
+// 挂在它里面会让接管路径每接一次多一份监听。`stopSession()` 自身幂等。
+window.addEventListener("beforeunload", () => stopSession());
+
 /**
  * App.vue 启动入口：拉取启动参数 → 认领应用归属 → 建立直连会话 → 帧数据送解码管线。
  * 可以重复调用（被顶掉后点「接回」就是再来一次，这次换成我们顶掉别人）。
@@ -33,7 +37,6 @@ export async function bootstrap(apply) {
   const info = await ipcRenderer.invoke(CHANNELS.mirrorInitGet);
   if (!info) throw new Error("镜像启动参数缺失");
   window.__anddriveMirrorId = info.id;
-  window.addEventListener("beforeunload", () => stopSession());
 
   player = createOpusPlayer({
     onStats: (stats) => apply.audioStats?.(stats),

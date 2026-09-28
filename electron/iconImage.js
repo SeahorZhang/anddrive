@@ -20,8 +20,9 @@ const execFileAsync = promisify(execFile);
 const OSASCRIPT = "/usr/bin/osascript";
 const SIPS = "/usr/bin/sips";
 const CACHE_DIR = "icon-cache";
-const MAX_ICON_BYTES = 512 * 1024;
-const PNG_DATA_URL_PREFIX = "data:image/png;base64,";
+/** 单张图标的上限；也用于「图标落盘后还能不能直接回读成 data URL」。 */
+export const MAX_ICON_BYTES = 512 * 1024;
+export const PNG_DATA_URL_PREFIX = "data:image/png;base64,";
 
 const COMPOSE_SCRIPT = `use framework "AppKit"
 use scripting additions

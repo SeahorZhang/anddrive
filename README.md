@@ -41,7 +41,7 @@ pnpm dev
 - **这是唯一引擎**：早先的「scrcpy 原生窗口（兼容回退）」已连同随包 `scrcpy` 二进制一起移除，界面上没有引擎开关，也不存在需要时的回退路径。
 - 仅 macOS（Apple Silicon），解码依赖 Chromium WebCodecs；H.264 / H.265 可用，AV1 会自动回落到 H.264。
 - 服务端参数由 `electron/mirror/options.js` 映射；窗口置顶 / 全屏由 Electron 窗口处理，「启动后息屏」在会话建立后以 `setDisplayPower(false)` 控制消息下发。
-- 输入支持触控、滚轮与键盘（`Esc` = 返回键）；**界面上没有返回 / 主屏 / 多任务 / 音量等动作键**（`electron/mirror/control.js` 里已实现，缺调用入口），这些只能靠设备端手势。
+- 输入支持触控、滚轮与键盘（`Esc` = 返回键）；**不提供返回 / 主屏 / 多任务 / 音量 / 电源这类系统动作键** —— 2026-09-28 已按产品决策把整套 `kind:'action'` 控制消息删除，这些操作走设备端手势。
 - `Cmd` 组合键保留给系统与应用，所以 `⌘V` 不会把 Mac 剪贴板贴进手机；也不支持中文输入法注入。
 - 无界面协议调试：`pnpm mirror:spike <serial> [h264|h265] [raw-out] [秒数]`，可把裸码流写文件后用 `ffprobe` 检查。
 - 现状、取证记录与剩余待办见 [`docs/NATIVE_MIRROR.md`](docs/NATIVE_MIRROR.md)；全仓缺陷与优化清单见 [`docs/TODO.md`](docs/TODO.md)。
