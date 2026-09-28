@@ -526,7 +526,7 @@ export function sanitizeApp(value) {
   const label =
     typeof entry.label === "string" && entry.label ? entry.label.slice(0, 1024) : entry.packageName;
   // 图标不进快照：它在 icons-v1/ 里单独成文件，「有没有 / 什么时候拿的」由文件 mtime 说。
-  // 旧格式的内联 base64 由 migrateInlineIcons 在读到时搬走，这里一律挡成 null。
+  // 快照里出现的任何 iconUrl 一律挡成 null（O6 之后没人再写它）。
   return { packageName: entry.packageName, label, iconUrl: null, iconUpdatedAt: null };
 }
 
@@ -606,15 +606,13 @@ const iconDir = (stable) => path.join(iconRoot(), cacheKey(stable));
 const iconFileFrom = (dir, packageName) => path.join(dir, `${cacheKey(packageName)}.png`);
 
 /**
- * 图标目录的候选键：稳定标识优先，再兜住「别名表还没建立时按传输地址写入」的那批。
- * 与快照的 `cacheCandidates` 同一思路 —— 两边都要认，否则冷启动读不到刚迁移的图。
+ * 图标目录的两个候选：稳定标识，以及别名还没建立时写入用的传输地址（同一台机器在
+ * 建立别名前后会各留一份，所以两边都要认）。**不再**扫该设备历史上所有传输地址的桶 ——
+ * 那是 stable-id 键之前留下的旧数据，已按「不兼容老用户」删除。
  */
 function iconDirs(serial) {
   const stable = stableIdOf(serial);
   const dirs = [iconDir(stable)];
-  for (const other of aliasesOfStableId(stable)) {
-    if (other !== stable) dirs.push(iconDir(other));
-  }
   const byAddress = iconDir(serial);
   if (!dirs.includes(byAddress)) dirs.push(byAddress);
   return dirs;
@@ -805,16 +803,6 @@ export function stableIdOf(transport) {
   return stableAliases.get(transport) || transport;
 }
 
-/** 同一个稳定标识下见过的所有传输地址（清缓存时一起清掉）。 */
-function aliasesOfStableId(stable) {
-  loadAliases();
-  const found = [];
-  for (const [transport, value] of stableAliases) {
-    if (value === stable) found.push(transport);
-  }
-  return found;
-}
-
 /**
  * 向设备问一次稳定标识：`ro.serialno` → `ro.boot.serialno` → `settings secure android_id`。
  * 问不到（掉线、没这台设备）就回传输地址，并且**不写别名表**，下次连上还会再解析。
@@ -882,14 +870,11 @@ export async function findTransportByStableId(stableId) {
   return null;
 }
 
-/** 读缓存的候选路径：稳定标识优先，再兜住别名还没建立时的旧地址桶。 */
+/** 读缓存的候选路径：稳定标识优先，其次别名还没建立时写过的那份传输地址文件。 */
 function cacheCandidates(serial) {
   const known = stableIdOf(serial);
   const list = [cachePath(serial)];
   if (known !== serial) list.unshift(cachePath(known));
-  for (const other of aliasesOfStableId(known)) {
-    if (other !== serial && other !== known) list.push(cachePath(other));
-  }
   return list;
 }
 
@@ -904,60 +889,24 @@ async function removeFile(filePath) {
 export async function readAppCache(serial) {
   if (typeof serial !== "string" || !serial || serial.length > 1024) return null;
   for (const filePath of cacheCandidates(serial)) {
-    const snapshot = await readCacheFile(filePath, (raw, sanitized) =>
-      migrateInlineIcons(raw, sanitized, serial),
-    );
+    const snapshot = await readCacheFile(filePath);
     // undefined = 这个路径不可用（没有 / 坏掉 / 过期），继续试下一个候选
     if (snapshot !== undefined) return snapshot;
   }
   return null;
 }
 
-/**
- * 旧缓存（O6 之前）把图标 base64 内联在快照里。清洗那一步会直接把它抹成 null —— 照原样
- * 读就等于**白白丢掉用户已有的图标**（下次还得向设备重要）。所以这里在清洗结果之外再看一眼
- * 未清洗的原件，把图标搬进 icons-v1/，并就地重写一份不带图标的快照。
- *
- * 重写是必要的：不重写的话每次冷启动都重搬一遍，把 png 的 mtime 刷成"刚刚拿过"，
- * 7 天过期就永远不会触发。
- *
- * 只在真读到内联图标时才动盘（正常路径零额外 IO）；用同步的 `stableIdOf` 而不是
- * `resolveDeviceStableId` —— 读缓存是冷启动路径，不该在这里 spawn adb。
- * 搬失败就原样返回清洗结果、不重写，下次再试。
- */
-async function migrateInlineIcons(raw, sanitized, serial) {
-  const inline = (raw?.apps ?? []).filter(
-    (app) => typeof app?.iconUrl === "string" && app.iconUrl,
-  );
-  if (!inline.length) return sanitized;
-  const stable = stableIdOf(serial);
-  try {
-    await writeIconFiles(
-      stable,
-      inline.map((app) => ({ packageName: app.packageName, dataUrl: app.iconUrl })),
-    );
-  } catch (error) {
-    console.warn("Failed to migrate inline icons:", error);
-    return sanitized;
-  }
-  await writeSnapshotTo(cachePath(stable), sanitized);
-  return sanitized;
-}
-
 /** @returns {Promise<object | undefined>} */
-async function readCacheFile(filePath, transform = (value) => value) {
+async function readCacheFile(filePath) {
   try {
     const data = await fs.readFile(filePath);
     if (data.length > MAX_SNAPSHOT_BYTES) {
       await removeFile(filePath);
       return undefined;
     }
-    const parsed = JSON.parse(data.toString("utf8"));
-    const snapshot = sanitizeSnapshot(parsed);
+    const snapshot = sanitizeSnapshot(JSON.parse(data.toString("utf8")));
     if (!snapshot) await removeFile(filePath);
-    // transform 同时拿到**未清洗的原始对象**与清洗后的快照：图标在清洗时会被抹成 null，
-    // 迁移必须看到原件。返回值才是给调用方的。
-    return snapshot ? await transform(parsed, snapshot) : undefined;
+    return snapshot ?? undefined;
   } catch (error) {
     if (error?.code !== "ENOENT") {
       console.warn("Failed to read app cache:", error);
@@ -970,18 +919,21 @@ async function readCacheFile(filePath, transform = (value) => value) {
 /** Delete the cached snapshot of one device. Idempotent. */
 export async function deleteAppCache(serial) {
   if (typeof serial !== "string" || !serial || serial.length > 1024) return false;
-  // 同一台设备可能留下过多个地址桶（每次重连一个），一起清干净
-  for (const filePath of cacheCandidates(serial)) await removeFile(filePath);
-  // 图标现在住在单独目录里，不一起删的话「清除缓存」会立刻把旧图标原样端回来。
-  for (const dir of iconDirs(serial)) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true });
-    } catch (error) {
-      if (error?.code !== "ENOENT") console.warn("Failed to remove icon dir:", error);
+  // 必须和写路径共用同一把锁：否则一次正在收尾的写入（tmp 已写、待 rename）会在删除
+  // 之后落地，用户点了「清除缓存」列表却原地复活。锁键与 mutateAppCache 一致。
+  return withCacheLock(cachePath(stableIdOf(serial)), async () => {
+    for (const filePath of cacheCandidates(serial)) await removeFile(filePath);
+    // 图标住在单独目录里，不一起删的话「清除缓存」会立刻把旧图标原样端回来。
+    for (const dir of iconDirs(serial)) {
+      try {
+        await fs.rm(dir, { recursive: true, force: true });
+      } catch (error) {
+        if (error?.code !== "ENOENT") console.warn("Failed to remove icon dir:", error);
+      }
     }
-  }
-  iconPrunedAt.delete(iconDir(stableIdOf(serial)));
-  return true;
+    iconPrunedAt.delete(iconDir(stableIdOf(serial)));
+    return true;
+  });
 }
 
 /** Cached app list for one device, or [] when absent. 图标从本地文件补齐（不问设备）。 */

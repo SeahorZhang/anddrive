@@ -6,24 +6,11 @@ import { DEFAULT_SCRCPY_CONFIG } from "../../shared/scrcpyConfig.js";
  * scrcpy 全局默认参数（模块级单例，设置页与启动对话框共用）。
  *
  * 持久化在主进程（userData/scrcpy-config.json），渲染层经 IPC 读写——桌面快捷
- * 方式在冷启动唤起投屏时主进程要能独立拿到最新参数，所以参数不能只存 localStorage。
+ * 冷启动唤起投屏时主进程要能独立拿到最新参数，所以参数只存主进程。
  */
 
 // 默认值只有 shared/scrcpyConfig.js 一份：以前这里手抄过一遍，加字段就会两边不一致。
 export const SCRCPY_DEFAULTS = DEFAULT_SCRCPY_CONFIG;
-
-/** 旧版本把参数存在 localStorage，升级后迁移一次到主进程。 */
-const LEGACY_STORAGE_KEY = "anddrive.scrcpyConfig";
-
-function readLegacyConfig() {
-  try {
-    const raw = localStorage.getItem(LEGACY_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
-    return parsed && typeof parsed === "object" ? { ...SCRCPY_DEFAULTS, ...parsed } : null;
-  } catch {
-    return null;
-  }
-}
 
 export const scrcpyConfig = reactive({ ...SCRCPY_DEFAULTS });
 
@@ -38,16 +25,7 @@ watch(
 );
 
 void getScrcpyConfigApi()
-  .then(({ config, stored }) => {
-    if (!stored) {
-      const legacy = readLegacyConfig();
-      if (legacy) {
-        // 赋值触发 watch，由 watch 推送保存到主进程。
-        Object.assign(scrcpyConfig, legacy);
-      }
-      localStorage.removeItem(LEGACY_STORAGE_KEY);
-      return;
-    }
+  .then(({ config }) => {
     Object.assign(scrcpyConfig, config);
   })
   .catch(() => {

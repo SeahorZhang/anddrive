@@ -140,6 +140,26 @@ describe("app cache persistence", () => {
     const saved = await readAppCache(serial);
     expect(saved.apps.map((app) => app.packageName).sort()).toEqual(packages);
   });
+
+  // 「清除缓存」必须等正在收尾的写入落完再删：否则删除先跑完、写入的 rename 后落地，
+  // 用户看到的就是「清了，列表又自己回来了」。
+  it("waits for an in-flight write before clearing the cache", async () => {
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const writing = mutateAppCache(serial, async () => {
+      await gate;
+      return snapshot();
+    });
+
+    await new Promise((resolve) => setImmediate(resolve));
+    const clearing = deleteAppCache(serial);
+    release();
+    await Promise.all([writing, clearing]);
+
+    expect(await readAppCache(serial)).toBeNull();
+  });
 });
 
 describe("icon files (O6)", () => {
@@ -200,39 +220,6 @@ describe("icon files (O6)", () => {
 
   it("survives a missing icon directory", async () => {
     expect(await readIconFiles("never-seen-device", ["com.a"])).toEqual({});
-  });
-
-  // 老缓存（O6 之前）把 base64 内联在 JSON 里。清洗那一步会把它抹成 null，
-  // 所以迁移必须在清洗前看到原件 —— 否则等于白白丢掉用户已有的图标。
-  it("migrates a legacy snapshot's inline icons into files, once", async () => {
-    const legacy = {
-      version: CACHE_VERSION,
-      authoritativeAt: Date.now() - 5000,
-      writtenAt: Date.now(),
-      apps: [
-        {
-          packageName: "com.a",
-          label: "A",
-          iconUrl: png([1, 2, 3]),
-          iconUpdatedAt: Date.now() - 5000,
-        },
-      ],
-    };
-    await fs.mkdir(path.dirname(cacheFile()), { recursive: true });
-    await fs.writeFile(cacheFile(), JSON.stringify(legacy));
-
-    const first = await readAppCache(serial);
-    expect(first.apps[0]).toMatchObject({ packageName: "com.a", iconUrl: null });
-    // 图标本体已经落到文件里，冷启动能凭它继续显示
-    await expect(fs.access(iconPath("com.a"))).resolves.toBeUndefined();
-
-    // 落盘的快照不再带 base64（否则每次读都会重搬、把 mtime 刷成"刚拿过"）
-    const onDisk = JSON.parse(await fs.readFile(cacheFile(), "utf8"));
-    expect(onDisk.apps[0].iconUrl).toBeNull();
-
-    const hydrated = await getCachedApps(serial);
-    expect(hydrated[0].iconUrl).toBe(png([1, 2, 3]));
-    expect(hydrated[0].iconUpdatedAt).toBeGreaterThan(0);
   });
 
   // O6 的验收面：冷启动仍然"秒出图标"，而且**不去问设备**。

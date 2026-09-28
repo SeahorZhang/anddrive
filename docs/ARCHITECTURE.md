@@ -42,6 +42,7 @@ Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的无线 AD
 | 发现与接管 | `src/App.vue:217-237` `discoverLoop` | 1s 轮询 `adb mdns services` + `adb devices`；连上即停；令牌递增让后一次调用取代前一次。**扫码弹窗开着时不接管**（`:223-226`，否则右上角列表被清空） |
 | 心跳与重连 | `src/App.vue:59-73` / `:122-145` | 5s 查 `getDeviceState`，3s 退避重连 ×10。超时被 `adb.js` 归为 `offline`，所以心跳真能发现掉线 |
 | 设备标识 | `electron/deviceIdentity.js` | 收藏、应用缓存、快捷方式都按 `ro.serialno` **稳定标识**存，落盘别名表 `device-aliases.json` 反查当前传输地址（无线重连一次地址就换，早期按地址存会裂成多个桶） |
+  **不做老用户兼容**：只认稳定标识键（外加别名未建立时写过的传输地址键）；stable-id 之前留下的地址桶不再回收。
 | 应用列表 | `electron/adb.js`（helper `app_process`）+ `src/components/home/AppList.vue` | 两阶段：先包名/标签，再补图标。`ICON_BATCH_SIZE=20`、并发 3（`AppList.vue:34-39`）。**图标不在 JSON 里**：每张单独成文件 `userData/app-cache/icons-v1/<稳定标识哈希>/<包名哈希>.png`，年龄看文件 mtime（7 天过期）；快照 `apps-v1/<标识哈希>.json` 只存包名与标签，90 天过期、写盘 tmp+rename 原子。冷启动由主进程读本地文件把 `iconUrl` 补回返回值，渲染层拿到的仍是 data URL |
 | 列表排序 | `AppList.vue:68-78` | **收藏组置顶 + 设备返回原序**；没有 MRU、没有 `orderApps()`、没有 `appOrdering.js` |
 | 投屏启动 | `electron/mirror/session.js:100+` → `mirrorInitGet` → `src/mirror/session.js` → `direct-session.js` | 同设备同应用只开一个窗口（`findAppSession` 命中就 focus 并返回 `reused: true`）；会话起来后 `startApp` + `ensureAppHere` 搬任务 |

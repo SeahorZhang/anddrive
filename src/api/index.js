@@ -151,7 +151,7 @@ export const revealShortcutApi = (filePath) => revealShortcut(filePath);
 // 订阅快捷方式唤起投屏的结果，返回取消订阅函数
 export const onMirrorResultApi = (callback) => onMirrorResult(callback);
 
-// 读取 scrcpy 全局默认参数（主进程持久化），返回 { config, stored }
+// 读取 scrcpy 全局默认参数（主进程持久化），返回 { config }
 export const getScrcpyConfigApi = () => getScrcpyConfig();
 
 // 保存 scrcpy 全局默认参数，返回归一化后的结果

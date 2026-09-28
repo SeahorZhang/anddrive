@@ -18,18 +18,14 @@ const storePath = () => path.join(app.getPath("userData"), "scrcpy-config.json")
 
 /** 内存缓存；loadScrcpyConfig 之后即与磁盘一致。 */
 let cached = null;
-/** 磁盘上是否已有持久化文件（渲染层据此决定是否迁移旧 localStorage 数据）。 */
-let stored = false;
 
 /** 启动时从磁盘加载参数；文件缺失或损坏时回落默认值。 */
 export async function loadScrcpyConfig() {
   try {
     const data = await fs.readFile(storePath(), "utf8");
     cached = normalizeScrcpyConfig(JSON.parse(data));
-    stored = true;
   } catch {
     cached = { ...DEFAULT_SCRCPY_CONFIG };
-    stored = false;
   }
   return getScrcpyConfigState();
 }
@@ -39,15 +35,14 @@ export function currentScrcpyConfig() {
   return cached ?? DEFAULT_SCRCPY_CONFIG;
 }
 
-/** @returns {{ config: typeof DEFAULT_SCRCPY_CONFIG, stored: boolean }} */
+/** 给 IPC 用：当前生效的全局参数。 */
 export function getScrcpyConfigState() {
-  return { config: { ...currentScrcpyConfig() }, stored };
+  return { config: { ...currentScrcpyConfig() } };
 }
 
 /** 保存参数：先归一化再原子写入，返回归一化后的结果。 */
 export async function saveScrcpyConfig(input) {
   cached = normalizeScrcpyConfig(input);
-  stored = true;
   const file = storePath();
   const temp = `${file}.${process.pid}.tmp`;
   try {

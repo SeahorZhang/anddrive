@@ -25,6 +25,7 @@
 
 - **D7 欠真机验证**：多台设备同时广播时，`_adb-tls-pairing` 与 `_adb-tls-connect` 的实例名是否真的共用同一段设备标识 —— 目前的择优逻辑是按 adb 惯例 + 测试夹具推的，**没在两台真机上验过**。要做时先修现场：两台同时开无线调试，比对 `adb mdns services` 原文。
 - **D4 的残留窗口**：别名表还没建立时（冷启动直接刷列表），同一台机器的两个传输地址会分到两把锁。实际链路里连接/心跳会先填好别名，窗口极短，但**不是零**。
+- ⚠️ **老用户兼容已按 2026-09-28 的决定全部删除**，代价是**升级后这些东西重来一次**（不是丢设备上的数据，只是本地缓存/偏好）：① 旧收藏里按 adb 传输地址存的那些桶**不再并入**稳定标识（`collapseLegacy` + `favorites.json.bak` 已删）→ 老用户可能看到收藏少了几条，重新星标即可；② `scrcpyConfig` 不再读 localStorage 旧参数（`stored` 标志一并删）→ 首次升级后投屏参数回到默认；③ 快照里的内联图标不再迁移成文件 → 图标重拉一轮。**这条决定本身要记在 §8**，别再把它当 bug 报回来。
 
 ---
 
@@ -42,6 +43,7 @@
 - **O13 渲染层零测试**：`tests/` 只覆盖 electron 与 mirror 纯逻辑。`useFavorites` 回滚、`needsIcon`/`patchIcons` 合并、`sections` 分组、`readableError` 都是纯函数，成本极低。**S–M**
 - **文案一致性**：镜像/投屏/投屏镜像三种叫法混用（`src/App.vue:242` vs `:245` vs `Settings.vue:145`）；「恢复默认」在两处语义不同（`Settings.vue:147` 恢复全局默认 vs `ScrcpyLaunchDialog.vue:105` 恢复到代码默认值）；关闭类按钮有 取消/关闭/断开 三种。**S**
 - **仍待你决定**："多设备不得静默降级"这条原则要不要落地（`ARCHITECTURE.md` §4 已把它标成目标而非现状）。
+- 文档引用**改用符号锚点**（`waitForMdnsService`、`COVER_*`、`TEARDOWN_TIMEOUT_MS`…）：删代码会让行号集体漂移，2026-09-28 就漂了一次，换算时还发现两处**本来就错**的范围（`options.js` 的 bounds 常量、`mirror/session.js` 的调用入口）。新写条目请沿用符号锚点。
 
 ---
 
@@ -108,12 +110,12 @@
 
 **2026-09-28 已删干净、因此从本清单移除的**：`fsUtil` 的两个零调用函数、`engine` 字段全套（含 `ENGINES`、`ScrcpySession.pid` 与被镜像页遮蔽的 `MirrorSession` 重复 typedef）、`adb.js` 的 `launchApp`、七个 handler 的未用 `event` 形参、四个从未被调用的 `use*()` 包装与 `notify.info`、`main.js` 重复 import、`adb.js` 与 `electron/scrcpyConfig.js` 的透传再导出（连带把 `tests/electron/scrcpy.test.js` 那份**重复的** `normalizeScrcpyConfig` 套件折进 `scrcpyConfig.test.js` 并删文件，独有断言一条没丢）。
 
-**仍然开着的**（都不是"零调用"，删之前要动行为或动结构，所以没归到本轮）：
+**仍然开着的**（要么不是零调用，要么删/改会动到行为或结构，所以没归进这轮）：
 
 - `src/api/index.js` — 约 40 个一行透传壳，纯重复 preload 命名。删层或删壳，二选一。**M**
 - `ConfirmDialog.vue:13,20-29` — `cancel` 与 `close` 两个 emit 行为相同，调用点还都绑一样（`AppList.vue:558`、`PageHeader.vue:71`）。**S**
 - `src/mirror/displayFollow.js` 的 `lastSentKey` getter（只有测试用）；`src/mirror/session.js`（88 行）是 8 个 handler 1:1 的转发壳 → **并进 `direct-session.js`**；`electron/mirror/appSession.js`（34 行）单调用方 → 可内联。**M**
-- **迁移类遗留**：`electron/favorites.js` `collapseLegacy`（带 `.bak` + 进程标志）、`electron/scrcpyConfig.js` 的 `stored` 标志、`src/composables/useScrcpyPreferences.js` 的 localStorage→主进程搬迁。**这些还在跑**（给老用户搬家），删=放弃对老数据的兼容，是要你点头的决策，不是死码。**S**
+- ✅ ~~`deleteAppCache` 不持锁~~ **已修（2026-09-28）**：删除动作整块包进与写路径同一把 `withCacheLock`，否则一次正在收尾的 rename 会让「清除缓存」后列表原地复活。回归用例 `waits for an in-flight write before clearing the cache` **已证伪**（旁路掉锁就立刻红）。至此 §5.2 里我自己造的洞只剩 §1 那条「别名未建立时锁会裂」。
 - 重复校验：serial/package 合法性在 `adb.js`、`shortcutCore.js`、`favorites.js`、`mirror/session.js` 各写一遍（package 一处正则、一处只判长度）。IPC 边界已校验，内部再校验属冗余 → 收成一个 `validators.js`。**S–M**
 - 空 catch 吞异常（对照 `ARCHITECTURE.md` §4 的分寸）：`adb.js` 两处、`iconImage.js:104`、`favorites.js:84-86`、`direct-session.js` 四处（含一处双层嵌套全吞）。**S**
 - 目录名与版本号的漂移：缓存目录仍叫 `apps-v1`，版本常量已是 `CACHE_VERSION = 2`。**已复核不致命**（读写同一常量，不会每次启动作废），只是名字骗人；改名要连迁移一起做。**S**
@@ -214,7 +216,7 @@
 | 批次 | 内容 | 为什么这么排 |
 | --- | --- | --- |
 | **第 1 批 ✅ 已完成**（2026-09-22） | D1 息屏、D3 收藏写失败要说话、D5 adb 全面超时、D6 换设备重载、D10 重复 `getDeviceState`、O0 六条死码、O2 通道收口 + CHANNELS 唯一性单测、README 五处漂移 | 都是"用户已会撞到但不知道为什么"，互不干扰 |
-| **第 2 批：零风险清理** | X 组的**零调用那一半已于 2026-09-28 删完**（见 §5.2）。剩的是要动行为/结构的：api 透传壳、`session.js` 合并、`validators.js` 收口、迁移遗留（要你先点头）、空 catch | 每条独立可验，改完跑 `pnpm lint && typecheck && test` 就是回归 |
+| **第 2 批：零风险清理** | X 组的**零调用那一半、全部老用户兼容代码、`deleteAppCache` 补锁已于 2026-09-28 做完**（见 §5.2）。剩的是要动结构/行为的：api 透传壳、`session.js` 合并、`validators.js` 收口、空 catch | 每条独立可验，改完跑 `pnpm lint && typecheck && test` 就是回归 |
 | **第 3 批：卡住问题拍板** | §0.2 那条：要不要重做「息屏弹醒」；不做就把 A/B1/B2 三类根因归档为已知限制 | 这是你点名的"最严重问题"，目前**零防线在跑**，别让它悬着 |
 | **第 4 批：链路收口** | §5.1 三条状态轮询合成一条事件推送、mDNS browser 补 stop（D9）、D8 改事件驱动 | 第 4 批开始要动 UI/链路，需要小设计 |
 | **第 5 批：结构与几何** | O1 拆 `adb.js`、§3 遮罩与几何单一主人化、§5.3 会话归属合并、`session.js` 并进 `direct-session.js` | 拆分与几何都要一次做透；**几何要先按 `NATIVE_MIRROR.md` §4.0 的纪律复现一次再改** |
@@ -226,7 +228,7 @@
 
 - 本文所有 `file:line` 由并行探查主进程 / 渲染层 / 文档三路后**逐条复核**；复核不上的（包括一些被夸大的性能说法）没写进来。
 - **安全边界已处理好**：包名进设备 shell 前有正则+长度校验（`adb.js` 起），`moveAppTaskToDisplay` 只接受校验过的整数；serial 走 `execFile` 参数数组而非拼 shell；dev launcher 脚本路径经 `shellQuote`（`shortcut.js:144`）；osascript 只接 argv（`iconImage.js:81`）；`.adr` 内容经 `URLSearchParams` 编解码并在读取时重新校验（`shortcutCore.js:67-93`）。
-- **并发与原子性已有守卫**：稳定标识解析有 in-flight 去重、缓存写 tmp+rename 原子、发现循环令牌化。**2026-09-28 补上第四、五道**：应用缓存的读-改-写按设备文件串行（`mutateAppCache`）；图标改成每包一个文件，一批只写自己的 png，不再参与快照的合并 —— 图标批次之间已无共享可变状态。注意锁守的是「同一台设备的多个批次」，不是「多台设备」。
+- **并发与原子性已有守卫**：稳定标识解析有 in-flight 去重、缓存写 tmp+rename 原子、发现循环令牌化。**2026-09-28 补上第四、五、六道**：应用缓存的读-改-写按设备文件串行（`mutateAppCache`）；图标改成每包一个文件，一批只写自己的 png，不再参与快照的合并（图标批次之间已无共享可变状态）；`deleteAppCache` 走同一把锁（清除不会与在途写入互相覆盖）。注意锁守的是「同一台设备的多个批次」，不是「多台设备」。
 - **反馈链路**：P0-1（`useNotifications` + 列表/图标/Helper 失败提示）与 P0-2（心跳 + 退避重连）确实交付了。仍漏的死角只剩 `src/composables/useScrcpyPreferences.js` 里保存参数那条 `.catch(() => {})` 把失败吞干净了。⚠️ 配对弹窗那次的**根因仍在**：主进程 `waitForMdnsService` 不返回、被取代时返回永不 settle 的 Promise（= **D9**），弹窗侧只是自卫；真修要按 §5.1 改事件驱动。
-- **当前基线**：`adbExec` / `adbExecSafe` 每次调用都带超时（默认 15s、connect/pair 45s、安装卸载拉文件 5min），超时统一报「设备无响应」，`getDeviceState` 把超时归为 `offline`；`CHANNELS` 是唯一通道来源并有唯一性单测守着。**2026-09-28 复跑**：`typecheck` 通过、`test` **209 passed / 1 skipped / 20 文件**（本轮：动作键用例 -2、D4 串行 +1、D7 命名与择优 +7、图标落盘与迁移 +5、删掉重复的 `scrcpy.test.js` 套件 -4）、`oxlint` 0 错、`eslint` 0 错（原体检里的 **O0「lint 门是红的」确已修掉**，故不再列为待办）。
+- **当前基线**：`adbExec` / `adbExecSafe` 每次调用都带超时（默认 15s、connect/pair 45s、安装卸载拉文件 5min），超时统一报「设备无响应」，`getDeviceState` 把超时归为 `offline`；`CHANNELS` 是唯一通道来源并有唯一性单测守着。**2026-09-28 复跑**：`typecheck` 通过、`test` **204 passed / 1 skipped / 20 文件**（净变化：动作键用例 -2、D4 串行 +1、D7 命名与择优 +7、图标落盘与冷启动 +5、删重复的 `scrcpy.test.js` 套件 -4、删老兼容 -6、`deleteAppCache` 补锁 +1）、`oxlint` 0 错、`eslint` 0 错（原体检里的 **O0「lint 门是红的」确已修掉**，故不再列为待办）。
 - ⚠️ **`pnpm format:check` 现在是红的（56 个文件），与本轮改动无关**：拿未被触碰的 HEAD 版 `src/App.vue` 单独跑 `oxfmt --check` 同样报错 —— 是 `oxfmt` 升版（0.67 → 0.70，见 `9e3bfca`）后想重排全仓。**但它就是 O12 上 CI 的第一颗雷**：要么先单独跑一次 `pnpm format` 生成一个巨型重排提交（推荐单独一刀，别混在功能改动里），要么 CI 先不挂 `format:check`。

@@ -150,7 +150,6 @@ describe('scrcpy config store', () => {
 
   it('falls back to defaults when nothing is stored', async () => {
     const state = await loadScrcpyConfig()
-    expect(state.stored).toBe(false)
     expect(state.config).toEqual({ ...DEFAULT_SCRCPY_CONFIG })
     expect(currentScrcpyConfig()).toEqual({ ...DEFAULT_SCRCPY_CONFIG })
   })
@@ -158,10 +157,9 @@ describe('scrcpy config store', () => {
   it('round-trips saved config across reloads', async () => {
     const saved = await saveScrcpyConfig({ ...DEFAULT_SCRCPY_CONFIG, alwaysOnTop: true })
     expect(saved.alwaysOnTop).toBe(true)
-    expect(getScrcpyConfigState().stored).toBe(true)
+    expect(getScrcpyConfigState().config.alwaysOnTop).toBe(true)
 
     const reloaded = await loadScrcpyConfig()
-    expect(reloaded.stored).toBe(true)
     expect(reloaded.config.alwaysOnTop).toBe(true)
     expect(currentScrcpyConfig().alwaysOnTop).toBe(true)
   })
@@ -177,7 +175,6 @@ describe('scrcpy config store', () => {
     await saveScrcpyConfig({ alwaysOnTop: true })
     await fs.writeFile(configFile, '{ not json', 'utf8')
     const state = await loadScrcpyConfig()
-    expect(state.stored).toBe(false)
     expect(state.config).toEqual({ ...DEFAULT_SCRCPY_CONFIG })
   })
 })
