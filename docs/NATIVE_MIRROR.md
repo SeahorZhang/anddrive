@@ -1,8 +1,8 @@
 # 自研镜像引擎（实验）
 
-> 除 scrcpy 原生窗口外，AndDrive 内置一个实验性的自研镜像客户端。
-> 本文档记录其现状、架构与**剩余待办**，供后续排期使用。
-> 相关原理见 [`PRINCIPLE_DOCUMENT.md`](PRINCIPLE_DOCUMENT.md)，功能路线图见 [`FEATURE_ROADMAP.md`](FEATURE_ROADMAP.md)。
+> 除 scrcpy 原生窗口外，AndDrive 内置一个自研镜像客户端（现在它是**唯一**形态）。
+> 本文档记录其现状、架构与**剩余待办**，以及真机取证记录。
+> 相关原理与项目约定见 [`ARCHITECTURE.md`](ARCHITECTURE.md)，待办与缺陷见 [`TODO.md`](TODO.md)。
 
 ## 1. 它是什么
 
@@ -12,8 +12,9 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 不再跨进程，由 WebCodecs 解码、WebGL canvas 渲染。
 控制协议完全由 Tango 的 `ScrcpyControlMessageWriter` 序列化（应用只做 DOM 事件 → writer 入参的映射）。
 
-自研引擎是启动镜像的**默认**（`engine: "native"`，`normalizeScrcpyConfig` 校验/持久化）；
-自研引擎唯一可用（原 scrcpy 引擎已删除，2026-09-16）。
+自研引擎是启动镜像的**唯一**形态（原 scrcpy 引擎与随包 8.6MB 二进制已于 2026-09-16 删除）。
+注意：参数里那个 `engine: "native"|"scrcpy"` 字段（`shared/scrcpyConfig.js:14,79,110`）**已无任何代码分支读取**，
+只剩校验与持久化的空壳，是 [`TODO.md`](TODO.md) §5.2 的待删项 —— 读到这句话时别以为还有回退开关。
 
 主进程只承担：创建镜像窗口、下发启动参数（渲染层 invoke 拉取）、
 维护会话记录（渲染层 ready/exit 上报）与断开/退出时关窗销毁。
@@ -23,13 +24,13 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 | 能力 | 位置 | 说明 |
 | --- | --- | --- |
 | 协议与连接 | `src/mirror/connect.js` | Tango 官方 `AdbServerNodeJsClient` + `AdbScrcpyClient`；push server、`AdbScrcpyOptions4_0`、scid 由官方库直接处理 |
-| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.0 选项；编码回落、窗口/息屏偏好（息屏**不是**服务端启动选项，靠会话建立后的 `setDisplayPower(false)` 控制消息；曾误映射成 `stayAwake`）、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口 CSS × 画质档位倍率` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`，档位表 `DISPLAY_QUALITY_TIERS`：compat 1.5 / native 2 / sharp 3，会话建立时定死），dpi 同步乘，于是 **1dp = 1 CSS px**、画面比例恒等于窗口比例。镜像只有大屏一种形态，不再压 600dp dpi 下限、也没有平板 1.5x（两者都已删除），见 §P3「真横屏虚拟显示」|
+| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.0 选项；编码回落、窗口/息屏偏好（息屏**不是**服务端启动选项，靠会话建立后的 `setDisplayPower(false)` 控制消息；曾误映射成 `stayAwake`）、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口 CSS × 画质档位倍率` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`，档位表 `DISPLAY_QUALITY_TIERS`：compat 1.5 / native 2 / sharp 3，会话建立时定死），dpi 同步乘，于是 **1dp = 1 CSS px**、画面比例恒等于窗口比例。镜像只有大屏一种形态，不再压 600dp dpi 下限、也没有平板 1.5x（两者都已删除），见 §P3「真横屏虚拟显示」。**这条等式只在同一个会话内成立**：`resizeDisplay` 只带宽高、不带 dpi，而 dpi 在建显示时定死，所以档位取自开会话时那份 config 并整场不变，中途换档不会改变已开的窗口（详见 `shared/scrcpyConfig.js:58-61` 的注释与 [`TODO.md`](TODO.md) §3）|
 | 显示跟随去重 | `src/mirror/displayFollow.js` | 只在尺寸**真的变化**时下发 `resizeDisplay`：初始尺寸已用于创建虚拟显示，重复下发会让服务端白走一次 `virtualDisplay.resize()` → capture reset，设备侧应用随之重新决定方向（表现为画面反复旋转）；**停手 `RESIZE_SETTLE_MS`（250ms）后才发最终尺寸**（debounce，不是 throttle）。见 §3 排查记录 |
 | 会话生命周期 | `electron/mirror/session.js` | 窗口管理、会话记录、断开/退出清理；`src/mirror/session.js` / `direct-session.js` 与官方流的接线；横屏虚拟显示由随包 server 的 `VirtualDisplayConfig` 开关决定，见 §P3「真横屏虚拟显示」 |
 | 输入控制 | `electron/mirror/control.js`、`src/mirror/useMirrorInput.js` | 单指触控、滚轮、键盘（特殊键 + 文本注入）；序列化全在 Tango（`injectTouch/...`），Android 键值/metaState 用官方 `AndroidKeyCode` / `AndroidKeyEventMeta` / `AndroidMotionEventAction` 常量 |
 | 解码渲染 | `src/mirror/App.vue` | WebCodecs 解码；`AutoCanvasRenderer` 优先 WebGL，按显示尺寸出图；HUD 诊断 |
-| 音频转发 | `src/mirror/audio.js` | scrcpy 4.0 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放；音频不可用时自动降级纯画面；会话表见 `docs/archive` 记录 |
-| 会话管理 UI | `src/composables/useScrcpySessions.js`、`src/components/ScrcpySessions.vue` | 与 scrcpy 会话合并展示，支持聚焦/关闭/全部关闭 |
+| 音频转发 | `src/mirror/audio.js` | scrcpy 4.0 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放；音频不可用时自动降级纯画面 |
+| 会话管理 UI | `src/composables/useScrcpySessions.js`、`src/components/ScrcpySessions.vue` | 与 scrcpy 会话合并展示，支持聚焦/关闭/全部关闭（2s 轮询主进程会话记录，见 [`TODO.md`](TODO.md) §5.1） |
 | 无界面调试 | `scripts/mirror-spike.mjs` | `pnpm mirror:spike <serial> [h264\|h265] [raw-out] [秒数]` |
 
 ### 2.1 关键约束
@@ -99,10 +100,6 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 - [x] ~~镜像窗口「重新启动」按钮~~（2026-09-20 当天加了又删）：`force-stop` + 冷启那颗按用户要求**去掉**了 —— 它和「接回」是两件事，并排放着会误点成重新加载。要救挂死的应用目前只能关窗重开。
 - [ ] **剪贴板同步（2026-09-21 做过一版，按用户要求整条撤掉，先不做）**：链路上能用的部分都已验证 —— `SET_CLIPBOARD{sequence,paste}` 客户端写入 + ACK、`client.clipboard` 流（服务端 `clipboardAutosync` 注册的 `addPrimaryClipChangedListener`）。**没验证成功的是"到底哪一头被挡"**：服务端写完立刻同进程回读拿到 `null`，但这一条判据分不清「读被挡」与「shell 的 `setPrimaryClip` 根本没落地」，不足以下"ROM 挡剪贴板"的结论（我当时据此说 ROM，被用户驳回，记录在此免得重犯）。参照 app 的实现供参考：它**不靠 shell 读**，而是拉一个透明无动画的 `ReadClipboardActivity` **借前台焦点**读，再通过广播里塞进去的 IBinder 直接 `transact` 回传给 shell agent（helper 也回赠自己的 Binder 建立双向通道；日志 tag 还叫 `AndDriveReadClipboard`）。真要做，走这条路，别改 appop（`READ_CLIPBOARD` 本来就是 allow）。
 
-- [x] **无缝接回被别处拿走的应用**（2026-09-20 完成）：应用可能挂在别的显示上 —— 被另一个投屏软件搬走，或本来就在手机主屏上用着。这种时候 `startApp` 只把它留在原处（真机量过 `am start --display <id>` 对**已存在的 task 不改显示**），本窗口就只剩启动器画面。现在的做法是**搬任务、不重启**：`adb shell am display move-stack <taskId> <displayId>`（`electron/adb.js` 的 `moveAppTaskToDisplay`），taskId/当前显示从 `getAppTask` 读（`dumpsys window windows` 里应用窗口的 `mDisplayId=.. taskId=..`），本会话的显示 id 从 server stdout 的 `New display: WxH/D (id=N)` 解析（`direct-session.js` 的 `current.displayId`，stdout 是异步到的所以 `ensureAppHere` 会等它并重试 4×400ms）。
-  - 真机验证（抖音被 AndroMeld 的显示 118 占着时开我们的镜像）：pid 30912 → **30912 不变**、taskId 22409 不变，窗口从 118 挪到我们的 147，`mBounds=Rect(0,0-812,1764)` 铺满 —— 进程与页面状态都留着，不是重新启动。
-  - 手动入口：**只在画面被抢走时**出现在画面正中间（`.mirror-reclaim`：应用图标 + 「接回画面」，45% 黑底；图标取 `getCachedApps` 缓存里的 `iconUrl`，取不到退化成首字母方块）。检测靠 `watchAppStolen` 每 2.5s 查一次应用还在不在本会话这块显示上（`document.hidden` 时跳过），状态翻转才回调页面；**只亮入口、不自动搬**，自动搬回去等于两边来回抢。接回结果走底部一次性提示（已接回画面 / 画面已经在这个窗口 / 失败原因）。
-- [x] ~~镜像窗口「重新启动」按钮~~（2026-09-20 当天加了又删）：`force-stop` + 冷启那颗按用户要求**去掉**了 —— 它和「接回」是两件事，并排放着会误点成重新加载。要救挂死的应用目前只能关窗重开。
 - [x] **⌘Q 在镜像窗口上只关这个窗口**（2026-09-21 完成）：以前没装应用菜单，用的是 Electron 默认菜单，Quit 就是 `app.quit()` —— 焦点在镜像窗口按 ⌘Q 会把整个程序带走。现在 `electron/menu.js` 装了自定义菜单，「退出」项自己判断焦点窗口：是镜像会话的窗口（`isMirrorWindow`）就 `win.close()`，否则才真退出；另留了「退出 AndDrive（全部窗口）」= **⌥⌘Q** 作为硬退出。`installAppMenu()` 在 `app.whenReady()` 里、建窗口之前调用（晚于窗口就会被默认菜单抢先）。注意 macOS 语义：镜像窗口关完后若一个窗口都不剩，程序仍留在 Dock（`window-all-closed` 不退出，点图标走 `activate` 重开主窗口）。
 - [x] **镜像窗口绿色按钮 = 全屏**（2026-09-19 完成）：`electron/mirror/session.js` 显式 `fullscreenable: true`。Electron 44 上只要构造时显式传了 `fullscreen`（未勾「全屏启动」即 `false`），窗口就被标成不可全屏，macOS 绿色按钮退化成 zoom（最大化、保留菜单栏）；置顶与全屏启动两种组合下均已验证为可全屏
 - [ ] **设备侧旋转的剩余观感**：虚拟显示带 `VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT`，方向由设备上的应用决定；应用自身在启动过程中换向（例如抖音）仍会让画面转一次。可选缓解：`--no-vd-system-decorations`（不渲染虚拟显示里的 launcher/系统装饰）、或把启动应用放到服务端侧，避免「先显示 launcher 再启动应用」这段换向窗口
@@ -203,8 +200,35 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
    - 快照易被强杀打坏（`goldfish_pipe`/`goldfish_address_space` 加载失败）→ `-no-snapshot-load` 冷启动可救。
    - WiFi 虚拟热点（AndroidWifi）会死（scan 空）→ `adb reboot` 救不回，需重启模拟器进程。
 6. **已知未落地的修复**：deep-link 冷启动开会话时初始虚拟显示 = 512x512/480 —— `startScrcpy` 读
-   `document.documentElement.clientWidth/Height` 拿到布局完成前的占位值。修法已验证（typecheck + 197 测试全过，
+   `document.documentElement.clientWidth/Height` 拿到布局完成前的占位值。修法已验证（`typecheck` + 全量测试绿，
    未入库）：`mirrorInitGet` 返回 `win.getContentBounds()` 作 `initialCss`，`connect.js` 优先用它、DOM 兜底。
+
+排查记录（2026-09-28 画面「卡住」三类根因）——**目前仓库里零防线，问题开放**：
+
+> 这一节此前只存在于会话记录里，**从未进过提交**；当晚按最小行为重做的那版（息屏弹醒）也已被整体回退，
+> 现在全仓 grep `watchSleepBounce` / `wakeDisplay` / `getWakefulness` / `mirrorWake*` **零命中**。
+> 记录在此是为了下次接手时不必从零重做取证；要不要修仍是待决策（见 [`TODO.md`](TODO.md) §9 第 3 批）。
+
+**判据与归因（三类，互不相同，别再混为一谈）**
+
+| 类 | 签名 | 归因 |
+| --- | --- | --- |
+| **A 客户端断链** | `packets` 涨、`framesRendered` 停、`q ≤ 2`、无错误 | 我们这一侧的流/解码停摆（9-23 已复现过签名） |
+| **B1 系统收回** | 息屏瞬间 activity 窗口被搬回 display 0（**进程还活着**），虚拟显示上只剩 `SecondaryDisplayLauncher` | MIUI/HyperOS 行为，**按 app 有别**（抖音收、计算器不收）；`monkey` 落点不固定，所以拉回要"拉起 + `am display move-stack`"两连 |
+| **B2 停合成** | 窗口没被收、应用还在画（`gfxinfo` 涨）、`powerMode=On`、客户端全健康，但虚拟显示合成静止；`cmd power wakeup` 立刻恢复 | 见下面的统一理论 |
+
+**B2 统一理论（能解释此前所有矛盾）**：面板熄灭后虚拟显示合成**默认停掉**，只有 app 侧存在**活跃视频/媒体会话**
+时管线才被继续驱动。推论全部对得上：抖音（播视频）不卡、计算器必卡、9-24 那次"doze 里视频照出"成立、
+当晚抖音那回"假卡"其实是登录弹窗挡着没播视频。
+
+**已经穷尽并判死的救法（别再试）**
+- 「亮 1 秒再息屏」实测不成立（点按无效、哈希锁死）；单次 `cmd power wakeup` 后 **约 10s 必再睡回去**（强制息屏超时，`keepActive` 挡不住）。
+- 隐形防 doze 的七条全灭：`PARTIAL`/每显示 wakelock、`stayon` + 假 AC（被电源键穿透）、`system_power_button_disabled`（被 HyperOS 无视）、`deviceidle disable`（只关 deep）、root 禁 PowerKeeper（照冻）、虚拟显示 power group（本来就 Awake，合成照冻）。
+- **所以 B2 不能预防，只能弹醒或接受。** 测完设备已还原（powerkeeper enable、stayon/battery/设置清零）。
+- 也**不要提持续心跳** —— 已被明确否掉两次。
+
+**顺带一条与裁切问题相关的**：A 类与"卡住"无关的那次误判提醒 —— `input swipe` 不带 `-d <displayId>` 会打到手机主屏，
+镜像画面根本没动（见 §4.0）。
 
 **仓库现状**：本主题历史上产生过的单 app 适配代码（`padMode.js` 配方、`kickDisplaySize`、`relayout.js` 手动重排、
 `frameProbe.js` 探针、`tablet` 模式、按包豁免等）**已全部删除**，镜像链路里不存在任何针对特定包名的分支；
@@ -212,7 +236,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 
 ## 4. 验证与排查
 
-- 图形验证：`pnpm dev` → 连接设备 → 应用右键「启动镜像」→ 勾选实验引擎。
+- 图形验证：`pnpm dev` → 连接设备 → 应用列表右键「启动镜像」（自研引擎是唯一形态，**没有引擎开关**）。
 - 协议验证：`pnpm mirror:spike <serial> h265 /tmp/mirror.h265 15`，用 `ffprobe` 检查裸码流。
 - 镜像窗口 HUD（仅 dev 显示）：`gl`（WebGL 是否可用）、`renderer/type`（webgl/bitmap、hardware/software）、`shown/draw/skipDraw`、`q`（decodeQueueSize）、`skipDec/reset`、`win/vid/chg`（窗口尺寸 / 视频尺寸 / 视频尺寸变化次数）、`audio`（音频包数）、`ap/asq/ad`（音频播放/队列/解码）、`atime/astate`（音频时钟与上下文状态）。
 - 需要镜像窗口 DevTools 时设 `ANDRIVE_MIRROR_DEVTOOLS=1`（默认不开，避免影响性能）。

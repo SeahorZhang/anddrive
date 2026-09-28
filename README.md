@@ -23,7 +23,7 @@ AndDrive 遵循**单设备优先**规则：当前只维护一台活动设备，�
 - Android 11+ 设备，开启无线调试并与 Mac 位于同一网络
 - Android SDK（构建 Helper App 时需要；仅打包已有 APK 时不需要）
 
-Helper 协议见 [`helper-app/README.md`](helper-app/README.md)，镜像引擎的细节与剩余待办见 [`docs/NATIVE_MIRROR.md`](docs/NATIVE_MIRROR.md)。
+Helper 协议见 [`helper-app/README.md`](helper-app/README.md)；文档只剩三份：**架构与约定** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)、**待办总账** [`docs/TODO.md`](docs/TODO.md)、**镜像引擎现状与取证记录** [`docs/NATIVE_MIRROR.md`](docs/NATIVE_MIRROR.md)。
 
 ## 开发
 
@@ -44,7 +44,7 @@ pnpm dev
 - 输入支持触控、滚轮与键盘（`Esc` = 返回键）；**界面上没有返回 / 主屏 / 多任务 / 音量等动作键**（`electron/mirror/control.js` 里已实现，缺调用入口），这些只能靠设备端手势。
 - `Cmd` 组合键保留给系统与应用，所以 `⌘V` 不会把 Mac 剪贴板贴进手机；也不支持中文输入法注入。
 - 无界面协议调试：`pnpm mirror:spike <serial> [h264|h265] [raw-out] [秒数]`，可把裸码流写文件后用 `ffprobe` 检查。
-- 现状与剩余待办见 [`docs/NATIVE_MIRROR.md`](docs/NATIVE_MIRROR.md)。
+- 现状、取证记录与剩余待办见 [`docs/NATIVE_MIRROR.md`](docs/NATIVE_MIRROR.md)；全仓缺陷与优化清单见 [`docs/TODO.md`](docs/TODO.md)。
 
 ## 检查、测试与构建
 

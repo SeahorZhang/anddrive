@@ -2,6 +2,9 @@ allowBuilds:
   electron-winstaller: true
   vue-demi: true
 
+minimumReleaseAgeExclude:
+  - motion-v@2.5.0
+
 overrides:
   'vue': 'rc'
   '@vue/compiler-core': 'rc'
