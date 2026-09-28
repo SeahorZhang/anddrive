@@ -9,11 +9,12 @@
 ## 0. 一分钟结论
 
 1. **§1 已清空**：2026-09-28 一轮修掉 6 条真 bug（B1/B3/B4/O10/D4/D7）、删掉 1 条不要的能力（B2），条目本身已从本文移除。**剩下的全是优化 / 结构 / 功能。**
-2. **画面「卡住」问题目前零防线在跑**：9-28 那版「息屏弹醒一次 + 90s 冷却」已从工作树整体消失（全仓 grep `watchSleepBounce` / `wakeDisplay` / `mirrorWake*` 零命中）。三类根因（A 断链 / B1 系统收回 / B2 停合成）、统一理论与**已判死的七条救法**现已补进 `NATIVE_MIRROR.md` §排查记录 2026-09-28 —— 之前只存在于对话里、从未进过提交。要不要重做是产品决策，先拍板（§9 第 3 批）。
-3. **轮询/定时器 15 处**（§5）。可收口的是三条"UI 想知道设备状态"的轮询，以及建了不拆的 mDNS socket。
-4. **按包名/机型的 app 特殊定制在可执行代码里已经清零**（§4）。别再去找"哪里在特判抖音"。
-5. **裁切症状已结案**（用户 2026-09-28：原因他已找到，不用再查；根因未入库）。§3 只剩结构债；本轮收口的「显示像素只有一个主人」与「`newDisplay` 必填、不许有默认尺寸」两条已作为**刻意设计**写进 `ARCHITECTURE.md` §4，不再出现在待办里。
-6. 最划算的结构刀是拆 `electron/adb.js`（全仓最大文件，8 个职责挤在一起）；透传再导出已经删干净了，剩下的耦合只是 `tests/electron/*` 用 `await import("../../electron/adb.js")` 按主题取符号 —— 拆文件要连这些 import 一起改。
+2. **画面「卡住」三类根因里，「停合成」那一类（9-28 记作 B2，与本文的 bug 编号 B2 无关）已于 2026-09-29 结案**：`electron/mirror/miProjection.js` 照小米互联那条门在会话期间登记 `synergy_mode`，真机三种时序（超时灭屏 / 电源键锁屏 / 锁屏起会话）都不再定住。**客户端断链与 MIUI 收回窗口两类仍未修**，判据与已判死的救法都在 `NATIVE_MIRROR.md` §排查记录 2026-09-28~29。旧的「息屏弹醒」方案已作废，不要重做。
+3. **设置页不再有「屏幕策略」**：`keepActive` / `turnOff` / `normal` 三选连同 `setDisplayPower(false)` 那条直调于 2026-09-29 整体删除 —— 我们对设备屏幕**完全不干预**。老存盘里残留的 `screenMode` 由 `normalizeScrcpyConfig` 静默丢弃，不需要迁移。
+4. **轮询/定时器 15 处**（§5）。可收口的是三条"UI 想知道设备状态"的轮询，以及建了不拆的 mDNS socket。
+5. **按包名/机型的 app 特殊定制在可执行代码里已经清零**（§4）。别再去找"哪里在特判抖音"。
+6. **裁切症状已结案**（用户 2026-09-28：原因他已找到，不用再查；根因未入库）。§3 只剩结构债；本轮收口的「显示像素只有一个主人」与「`newDisplay` 必填、不许有默认尺寸」两条已作为**刻意设计**写进 `ARCHITECTURE.md` §4，不再出现在待办里。
+7. 最划算的结构刀是拆 `electron/adb.js`（全仓最大文件，8 个职责挤在一起）；透传再导出已经删干净了，剩下的耦合只是 `tests/electron/*` 用 `await import("../../electron/adb.js")` 按主题取符号 —— 拆文件要连这些 import 一起改。
 
 ---
 
@@ -189,7 +190,7 @@
 ## 8. 已结案 / 明确不做（避免反复讨论）
 
 - **抖音直播「上下裁」= 镜像侧无解**：裁切发生在抖音内部（播放器 cover 稳态），与显示几何、虚拟性、ISR 无关。必要且充分变量是 `ro.build.characteristics` 含 tablet；改 prop 必须配 `pm clear` 重注册。品牌分发已逆向（小米/Redmi 看 characteristics+isMiui、vivo 看 `FtDeviceInfo`、OPPO 看 feature、其他品牌看 characteristics &&（`screenLayout≥large` 或 xdpi 对角线 ≥7.0″），结果缓存 Keva）；折叠屏走 `FoldIdentifyUtils` **完全不读 characteristics**。非 root 判死（`ro.*`/`persist.sys.*` 是 `system_prop`，adb shell uid 2000 写不动）。唯一出路是换信源（平板 AVD / 真平板 / 折叠机，均已实测同一条 AndDrive 链路版式天然正常）。取证链全文见 `NATIVE_MIRROR.md` §2026-09-27~28。
-- **系统动作键那套能力已整体删除（2026-09-28，B2/D2/F4 结案）**：返回 / Home / 多任务 / 音量 / 电源、旋转、通知栏、以及 `kind:'action'` 消息通道 —— 按决策**不要**，代码已清空，**别再提"接线"**。删除范围：`electron/mirror/control.js` 的 `TAP_ACTIONS` + `applyAction` + `case 'action'`（连带 `KEY_CODES` 再导出）、`shared/keys.js` 里只为它服务的五个键值别名（home / appSwitch / power / volumeUp / volumeDown）。**不影响「启动后息屏」**：那条走 `src/mirror/direct-session.js` 里 `turnScreenOff` 那一支直调 Tango `setDisplayPower(false)`，本来就不经过这层（原 B2 描述里把它算进动作键是错的）。回归测试已改成断言 `kind:'action'` 现在抛「未知控制消息」。若将来要做鼠标手势（NATIVE_MIRROR §P1 那条仍然开放），直接给 `controller.injectKeyCode` 传官方键值，不要恢复这层抽象。
+- **系统动作键那套能力已整体删除（2026-09-28，B2/D2/F4 结案）**：返回 / Home / 多任务 / 音量 / 电源、旋转、通知栏、以及 `kind:'action'` 消息通道 —— 按决策**不要**，代码已清空，**别再提"接线"**。删除范围：`electron/mirror/control.js` 的 `TAP_ACTIONS` + `applyAction` + `case 'action'`（连带 `KEY_CODES` 再导出）、`shared/keys.js` 里只为它服务的五个键值别名（home / appSwitch / power / volumeUp / volumeDown）。（当时还在的「启动后息屏」走的是另一支直调 Tango `setDisplayPower(false)`，2026-09-29 随屏幕策略一起删除。）回归测试已改成断言 `kind:'action'` 现在抛「未知控制消息」。若将来要做鼠标手势（NATIVE_MIRROR §P1 那条仍然开放），直接给 `controller.injectKeyCode` 传官方键值，不要恢复这层抽象。
 - **黑边的变量不是比例，是 Android 的 600dp 大屏门槛**（`smallestWidth ≥ 600dp` 时系统忽略 app 方向锁并 letterbox）。比例吸附、600dp dpi 下限、`tablet` 模式、`MAX_DISPLAY_PIXELS` 都已试过并删除。
 - **模糊遮罩挡不住重排闪烁**（透明度低于 ~95% 就看得见），现方案是不透明遮罩 + 等关键帧。
 - **`force-stop` 不是"把应用接回来"**：会冷启。正确做法 `am display move-stack`（真机验证 pid 不变）。「重新启动」按钮当天加了又删 —— 和"接回"并排会误点。
@@ -210,7 +211,7 @@
 | 批次 | 内容 | 为什么这么排 |
 | --- | --- | --- |
 | **第 2 批：零风险清理** | 要动结构/行为的四条：api 透传壳、`src/mirror/session.js` 合并、`validators.js` 收口、空 catch | 每条独立可验，改完跑 `pnpm lint && typecheck && test` 就是回归 |
-| **第 3 批：卡住问题拍板** | §0.2 那条：要不要重做「息屏弹醒」；不做就把 A/B1/B2 三类根因归档为已知限制 | 这是你点名的"最严重问题"，目前**零防线在跑**，别让它悬着 |
+| **第 3 批：卡住问题剩下的两类** | 「停合成」那类已结案（9-29，见 §0.2）；剩**客户端断链**与**MIUI 息屏收回窗口**两类待拍板：修，还是归档为已知限制 | 这是你点名的"最严重问题"的后两格；收回那类目前只有手动「接回画面」入口 |
 | **第 4 批：链路收口** | §5.1 三条状态轮询合成一条事件推送、mDNS browser 补 stop（D9）、D8 改事件驱动 | 第 4 批开始要动 UI/链路，需要小设计 |
 | **第 5 批：结构与几何** | O1 拆 `adb.js`、§3 遮罩收口与 letterbox 换成 CSS、§5.3 会话归属合并、`src/mirror/session.js` 并进 `direct-session.js` | 拆分与几何都要一次做透 |
 | **并行可插队** | F1 截图、F7 二维码页、O12 一条 CI、O9 对话框换 reka-ui | 便宜且用户可感 |

@@ -29,7 +29,6 @@
  * @property {number} maxFps 帧率上限
  * @property {string} videoCodec h264 | h265 | av1
  * @property {boolean} audio 是否转发音频
- * @property {string} screenMode keepActive | turnOff | normal
  * @property {boolean} alwaysOnTop 窗口置顶
  * @property {boolean} fullscreen 全屏启动
  */

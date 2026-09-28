@@ -105,7 +105,7 @@ function adbExec(...args) {
  * 超时也算「有结果」：`timedOut` 为真、`stderr` 是给用户看的中文说明。
  * @param {...(string | AdbCallOptions)} args
  */
-function adbExecSafe(...args) {
+export function adbExecSafe(...args) {
   const [{ timeoutMs = ADB_TIMEOUT_MS }, command] = splitCallOptions(args);
   return new Promise((resolve) => {
     execFile(adbPath(), command, { timeout: timeoutMs }, (err, stdout, stderr) => {
@@ -1415,6 +1415,25 @@ export async function getPhysicalScreenSize(serial) {
   const match = /Physical size:\s*(\d+)x(\d+)/.exec(`${stdout}\n${stderr}`);
   if (!match) return null;
   return { width: Number(match[1]), height: Number(match[2]) };
+}
+
+/** 是不是 MIUI/HyperOS（`ro.miui.ui.version.name` 有值）。 */
+export async function isMiuiDevice(serial) {
+  assertSerial(serial);
+  await ensureServer();
+  const { code, stdout } = await adbExecSafe("-s", serial, "shell", "getprop", "ro.miui.ui.version.name");
+  return code === 0 && stdout.trim() !== "";
+}
+
+/**
+ * 写一个 Settings.Secure 键。adb shell 自带 WRITE_SECURE_SETTINGS，非 root 也能写；
+ * 失败不抛（调用方只把它当作一次尽力而为的设备侧设置）。
+ * @param {string} serial @param {string} key @param {string | number} value
+ */
+export async function setSecureSetting(serial, key, value) {
+  assertSerial(serial);
+  await ensureServer();
+  return adbExecSafe("-s", serial, "shell", "settings", "put", "secure", key, String(value));
 }
 
 /** 强制停止应用。 */

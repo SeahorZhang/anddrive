@@ -148,9 +148,6 @@ export async function startSession(
   void ensureAppHere();
   // 之后应用仍可能被别的投屏软件搬走：只负责把入口亮出来，要不要接回由用户点。
   current.stopStolenWatch = watchAppStolen(onStolen);
-  if (info.prefs?.turnScreenOff) {
-    await controller?.setDisplayPower(false).catch(() => {});
-  }
 
   // 虚拟显示跟随窗口（scrcpy `--flex-display` / -x 语义）：官方 resizeDisplay
   // 控制消息驱动，窗口一变化虚拟显示即按窗口尺寸重排（排版随之变化）。

@@ -24,10 +24,11 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 | 能力 | 位置 | 说明 |
 | --- | --- | --- |
 | 协议与连接 | `src/mirror/connect.js` | Tango 官方 `AdbServerNodeJsClient` + `AdbScrcpyClient`；push server、`AdbScrcpyOptions4_0`、scid 由官方库直接处理 |
-| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.0 选项；编码回落、窗口/息屏偏好（息屏**不是**服务端启动选项，靠会话建立后的 `setDisplayPower(false)` 控制消息；曾误映射成 `stayAwake`）、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口 CSS × 画质档位倍率` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`，档位表 `DISPLAY_QUALITY_TIERS`：compat 1.5 / native 2 / sharp 3，会话建立时定死），dpi 同步乘，于是 **1dp = 1 CSS px**、画面比例恒等于窗口比例。镜像只有大屏一种形态，不再压 600dp dpi 下限、也没有平板 1.5x（两者都已删除），见 §P3「真横屏虚拟显示」。**这条等式只在同一个会话内成立**：`resizeDisplay` 只带宽高、不带 dpi，而 dpi 在建显示时定死，所以档位取自开会话时那份 config 并整场不变，中途换档不会改变已开的窗口（详见 `shared/scrcpyConfig.js:56-59` 的注释与 [`TODO.md`](TODO.md) §3）|
+| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.0 选项；编码回落、不干预设备屏幕（原「屏幕策略」三选已于 2026-09-29 删除：`keepActive` 不再下发，`setDisplayPower(false)` 那条控制消息也删了）、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口 CSS × 画质档位倍率` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`，档位表 `DISPLAY_QUALITY_TIERS`：compat 1.5 / native 2 / sharp 3，会话建立时定死），dpi 同步乘，于是 **1dp = 1 CSS px**、画面比例恒等于窗口比例。镜像只有大屏一种形态，不再压 600dp dpi 下限、也没有平板 1.5x（两者都已删除），见 §P3「真横屏虚拟显示」。**这条等式只在同一个会话内成立**：`resizeDisplay` 只带宽高、不带 dpi，而 dpi 在建显示时定死，所以档位取自开会话时那份 config 并整场不变，中途换档不会改变已开的窗口（详见 `shared/scrcpyConfig.js:56-59` 的注释与 [`TODO.md`](TODO.md) §3）|
 | 显示跟随去重 | `src/mirror/displayFollow.js` | 只在尺寸**真的变化**时下发 `resizeDisplay`：初始尺寸已用于创建虚拟显示，重复下发会让服务端白走一次 `virtualDisplay.resize()` → capture reset，设备侧应用随之重新决定方向（表现为画面反复旋转）；**停手 `RESIZE_SETTLE_MS`（250ms）后才发最终尺寸**（debounce，不是 throttle）。见 §3 排查记录 |
+| 息屏协同保活 | `electron/mirror/miProjection.js` | HyperOS 在息屏时会停止合成那块虚拟显示（画面定住）。做法照小米互联：开会话往 `Settings.Secure` 写 `synergy_mode=1`（等价于它的 `beginSynergy()`），关会话写 0。**每个 MIUI/HyperOS 会话都生效**，且置位必须赶在息屏之前落地。机制与取证见 §3 排查记录 2026-09-29 |
 | 会话生命周期 | `electron/mirror/session.js` | 窗口管理、会话记录、断开/退出清理；`src/mirror/session.js` / `direct-session.js` 与官方流的接线；横屏虚拟显示由随包 server 的 `VirtualDisplayConfig` 开关决定，见 §P3「真横屏虚拟显示」 |
-| 输入控制 | `electron/mirror/control.js`、`src/mirror/useMirrorInput.js` | 单指触控、滚轮、键盘（特殊键 + 文本注入）；序列化全在 Tango（`injectTouch/...`），Android 键值/metaState 用官方 `AndroidKeyCode` / `AndroidKeyEventMeta` / `AndroidMotionEventAction` 常量。**系统动作键、旋转、通知栏、息屏亮屏这类 `kind:'action'` 消息已于 2026-09-28 按产品决策整体删除**（息屏另走会话建立后的 `setDisplayPower` 直调，不经过这层）|
+| 输入控制 | `electron/mirror/control.js`、`src/mirror/useMirrorInput.js` | 单指触控、滚轮、键盘（特殊键 + 文本注入）；序列化全在 Tango（`injectTouch/...`），Android 键值/metaState 用官方 `AndroidKeyCode` / `AndroidKeyEventMeta` / `AndroidMotionEventAction` 常量。**系统动作键、旋转、通知栏、息屏亮屏这类 `kind:'action'` 消息已于 2026-09-28 按产品决策整体删除**（设备屏幕现在完全不干预，`setDisplayPower` 那条直调也已删除）|
 | 解码渲染 | `src/mirror/App.vue` | WebCodecs 解码；`AutoCanvasRenderer` 优先 WebGL，按显示尺寸出图；HUD 诊断 |
 | 音频转发 | `src/mirror/audio.js` | scrcpy 4.0 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放；音频不可用时自动降级纯画面 |
 | 会话管理 UI | `src/composables/useScrcpySessions.js`、`src/components/ScrcpySessions.vue` | 与 scrcpy 会话合并展示，支持聚焦/关闭/全部关闭（2s 轮询主进程会话记录，见 [`TODO.md`](TODO.md) §5.1） |
@@ -205,29 +206,49 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
    `src/mirror/direct-session.js` 的 `displayFor(css)` 一处（`connect.js` 改为接收算好的 `display`），建显示用的
    CSS 由 `mirrorInitGet` 返回的 `initialCss`（主进程 `win.getContentBounds()`）给出，读不到才回落 DOM。
 
-排查记录（2026-09-28 画面「卡住」三类根因）——**目前仓库里零防线，问题开放**：
-
-> 这一节此前只存在于会话记录里，**从未进过提交**；当晚按最小行为重做的那版（息屏弹醒）也已被整体回退，
-> 现在全仓 grep `watchSleepBounce` / `wakeDisplay` / `getWakefulness` / `mirrorWake*` **零命中**。
-> 记录在此是为了下次接手时不必从零重做取证；要不要修仍是待决策（见 [`TODO.md`](TODO.md) §9 第 3 批）。
+排查记录（2026-09-28 画面「卡住」三类根因 → 2026-09-29 **B2 已结案**）：
 
 **判据与归因（三类，互不相同，别再混为一谈）**
 
-| 类 | 签名 | 归因 |
+| 类 | 签名 | 现状 |
 | --- | --- | --- |
-| **A 客户端断链** | `packets` 涨、`framesRendered` 停、`q ≤ 2`、无错误 | 我们这一侧的流/解码停摆（9-23 已复现过签名） |
-| **B1 系统收回** | 息屏瞬间 activity 窗口被搬回 display 0（**进程还活着**），虚拟显示上只剩 `SecondaryDisplayLauncher` | MIUI/HyperOS 行为，**按 app 有别**（抖音收、计算器不收）；`monkey` 落点不固定，所以拉回要"拉起 + `am display move-stack`"两连 |
-| **B2 停合成** | 窗口没被收、应用还在画（`gfxinfo` 涨）、`powerMode=On`、客户端全健康，但虚拟显示合成静止；`cmd power wakeup` 立刻恢复 | 见下面的统一理论 |
+| **A 客户端断链** | `packets` 涨、`framesRendered` 停、`q ≤ 2`、无错误 | **未修**（我们这一侧的流/解码停摆，9-23 复现过签名） |
+| **B1 系统收回** | 息屏瞬间 activity 窗口被搬回 display 0（**进程还活着**），虚拟显示上只剩 `SecondaryDisplayLauncher` | **未修**，只有手动「接回画面」入口（见 §P3）。MIUI/HyperOS 行为，**按 app 有别**（抖音收、计算器不收）；`monkey` 落点不固定，所以拉回要"拉起 + `am display move-stack`"两连 |
+| **B2 停合成** | 窗口没被收、应用还在画（`gfxinfo` 涨）、客户端全健康，但虚拟显示合成静止；`cmd power wakeup` 立刻恢复 | **已修（9-29）**，机制与做法见下 |
 
-**B2 统一理论（能解释此前所有矛盾）**：面板熄灭后虚拟显示合成**默认停掉**，只有 app 侧存在**活跃视频/媒体会话**
-时管线才被继续驱动。推论全部对得上：抖音（播视频）不卡、计算器必卡、9-24 那次"doze 里视频照出"成立、
-当晚抖音那回"假卡"其实是登录弹窗挡着没播视频。
+**B2 的真机制（9-29 拆 `/system_ext/framework/miui-services.jar` + `/product/priv-app/MirrorOS4.apk`）**：
+普通息屏时 PowerManagerService 给 SurfaceFlinger 发 `GOING_TO_SLEEP`，SF 就此不再驱动那块非交互显示 ——
+于是画面静止，而客户端一切计数都健康。小米互联服务不受影响，是因为它在**会话建立时**调
+`MirrorManager.beginSynergy()`，而那个方法只是往 `Settings.Secure` 写 `synergy_mode=1`
+（HyperOS 的 `PowerManagerServiceImpl` 给它注册了 ContentObserver）。设备到 bedtime 时看见投屏登记为真，
+就不走 sleep/doze，改走 `hangUpNoUpdateLocked(true)`：`mWakefulness` 进 `Hangup`（面板灭、keyguard 在，
+但那一组永不进 Asleep/Doze），并给 SF 发 `DISPLAY_START_GOING_TO_HANGUP` → 合成继续。
 
-**已经穷尽并判死的救法（别再试）**
+> 所以这扇门是「**电源策略认不认这次会话是投屏**」，与 wakelock 无关 —— 这正是当年那七条 wakelock / doze
+> 白名单救法全灭的原因，别再往那一层试。旧的「统一理论」（面板熄灭后只有活跃视频会话才继续驱动）**作废**：
+> 抖音当时不卡与它是不是视频无关。
+
+**我们的做法**（`electron/mirror/miProjection.js`）：每个 MIUI/HyperOS 会话都生效（不管屏幕是谁关的），
+开会话写 `synergy_mode=1`、关会话写 0（关窗口、断开设备、⌘Q 三条路都走同一个还原）。
+置位要赶在设备睡下去之前 —— 顺序是这套机制的全部要点，睡着后再补没人接。
+设备已经睡下去了再补写是没人接的。真机验证（9-29）：超时灭屏、按电源键锁屏、锁屏状态下才起会话，
+**三种时序都不卡**。
+
+**一条要澄清的事实（9-29 顺手读到，别重复造）**：随包那份自编 server 在 Android 13+ 建虚拟显示时**已经**带上
+`TRUSTED | OWN_DISPLAY_GROUP | ALWAYS_UNLOCKED | TOUCH_FEEDBACK_DISABLED`（`NewDisplayCapture.java` 里
+`Build.VERSION.SDK_INT >= API_33` 那一段，14+ 再加 `OWN_FOCUS`），也就是「不依赖 MIUI 电源策略」的那半
+**早就在我们的显示上**。因此：**「不卡了」到底该记给 `synergy_mode` 还是这块本来就独立的显示，没做过单变量对照，
+不要当成已证**。要钉死就把 `vdSystemDecorations`/那组 flags 与置键分别关掉再测一轮。
+
+**头部状态栏（9-29）**：`buildMirrorOptions` 里固定 `vdSystemDecorations = false`（scrcpy
+`--no-vd-system-decorations`），镜像里不显示手机那条状态栏，整块显示留给应用。要知道的副作用：那块显示上
+没有状态栏、也没有 launcher 兜底 —— 探针里应用没落上那块显示时拍出来是**纯黑**（不是坏了）。
+
+**已经穷尽并判死的救法（结论仍有效，只是当时找错了层）**
 - 「亮 1 秒再息屏」实测不成立（点按无效、哈希锁死）；单次 `cmd power wakeup` 后 **约 10s 必再睡回去**（强制息屏超时，`keepActive` 挡不住）。
 - 隐形防 doze 的七条全灭：`PARTIAL`/每显示 wakelock、`stayon` + 假 AC（被电源键穿透）、`system_power_button_disabled`（被 HyperOS 无视）、`deviceidle disable`（只关 deep）、root 禁 PowerKeeper（照冻）、虚拟显示 power group（本来就 Awake，合成照冻）。
-- **所以 B2 不能预防，只能弹醒或接受。** 测完设备已还原（powerkeeper enable、stayon/battery/设置清零）。
-- 也**不要提持续心跳** —— 已被明确否掉两次。
+- **「息屏弹醒」那套（含 90s 冷却的最小版）因此不再需要，不要重做**；持续心跳同样已被否掉两次。
+- 取证手法（两条假判据各踩过一次）：`cmd window user-rotation -d <id>` 每次都会**重建虚拟显示**（SF id 变）= 自己把冻结治好；`cmd uimode night` 对计算器不是运动源。可靠的判据 = `am start -W --display <id> -n <另一个应用>` 切应用，并且**每张截图前重取 SF id、断言它没变**。
 
 **顺带一条与裁切问题相关的**：A 类与"卡住"无关的那次误判提醒 —— `input swipe` 不带 `-d <displayId>` 会打到手机主屏，
 镜像画面根本没动（见 §4.0）。
@@ -286,6 +307,7 @@ electron/mirror/
   options.js    ScrcpyConfig → scrcpy 4.0 选项、编码回落、运行时偏好（纯函数，双端共用）
   control.js    DOM 语义事件 → Tango writer 入参映射（序列化在 Tango）
   session.js    窗口/记录生命周期、断开清理、异常退出通知（不做帧转发）
+  miProjection.js  HyperOS「投屏登记」：会话期间置 synergy_mode，让息屏后 SF 继续合成（纯逻辑 + 单测）
 src/mirror/
   main.js       镜像页入口
   connect.js    Tango 官方 库（adb-server-node-tcp / adb-scrcpy）的唯一接入口；module 约束见上

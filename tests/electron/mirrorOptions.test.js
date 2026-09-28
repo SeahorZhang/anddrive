@@ -46,7 +46,15 @@ describe('buildMirrorOptions', () => {
       maxFps: 60,
       newDisplay: '1080x2400/320',
       flexDisplay: true,
+      // 镜像里不显示手机的状态栏（整块显示留给应用）。
+      vdSystemDecorations: false,
     })
+  })
+
+  it('任何配置组合都不把系统装饰打开', () => {
+    for (const config of [undefined, { audio: true }, { maxFps: 120 }, { videoCodec: 'av1' }]) {
+      expect(optionsFor(config).vdSystemDecorations).toBe(false)
+    }
   })
 
   it('打开音频转发时才有音频参数', () => {
@@ -81,19 +89,12 @@ describe('buildMirrorOptions', () => {
     expect(optionsFor({ videoCodec: 'h265' }, { videoCodec: 'h264' }).videoCodec).toBe('h264')
   })
 
-  it('屏幕策略只有「保持亮屏」进服务端选项，「启动后息屏」不进', () => {
-    expect(optionsFor({ screenMode: 'keepActive' }).keepActive).toBe(true)
-
-    // turnOff 曾被错映射成 stayAwake —— 那是「保持亮屏」的同义词，语义正好相反。
-    // 息屏靠会话建立后的 setDisplayPower(false) 控制消息（resolveRuntimePrefs.turnScreenOff）。
-    const turnOff = optionsFor({ screenMode: 'turnOff' })
-    expect(turnOff.keepActive).toBeUndefined()
-    expect(turnOff.stayAwake).toBeUndefined()
-    expect(resolveRuntimePrefs({ screenMode: 'turnOff' }).turnScreenOff).toBe(true)
-
-    const normal = optionsFor({ screenMode: 'normal' })
-    expect(normal.keepActive).toBeUndefined()
-    expect(normal.stayAwake).toBeUndefined()
+  it('不再对设备屏幕做任何干预', () => {
+    // 「保持亮屏 / 启动后息屏」这一整类偏好于 2026-09-29 删除：keepActive / stayAwake
+    // 都不能出现（turnOff 曾被错映射成 stayAwake，语义正好相反）。
+    const options = optionsFor({ screenMode: 'keepActive' })
+    expect(options.keepActive).toBeUndefined()
+    expect(options.stayAwake).toBeUndefined()
   })
 })
 
@@ -124,17 +125,12 @@ describe('resolveNativeCodec', () => {
 })
 
 describe('resolveRuntimePrefs', () => {
-  it('reads window flags and the screen-off request', () => {
-    expect(resolveRuntimePrefs({ alwaysOnTop: true, fullscreen: true, screenMode: 'turnOff' })).toEqual({
+  it('运行时偏好只剩窗口行为', () => {
+    expect(resolveRuntimePrefs({ alwaysOnTop: true, fullscreen: true })).toEqual({
       alwaysOnTop: true,
       fullscreen: true,
-      turnScreenOff: true,
     })
-    expect(resolveRuntimePrefs(undefined)).toEqual({
-      alwaysOnTop: false,
-      fullscreen: false,
-      turnScreenOff: false,
-    })
+    expect(resolveRuntimePrefs(undefined)).toEqual({ alwaysOnTop: false, fullscreen: false })
   })
 })
 

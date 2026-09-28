@@ -62,12 +62,15 @@ vi.mock('electron', () => ({
   app: env.app,
 }))
 
-// adb 那一层不碰真设备：会话建立要的服务端路径与设备分辨率都给固定值。
+// adb 那一层不碰真设备：会话建立要的服务端路径与设备分辨率都给固定值；
+// 机型判定固定回「非 MIUI」，协同投屏那条分支由 miProjection 自己的单测覆盖。
 vi.mock('../../electron/adb.js', () => ({
   ensureServer: async () => {},
   scrcpyServerPath: () => '/tmp/scrcpy-server',
   getPhysicalScreenSize: async () => ({ width: 1200, height: 2608 }),
   onDeviceTeardown: () => {},
+  isMiuiDevice: async () => false,
+  setSecureSetting: async () => {},
 }))
 
 // 镜像页的 preload 路径按 APP_ROOT 拼，测试里只要求它是个字符串。

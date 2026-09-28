@@ -32,11 +32,6 @@ const QUALITY_OPTIONS = Object.entries(DISPLAY_QUALITY_TIERS).map(([value, scale
   const meta = QUALITY_META[value] ?? { name: value, note: '' }
   return { value, label: `${meta.name}（${scale}x${meta.note ? `，${meta.note}` : ''}）` }
 })
-const SCREEN_OPTIONS = [
-  { value: 'keepActive', label: '保持亮屏' },
-  { value: 'turnOff', label: '启动后息屏' },
-  { value: 'normal', label: '不干预' },
-]
 
 function update(key, value) {
   emit('change', key, value)
@@ -94,19 +89,6 @@ function update(key, value) {
         @change="update('quality', $event.target.value)">
         <option v-for="tier in QUALITY_OPTIONS" :key="tier.value" :value="tier.value">
           {{ tier.label }}
-        </option>
-      </select>
-    </div>
-
-    <div class="flex items-center gap-3 px-4 py-2.5">
-      <div class="min-w-0 flex-1">
-        <div class="text-[13px] text-black/70">屏幕策略</div>
-        <div class="mt-0.5 text-[11px] text-black/40">控制启动后手机屏幕的亮灭状态</div>
-      </div>
-      <select :class="SELECT_CLASS" :value="props.config.screenMode" :disabled="disabled"
-        @change="update('screenMode', $event.target.value)">
-        <option v-for="mode in SCREEN_OPTIONS" :key="mode.value" :value="mode.value">
-          {{ mode.label }}
         </option>
       </select>
     </div>

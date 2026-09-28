@@ -1,9 +1,17 @@
 import { BrowserWindow, ipcMain, screen } from "electron";
 import path from "node:path";
 import { CHANNELS } from "../ipcContract.js";
-import { ensureServer, getPhysicalScreenSize, onDeviceTeardown, scrcpyServerPath } from "../adb.js";
+import {
+  ensureServer,
+  getPhysicalScreenSize,
+  isMiuiDevice,
+  onDeviceTeardown,
+  scrcpyServerPath,
+  setSecureSetting,
+} from "../adb.js";
 import { sanitizeIcon } from "../iconImage.js";
 import { findAppSession } from "./appSession.js";
+import { startMiProjection } from "./miProjection.js";
 import { mirrorWindowBounds, resolveRuntimePrefs } from "./options.js";
 
 // ---------------------------------------------------------------------------
@@ -32,6 +40,7 @@ let sessionSeq = 0;
  * @property {boolean} hasAudio
  * @property {import("electron").BrowserWindow | null} win
  * @property {Record<string, unknown> | null} pendingInit
+ * @property {(() => Promise<void>) | null} miProjectionRestore
  */
 
 function loadMirrorPage(win) {
@@ -153,6 +162,7 @@ export async function startMirrorSession(request) {
     hasAudio: false,
     win: null,
     pendingInit: null,
+    miProjectionRestore: null,
   };
   sessions.set(session.id, session);
 
@@ -164,8 +174,6 @@ export async function startMirrorSession(request) {
   }
 
   // 页面主动 invoke 拉取启动参数（避免 did-finish-load 时序竞态）。
-  // `prefs` 也要带上：`turnScreenOff` 得由镜像页在会话建立后用控制消息
-  // `setDisplayPower(false)` 下发（scrcpy 没有「启动即息屏」这个服务端选项）。
   // `initialCss` = 窗口内容区尺寸：渲染层拿它算第一块虚拟显示。不能让它读 DOM ——
   // 深链冷启动时页面还没排版完，`clientWidth` 会读到 Electron 默认的 512x512，
   // 于是开出一块和窗口完全不符的显示（2026-09-28 实测）。
@@ -185,6 +193,18 @@ export async function startMirrorSession(request) {
     iconUrl: sanitizeIcon(request?.iconUrl) ?? undefined,
   };
 
+  // HyperOS 在息屏时会停止合成我们的采集显示（画面定住，机制见 `miProjection.js`）。
+  // 我们不再主动动屏幕，但手机自己睡、用户按电源键都会撞上它，所以每个 MIUI 会话都登记
+  // 「投屏中」，关会话时还原。
+  void isMiuiDevice(serial)
+    .then(async (miui) => {
+      if (!miui) return;
+      const restore = startMiProjection({ serial, put: setSecureSetting });
+      if (sessions.has(session.id)) session.miProjectionRestore = restore;
+      else await restore();
+    })
+    .catch(() => {});
+
   return { id: session.id, serial, packageName, label, startedAt: session.startedAt };
 }
 
@@ -193,6 +213,9 @@ export async function stopMirrorSession(id) {
   const session = sessions.get(id);
   if (!session) return false;
   sessions.delete(id);
+  const restore = session.miProjectionRestore;
+  session.miProjectionRestore = null;
+  if (restore) await restore().catch(() => {});
   if (session.win && !session.win.isDestroyed()) {
     // 渲染层在 beforeunload 里停掉 scrcpy 会话；窗口关闭兜底。
     session.win.close();

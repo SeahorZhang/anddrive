@@ -82,13 +82,9 @@ export function buildMirrorOptions(input, overrides = {}) {
   options.newDisplay = overrides.newDisplay;
   options.flexDisplay = true;
 
-  // 「保持亮屏」是唯一能落到服务端选项的屏幕策略。
-  // 「启动后息屏」**不能**在这里表达：scrcpy 4.0 没有「启动即息屏」的服务端选项
-  // （Tango 侧只有 `powerOffOnClose` = 关闭会话时才息屏），早先这里错映射成
-  // `stayAwake`（与 `keepActive` 同义，等于「保持亮屏」，语义正好相反）。
-  // 真正的做法是会话建立后由镜像页发一条 `setDisplayPower(false)` 控制消息，
-  // 见 `resolveRuntimePrefs` 的 `turnScreenOff` 与 `src/mirror/direct-session.js`。
-  if (config.screenMode === "keepActive") options.keepActive = true;
+  // 虚拟显示不渲染系统装饰（scrcpy 的 `--no-vd-system-decorations`）：镜像里不要头部那条状态栏，
+  // 整块显示都留给应用。代价：那块显示上没有状态栏也没有 launcher 兜底，导航只能靠注入的手势/键值。
+  options.vdSystemDecorations = false;
 
   return options;
 }
@@ -113,14 +109,13 @@ export function resolveNativeCodec(input) {
 /**
  * 归一化后与窗口/运行时相关的偏好（不进 scrcpy 命令行，由 Electron 与会话处理）。
  * @param {unknown} input
- * @returns {{ alwaysOnTop: boolean, fullscreen: boolean, turnScreenOff: boolean }}
+ * @returns {{ alwaysOnTop: boolean, fullscreen: boolean }}
  */
 export function resolveRuntimePrefs(input) {
   const config = normalizeScrcpyConfig(input);
   return {
     alwaysOnTop: config.alwaysOnTop,
     fullscreen: config.fullscreen,
-    turnScreenOff: config.screenMode === "turnOff",
   };
 }
 

@@ -8,8 +8,8 @@
 //
 // 系统动作键（返回/Home/多任务/音量/电源）、旋转、通知栏、息屏亮屏这一整类
 // `kind:'action'` 消息于 2026-09-28 按产品决策删除，**不要再加回来**：镜像窗口
-// 不提供这类入口。唯一还需要的息屏能力是会话建立后直调
-// `controller.setDisplayPower(false)`（见 `src/mirror/direct-session.js`）。
+// 不提供这类入口。息屏亮屏也不再有任何干预（原「启动后息屏」偏好连同
+// `controller.setDisplayPower(false)` 于 2026-09-29 删除）。
 // ---------------------------------------------------------------------------
 
 import { KEY_META } from "../../shared/keys.js";

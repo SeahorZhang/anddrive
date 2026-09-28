@@ -43,7 +43,6 @@ describe('normalizeScrcpyConfig', () => {
         maxFps: 90,
         videoCodec: 'av1',
         audio: true,
-        screenMode: 'turnOff',
         alwaysOnTop: true,
         fullscreen: true,
         quality: 'native',
@@ -55,7 +54,6 @@ describe('normalizeScrcpyConfig', () => {
       maxFps: 90,
       videoCodec: 'av1',
       audio: true,
-      screenMode: 'turnOff',
       alwaysOnTop: true,
       fullscreen: true,
       quality: 'native',
@@ -72,13 +70,14 @@ describe('normalizeScrcpyConfig', () => {
     const config = normalizeScrcpyConfig({
       bitRate: '24M; rm',
       videoCodec: 'mpeg2',
-      screenMode: 'explode',
       audio: 'yes',
+      screenMode: 'turnOff',
     })
     expect(config.bitRate).toBe(DEFAULT_SCRCPY_CONFIG.bitRate)
     expect(config.videoCodec).toBe(DEFAULT_SCRCPY_CONFIG.videoCodec)
-    expect(config.screenMode).toBe(DEFAULT_SCRCPY_CONFIG.screenMode)
     expect(config.audio).toBe(false)
+    // 已废弃的屏幕策略：老存盘里残留的 screenMode 静默丢弃，下次保存就干净了。
+    expect('screenMode' in config).toBe(false)
   })
 
   it('maxFps 只接受整数并夹在 1..240', () => {

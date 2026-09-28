@@ -6,8 +6,6 @@ export const DEFAULT_SCRCPY_CONFIG = Object.freeze({
   maxFps: 60,
   videoCodec: "h265",
   audio: false,
-  /** 屏幕策略：keepActive 保持亮屏 · turnOff 息屏 · normal 不干预。 */
-  screenMode: "keepActive",
   alwaysOnTop: false,
   fullscreen: false,
   /** 画质档位：见 DISPLAY_QUALITY_TIERS。默认 sharp = 与老版本一致（倍率 3）。 */
@@ -74,7 +72,6 @@ export function computeDisplayMetrics(cssWidth, cssHeight, quality) {
 }
 
 const VIDEO_CODECS = new Set(["h264", "h265", "av1"]);
-const SCREEN_MODES = new Set(["keepActive", "turnOff", "normal"]);
 const QUALITIES = new Set(Object.keys(DISPLAY_QUALITY_TIERS));
 const BIT_RATE_RE = /^\d{1,4}[KMG]?$/;
 
@@ -100,9 +97,6 @@ export function normalizeScrcpyConfig(input) {
       ? raw.videoCodec
       : DEFAULT_SCRCPY_CONFIG.videoCodec,
     audio: raw.audio === true,
-    screenMode: SCREEN_MODES.has(raw.screenMode)
-      ? raw.screenMode
-      : DEFAULT_SCRCPY_CONFIG.screenMode,
     quality: QUALITIES.has(raw.quality) ? raw.quality : DEFAULT_SCRCPY_CONFIG.quality,
     alwaysOnTop: raw.alwaysOnTop === true,
     fullscreen: raw.fullscreen === true,
