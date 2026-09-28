@@ -6,7 +6,7 @@
 
 ## 1. 形态
 
-Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的无线 ADB 设备管理器 + 自研镜像（投屏）客户端。约 8.6k 行有效代码：主进程 + `shared/` ≈ 2.3k（`electron/adb.js` 独占 1615），渲染层 ≈ 4.2k，测试 `tests/`（vitest，197 条，纯逻辑为主），设备侧 Helper ≈ 一个 Java 类。
+Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的无线 ADB 设备管理器 + 自研镜像（投屏）客户端。代码分四块：主进程 + `shared/`（**`electron/adb.js` 是全仓最大文件**，8 个职责挤在一起，见 `TODO.md` O1）、渲染层 `src/**`、测试 `tests/`（vitest，纯逻辑为主）、设备侧 Helper（一个 Java 类）。规模数字不写在这里 —— 会过期，用 `cloc`/`wc` 现量。
 
 ```text
 主窗口 (isolated)          镜像窗口 (nodeIntegration, contextIsolation:false)
@@ -59,7 +59,9 @@ Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的无线 AD
 - **`displayFollow` 用 debounce 不用 throttle**：`RESIZE_SETTLE_MS = 250`（`src/mirror/displayFollow.js:13-23`）。真机量过：throttle 每 150ms 发一步，服务端 300ms 去抖**并没有**合掉中间值，每一步都真的重排虚拟显示 → 画面"转好几次"。相同尺寸直接丢弃，因为重复 `resizeDisplay` 会让服务端白走一次 `virtualDisplay.resize()` → capture reset。
 - **`debug.anddrive.vd.isr` prop**：随包 server 是自编 scrcpy 4.0（`VirtualDisplayConfig.setIgnoreActivitySizeRestrictions`），该 prop 默认 `"1"`、留作 A/B 逃生口，系统缺 @hide API 时自动退回公开 `createVirtualDisplay`。既定接口，不要改成启动参数。
 - **`.catch` 吞掉的分寸**：设备侧探测类失败（读第三个 prop、卸载已卸载的 helper）允许吞；**用户操作的结果不许吞**（收藏写盘失败必须抛，渲染层据此回滚星标）。
-- **多设备**：`src/App.vue:223-226` 当前**静默取第一台已连接设备**。历史上那个承诺 `conflict` 状态的 `shared/deviceSession.js` 已删除。"多设备必须显式选择、不得静默降级"仍是**目标原则**，不是现状 —— 改动前先确认这条还要不要落地。
+- **虚拟显示尺寸只有一个主人**：显示像素只在 `src/mirror/direct-session.js` 的 `displayFor(css)` 一处算（建显示与后续 `resizeDisplay` 同源），`src/mirror/connect.js` 的 `startScrcpy` 只**接收**算好的 `display`；建显示用的 CSS 优先取主进程传来的 `pendingInit.initialCss`（窗口内容区），读不到才回落 DOM —— 深链冷启动时页面还没排版完，读 DOM 会拿到 Electron 默认的 512x512。相应地 `buildMirrorOptions` 的 `newDisplay` 是**必填**（缺了就抛），拼串走 `formatNewDisplay`：**别再加兜底默认尺寸**，任何写死的 `WxH/dpi` 都与画质档位的 dpi 不符，会静默开出一块错密度的显示。
+- **镜像页不碰设备缓存**：接回横幅要的那个图标随启动参数走（`startMirrorSession` 的 `request.iconUrl` → `sanitizeIcon` → `pendingInit.iconUrl`），不是去 `adb:getCachedApps` 读全量再 find —— 为一格图标花一整轮 IO，且 `.adr` 冷启动时缓存根本还没建。
+- **多设备**：`src/App.vue` 的自动接管分支（`devices.find((d) => d.connected)`）当前**静默取第一台已连接设备**。历史上那个承诺 `conflict` 状态的 `shared/deviceSession.js` 已删除。"多设备必须显式选择、不得静默降级"仍是**目标原则**，不是现状 —— 改动前先确认这条还要不要落地。
 
 ## 5. 构建与验证
 

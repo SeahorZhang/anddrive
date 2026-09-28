@@ -70,7 +70,7 @@ export async function bootstrap(apply) {
 /** 「接回画面」：把被别的显示（别的投屏软件）拿走的应用原样搬回本窗口，不重启。 */
 export { reclaimApp };
 
-/** 本窗口的会话信息（包名 / 标签 / 序列号），镜像页取应用图标要用。 */
+/** 本窗口的会话信息（包名 / 标签 / 序列号 / 图标），镜像页显示接回横幅时取用。 */
 export { getSessionInfo };
 
 /** 触控 / 键盘 → 直接写本进程内的 control socket。 */

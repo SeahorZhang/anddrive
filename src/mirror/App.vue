@@ -2,7 +2,6 @@
 import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { useMirrorInput } from './useMirrorInput.js'
 import { bootstrap, dispose as disposeSession, reclaimApp, getSessionInfo } from './session.js'
-import { CHANNELS } from '../../electron/ipcContract.js'
 import { aspectDiffers, createReflowGate } from './displayFollow.js'
 
 // 镜像窗口（渲染层直连）：adb/scrcpy 全在本进程内由 Tango 官方库建立，
@@ -171,23 +170,18 @@ function showNotice(text) {
   }, 2400)
 }
 
-/** 应用图标：等真要显示接回入口时才去缓存里取，平时不为它花一次 IO。 */
+/**
+ * 接回横幅上的应用图标与名称：都取自启动参数（主进程建会话时带来，`.adr` 那条路径也带图标）。
+ * 以前这里在横幅出现时调 `adb:getCachedApps` 读整台设备的图标缓存再 find 那一个包名 ——
+ * 为一个图标花一整轮 IO，而且 `.adr` 冷启动时缓存还没建，读了也是空。
+ */
 const appIcon = ref('')
-const appLabel = ref('')
-let iconLoaded = false
-async function loadIcon() {
-  if (iconLoaded) return
-  iconLoaded = true
+const appTitle = ref('')
+function takeSessionIcon() {
   const info = getSessionInfo()
-  appLabel.value = info?.label || info?.packageName || ''
-  if (!info?.serial || !info?.packageName) return
-  let apps = null
-  try {
-    apps = await window.__anddriveIpc?.invoke?.(CHANNELS.adbGetCachedApps, info.serial)
-  } catch {
-    // 缓存读不到就退化成首字母方块，不为了图标打扰开会话
-  }
-  appIcon.value = apps?.find?.((app) => app.packageName === info.packageName)?.iconUrl || ''
+  if (!info) return
+  appIcon.value = info.iconUrl || ''
+  appTitle.value = info.label || info.packageName || ''
 }
 
 /** 把被别处拿走的应用原样搬回本窗口：只搬任务、不重启，进程与页面状态都留着。 */
@@ -338,7 +332,7 @@ async function booted() {
       onReflowSent,
       onStolen: (value) => {
         stolen.value = value
-        if (value) void loadIcon()
+        if (value) takeSessionIcon()
       },
       onMeta: (info) => {
         meta.value = info
@@ -400,7 +394,7 @@ onBeforeUnmount(() => {
          平时不显示：没被抢就不该有多余控件压在画面上。 -->
     <div v-if="stolen" class="mirror-reclaim" style="-webkit-app-region: no-drag">
       <img v-if="appIcon" :src="appIcon" class="mirror-reclaim__icon" alt="" />
-      <span v-else class="mirror-reclaim__icon mirror-reclaim__icon--letter">{{ (appLabel || '?').slice(0, 1) }}</span>
+      <span v-else class="mirror-reclaim__icon mirror-reclaim__icon--letter">{{ (appTitle || '?').slice(0, 1) }}</span>
       <button type="button" class="mirror-reclaim__button" :disabled="reclaiming" @click="reclaim">
         {{ reclaiming ? '接回中…' : '接回画面' }}
       </button>

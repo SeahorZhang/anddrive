@@ -122,6 +122,8 @@ async function launchMirrorFromRequest(request) {
     serial: address,
     packageName: request.packageName,
     label: request.label,
+    // `.adr` 里带着创建时那份图标，直接接力给镜像窗口；`anddrive://` 唤起没有它。
+    iconUrl: request.iconUrl,
     config: currentScrcpyConfig(),
   });
 }

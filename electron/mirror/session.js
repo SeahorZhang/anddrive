@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, screen } from "electron";
 import path from "node:path";
 import { CHANNELS } from "../ipcContract.js";
 import { ensureServer, getPhysicalScreenSize, onDeviceTeardown, scrcpyServerPath } from "../adb.js";
+import { sanitizeIcon } from "../iconImage.js";
 import { findAppSession } from "./appSession.js";
 import { mirrorWindowBounds, resolveRuntimePrefs } from "./options.js";
 
@@ -112,7 +113,8 @@ function notifyExit(payload) {
 /**
  * 启动一个原生镜像窗口；连接/解码由渲染层完成，主进程轻手笔画。
  * 同一台设备上的同一个应用只开一个窗口：已经有了就把它唤到前台（见 `appSession.js`）。
- * @param {{ serial: string, packageName: string, label?: string, config?: unknown }} request
+ * @param {{ serial: string, packageName: string, label?: string, config?: unknown,
+ *           iconUrl?: string }} request
  */
 export async function startMirrorSession(request) {
   const serial = typeof request?.serial === "string" ? request.serial.trim() : "";
@@ -177,6 +179,10 @@ export async function startMirrorSession(request) {
     config: request?.config ?? null,
     prefs,
     initialCss: { width: content.width, height: content.height },
+    // 图标随启动参数一起给：镜像页为「接回」横幅取一个图标，不该去读整台设备的
+    // 图标缓存（`.adr` 冷启动那条路径缓存还没建，读了也是空）。渲染层会把它直接当
+    // `<img>` 的 src，所以过一道 `sanitizeIcon`，非 PNG data URL 一律丢掉。
+    iconUrl: sanitizeIcon(request?.iconUrl) ?? undefined,
   };
 
   return { id: session.id, serial, packageName, label, startedAt: session.startedAt };
