@@ -35,7 +35,7 @@ const PERMISSIONS = [
   {
     id: 'accessibility',
     label: '辅助功能',
-    description: '投屏时转发键盘与鼠标操作',
+    description: '镜像时转发键盘与鼠标操作',
   },
   {
     id: 'fullDiskAccess',
@@ -142,7 +142,7 @@ onMounted(refreshPermissions)
 
     <section>
       <div class="mb-1.5 flex items-center justify-between px-1">
-        <span class="text-[11px] font-medium text-black/40">投屏镜像</span>
+        <span class="text-[11px] font-medium text-black/40">镜像</span>
         <button class="cursor-pointer text-[11px] text-[#007aff] outline-none hover:underline" @click="resetScrcpyConfig">
           恢复默认
         </button>

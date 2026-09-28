@@ -245,7 +245,7 @@ onMounted(() => {
       notify.success(`已从桌面快捷方式启动 ${result.label}`, { title: "镜像已开启" });
       refreshScrcpySessions();
     } else {
-      notify.error(result.message || "启动投屏失败", { title: `启动 ${result.label} 失败` });
+      notify.error(result.message || "启动镜像失败", { title: `启动 ${result.label} 失败` });
     }
   });
   disposeMirrorExit = onMirrorExitApi((result) => {

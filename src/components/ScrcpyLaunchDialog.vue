@@ -100,7 +100,7 @@ async function launch() {
         </div>
 
         <div class="flex items-center justify-between gap-2 px-5 pt-1 pb-4">
-          <BaseButton variant="default" :disabled="launching" @click="applyDefaults">恢复默认</BaseButton>
+          <BaseButton variant="default" :disabled="launching" @click="applyDefaults">重置本次参数</BaseButton>
           <div class="flex items-center gap-2">
             <BaseButton variant="secondary" :disabled="launching" @click="modelValue = false">取消</BaseButton>
             <BaseButton variant="primary" :loading="launching" @click="launch">启动</BaseButton>

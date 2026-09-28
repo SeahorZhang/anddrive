@@ -66,7 +66,7 @@ function elapsed(startedAt) {
         class="z-60 flex w-72 flex-col overflow-hidden rounded-[14px] border border-white/70 bg-white/90 shadow-[0_12px_40px_rgba(0,0,0,0.2)] ring-1 ring-black/5 backdrop-blur-xl outline-none">
         <div class="flex items-center justify-between px-3.5 pt-2.5 pb-1.5">
           <span class="text-[12px] font-semibold text-[#1d1d1f]">
-            运行中镜像
+            运行中的镜像
             <span class="ml-1 text-[11px] font-normal text-black/40">{{ total }}</span>
           </span>
           <button class="cursor-pointer text-[11px] text-[#007aff] outline-none hover:underline"
