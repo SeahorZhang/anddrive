@@ -309,11 +309,6 @@ function onPacket(packet) {
 
 let pendingPackets = []
 
-/** dev 场景下看音频包分布；正式版只有计数。 */
-const debugAudio = import.meta.env.DEV
-  ? (packet) => console.info('[mirror] audio', packet.type, packet.data?.byteLength ?? '')
-  : null
-
 function flushPending() {
   if (!writer || !pendingPackets.length) return
   const pending = pendingPackets
@@ -327,9 +322,8 @@ function flushPending() {
 async function booted() {
   await bootstrap({
     video: onPacket,
-    audio: (packet) => {
+    audio: () => {
       hud.audioPackets += 1
-      debugAudio(packet)
     },
     audioStats: ({ played, queue, decoded, time, state }) => {
       hud.audioPlayed = played

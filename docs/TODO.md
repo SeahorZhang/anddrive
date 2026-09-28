@@ -8,7 +8,7 @@
 
 ## 0. 一分钟结论
 
-1. 有一个**正式版必崩**的 bug（B1 音频第一帧），一行守卫。
+1. ~~B1 正式版静默丢音频~~ **已于 2026-09-28 修掉**（生产构建产物已验证 null 调用消失）。剩下三个真 bug：B2 动作键没接线、B4 `installHelpera` 拼错进契约、O10 配对弹窗未捕获异常。
 2. **画面「卡住」问题目前零防线在跑**：9-28 那版「息屏弹醒一次 + 90s 冷却」已从工作树整体消失（全仓 grep `watchSleepBounce` / `wakeDisplay` / `mirrorWake*` 零命中）。三类根因（A 断链 / B1 系统收回 / B2 停合成）、统一理论与**已判死的七条救法**现已补进 `NATIVE_MIRROR.md` §排查记录 2026-09-28 —— 之前只存在于对话里、从未进过提交。要不要重做是产品决策，先拍板（§9 第 3 批）。
 3. **轮询/定时器 15 处**（§5）。可收口的是三条"UI 想知道设备状态"的轮询，以及建了不拆的 mDNS socket。
 4. **按包名/机型的 app 特殊定制在可执行代码里已经清零**（§4）。别再去找"哪里在特判抖音"。
@@ -21,7 +21,7 @@
 
 | # | 现象 | 证据 | 建议 | 规模 |
 | --- | --- | --- | --- | --- |
-| B1 | 正式版收到第一个音频包就 `TypeError`：`debugAudio` 非 DEV 时是 `null`，调用点无守卫 | `src/mirror/App.vue:313`（`: null`）vs `:332` 裸调 | 删掉这个 dev-only 闭包，计数留在 `hud.audioPackets`；或 `import.meta.env.DEV &&` 包一层 | S |
+| B1 ✅ **已修（2026-09-28）** | ~~正式版收到第一个音频包就崩~~ 真实症状是**静默丢音频**：`debugAudio` 非 DEV 时为 `null`，`:332` 裸调抛 `TypeError` → 被 `src/mirror/direct-session.js:199-201` 的 `catch { break }` 吞掉 → **`pumpLoop` 跳出，音频流不再被读取**；`:94` 是 `void`，所以既不崩进程也不提示，视频与输入全程正常。只在**开了音频转发**时触发（默认 `audio: false`） | 旧位置 `src/mirror/App.vue:313`/`:332`。坑在假信号：`:331` 计数在抛错**之前**执行，HUD 显示 `audio>0` 却 `ad=0`，按 `NATIVE_MIRROR.md` 那张表会去查 `AudioDecoder`/`astate`，方向全错 | 采方案 A：删掉 dev-only 闭包，回调只留 `hud.audioPackets += 1`（dev 观测能力 HUD 本来就有，零损失）。已用生产构建验证：产物里 `audio:()=>{…audioPackets+=1}`，旧 `packet.type` 签名 0 命中 | S |
 | B2 | 镜像窗口没有 Home / 多任务 / 音量 / 电源，只有 Esc 当返回 | 动作分支与 keycode 表早就写好：`electron/mirror/control.js:82-123`（`case 'action'` + `TAP_ACTIONS`）；唯一发控制消息的 `src/mirror/useMirrorInput.js:14` 只发 `touch/scroll/key/text`；`shared/keys.js:35` 只有 `Escape: back` | = **D2 / F4**，控制条 UI 在 2026-09-16 被删后一直没接线。加悬浮或菜单栏入口挂 5 个动作，或先做快捷键。注意带 Cmd 的组合一律不发设备（`useMirrorInput.js:89-90`，为让 ⌘Q/⌘W 归系统），所以 **Cmd+V 不会贴进手机** | S–M |
 | B3 | `beforeunload` 每次 `bootstrap()` 重复注册 → 接管/复用路径挂多份监听 | `src/mirror/session.js:36`（注册）；`:21-22` 注释明说 `bootstrap()` 可重复调用 | 注册移到模块顶层做一次 | S |
 | B4 | 拼错的 `installHelpera` 已进 API 契约 | `electron/preload.js:41` → `src/api/index.js:11,81` | 改 `installHelper`；与 §5 X 组的"删 api 透传壳"一起做 | S |
@@ -217,7 +217,7 @@
 | 批次 | 内容 | 为什么这么排 |
 | --- | --- | --- |
 | **第 1 批 ✅ 已完成**（2026-09-22） | D1 息屏、D3 收藏写失败要说话、D5 adb 全面超时、D6 换设备重载、D10 重复 `getDeviceState`、O0 六条死码、O2 通道收口 + CHANNELS 唯一性单测、README 五处漂移 | 都是"用户已会撞到但不知道为什么"，互不干扰 |
-| **第 2 批：零风险清理** | §5.2 的 X 组（`fsUtil`、`engine` 字段、四个 `use*` 包装、`launchApp`、未用参数、`main.js` 重复 import、版本漂移），B1/B3/B4 | 每条独立可验，删完跑 `pnpm lint && typecheck && test` 就是回归 |
+| **第 2 批：零风险清理** | §5.2 的 X 组（`fsUtil`、`engine` 字段、四个 `use*` 包装、`launchApp`、未用参数、`main.js` 重复 import、版本漂移），B3/B4（**B1 ✅ 已修**） | 每条独立可验，删完跑 `pnpm lint && typecheck && test` 就是回归 |
 | **第 3 批：卡住问题拍板** | §0.2 那条：要不要重做「息屏弹醒」；不做就把 A/B1/B2 三类根因归档为已知限制 | 这是你点名的"最严重问题"，目前**零防线在跑**，别让它悬着 |
 | **第 4 批：链路收口** | §5.1 三条状态轮询合成一条事件推送、mDNS browser 补 stop、D8 改事件驱动、D7 按 serial 解析、D4+O5+O6 图标链路 | 第 4 批开始要动 UI/链路，需要小设计 |
 | **第 5 批：结构与几何** | O1 拆 `adb.js`、§3 遮罩与几何单一主人化、§5.3 会话归属合并、`session.js` 并进 `direct-session.js` | 拆分与几何都要一次做透；**几何要先按 `NATIVE_MIRROR.md` §4.0 的纪律复现一次再改** |
