@@ -1441,22 +1441,23 @@ const videoCodecCapsCache = new Map();
 
 /**
  * 设备侧能编码哪些视频（设置页用它列出选项，会话建立用它落地 `auto`）。
- * @param {string} serial @returns {Promise<{usable: Record<string, boolean>, mimes: Array<{mime: string, codec: string | null, label: string}>}>}
+ * **读不到就返回 null（= 未知），绝不返回「全 false」** —— 后者会被读成「这台设备一个编码器都没有」，
+ * 于是所有编码都判不可用、自动档掉到字面保底 H.264（这个坑踩过一次，AV1 就是这么被回落的）。
+ * @param {string} serial
+ * @returns {Promise<{usable: Record<string, boolean>, mimes: Array<{mime: string, name: string | null, label: string, protocol: boolean}>} | null>}
  */
 export async function getDeviceVideoCodecs(serial) {
   assertSerial(serial);
   const cached = videoCodecCapsCache.get(serial);
   if (cached) return cached;
   await ensureServer();
-  const { stdout } = await adbExecSafe(
-    "-s",
-    serial,
-    "shell",
-    VIDEO_ENCODER_PROBE_CMD,
-  );
+  const { stdout } = await adbExecSafe("-s", serial, "shell", VIDEO_ENCODER_PROBE_CMD);
   const caps = parseEncoderMimes(stdout);
-  // 一条都没有多半是没读到文件（权限/路径因 ROM 而异），不缓存，下次再试。
-  if (caps.mimes.length > 0) videoCodecCapsCache.set(serial, caps);
+  if (caps.mimes.length === 0) {
+    console.warn("AndDrive: 没读到设备编码器清单（media_codecs 路径因 ROM 而异），编码列表按「未知」处理");
+    return null;
+  }
+  videoCodecCapsCache.set(serial, caps);
   return caps;
 }
 

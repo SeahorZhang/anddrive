@@ -206,10 +206,12 @@ describe('parseEncoderMimes', () => {
     expect(mimes.filter((entry) => !entry.protocol).map((entry) => entry.label)).toEqual(['APV', 'H.263'])
   })
 
-  it('读不到内容时 usable 全 false、mimes 空（调用方据此不缓存，别把探测失败说成设备不支持）', () => {
-    const { usable, mimes } = parseEncoderMimes("")
-    expect(usable).toEqual({ h264: false, h265: false, av1: false, vp8: false, vp9: false })
-    expect(mimes).toEqual([])
+  it('读不到内容时 mimes 为空 —— 调用方要把它当「未知」，不能当「全不支持」', () => {
+    expect(parseEncoderMimes("").mimes).toEqual([])
+    // 全 false 的 usable 曾把显式选的 AV1 判成不可用、回落成 H.264；未知必须是 device=null。
+    expect(planCodecList({ mimes: [], device: null }).options.map((entry) => entry.value)).toEqual([
+      "auto", "h264", "h265", "av1", "vp8", "vp9",
+    ])
   })
 })
 

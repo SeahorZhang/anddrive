@@ -2,6 +2,7 @@
 import { Icon } from '@iconify/vue'
 import BaseButton from './BaseButton.vue'
 import ScrcpyConfigFields from './ScrcpyConfigFields.vue'
+import SwitchToggle from './SwitchToggle.vue'
 import { startMirrorApi } from '@/api'
 import { readableError } from '@/utils/errors'
 import { notify } from '@/composables/useNotifications'
@@ -88,21 +89,23 @@ async function launch() {
             <Icon icon="lucide:x" :width="14" :height="14" />
           </button>
         </div>
-        <p class="px-5 pb-2 text-[11px] text-black/40">本次启动参数仅对当前窗口生效，可勾选保存为默认。</p>
+        <p class="px-5 pb-2 text-[11px] text-black/40">以下参数只作用于这一次启动。</p>
 
         <div class="min-h-0 flex-1 overflow-y-auto px-5 pb-2">
           <ScrcpyConfigFields :config="draft" :disabled="launching" :local-codecs="localCodecs"
             :device-codecs="deviceCodecs" @change="onChange" />
-          <label class="mt-3 flex cursor-pointer items-center gap-2 px-1 text-[12px] text-black/60">
-            <input v-model="saveAsDefault" type="checkbox" class="size-3.5 accent-[#007aff]" />
-            同时保存为默认参数
-          </label>
-          <p class="mt-1 px-1 text-[11px] text-black/40">
-            自研引擎支持 H.264 / H.265（需平台硬解），AV1 会自动回落到 H.264。
-          </p>
-          <p class="mt-1 px-1 text-[11px] text-black/40">
-            镜像以虚拟大屏打开：应用按镜像窗口的比例铺满，拖动窗口时画面自动跟随重排（期间有短暂遮罩）。
-          </p>
+        </div>
+
+        <!-- 整行可点，开关本身不吃点击（否则会翻两下）。 -->
+        <div class="mx-5 mb-2 flex items-center gap-3 rounded-[10px] border px-3 py-2.5 transition-colors"
+          :class="[saveAsDefault ? 'border-[#007aff]/35 bg-[#007aff]/[0.07]' : 'border-black/10 bg-black/[0.03]',
+            launching ? 'cursor-default opacity-50' : 'cursor-pointer']"
+          @click="saveAsDefault = launching ? saveAsDefault : !saveAsDefault">
+          <SwitchToggle :model-value="saveAsDefault" :disabled="launching" class="pointer-events-none" />
+          <span class="min-w-0 flex-1">
+            <span class="block text-[12.5px] font-medium text-[#1d1d1f]">同时保存为默认参数</span>
+            <span class="mt-0.5 block text-[11px] text-black/45">下次启动镜像沿用这套参数</span>
+          </span>
         </div>
 
         <div class="flex items-center justify-between gap-2 px-5 pt-1 pb-4">
