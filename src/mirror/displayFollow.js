@@ -92,7 +92,7 @@ export function createDisplayFollower({
 
   return {
     /**
-     * 会话建立阶段已用该尺寸创建虚拟显示（`connect.js` 的 `newDisplay`），
+     * 会话建立阶段已用该尺寸创建虚拟显示（`direct-session.js` 的 `initialDisplay()`），
      * 记为已下发，避免启动时立刻重复下发一次完全相同的 resizeDisplay。
      * @param {{ width: number, height: number } | null | undefined} size
      */

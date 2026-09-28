@@ -12,7 +12,7 @@
 2. **画面「卡住」问题目前零防线在跑**：9-28 那版「息屏弹醒一次 + 90s 冷却」已从工作树整体消失（全仓 grep `watchSleepBounce` / `wakeDisplay` / `mirrorWake*` 零命中）。三类根因（A 断链 / B1 系统收回 / B2 停合成）、统一理论与**已判死的七条救法**现已补进 `NATIVE_MIRROR.md` §排查记录 2026-09-28 —— 之前只存在于对话里、从未进过提交。要不要重做是产品决策，先拍板（§9 第 3 批）。
 3. **轮询/定时器 15 处**（§5）。可收口的是三条"UI 想知道设备状态"的轮询，以及建了不拆的 mDNS socket。
 4. **按包名/机型的 app 特殊定制在可执行代码里已经清零**（§4）。别再去找"哪里在特判抖音"。
-5. **裁切 / 铺满 / 黑边仍未解决**，根因怀疑点在**几何有两个主人**（§3），牵扯未验证假设，要单独一轮。
+5. **裁切症状已结案**（用户 2026-09-28：原因他已找到，不用再查；根因未入库）。§3 只剩结构债，其中「同一套显示尺寸数学写两遍」和死兜底 `DEFAULT_NEW_DISPLAY` 本轮已清掉。
 6. 最划算的结构刀是拆 `electron/adb.js`（1615 行 / 8 职责），但它那些"保持既有引用"的再导出**对测试仍承重**。
 
 ---
@@ -48,19 +48,21 @@
 
 ---
 
-## 3. 镜像几何：裁切 / 铺满 / 黑边（仍未解决）
+## 3. 镜像几何：裁切 / 铺满 / 黑边（症状已结案，只剩结构债）
 
-**状态**：`NATIVE_MIRROR.md` §排查记录 2026-09-22 一节标题就是「问题仍未解决」。症状有两种读法（画面在窗口内被裁一圈 vs 窗口自己跑到屏外），**尚未区分**；把 server 改成按比例收缩后你实测症状照旧，改动已回退。下次别再从「比例被裁」入手。
+**状态**（2026-09-28 用户口径）：**裁切症状的原因他已找到，这件事不需要再查**；根因**没有记进仓库**，本文与 `NATIVE_MIRROR.md` 都只有历史取证，别再据此重开调查。本节剩下的只是**结构性债务**。
 
-结构性债务（这节才是精简重点）：
+- ✅ **「同一套数学写了两遍」已收口（2026-09-28）**：显示像素现在只有 `src/mirror/direct-session.js` 的 `displayFor(css)` 一处算（建显示与 `resizeDisplay` 同源）；`src/mirror/connect.js` 的 `startScrcpy` 改成**接收**算好的 `display`，自己不再读 DOM。建显示用的 CSS 优先取主进程传来的 `info.initialCss`（`electron/mirror/session.js` 里由 `win.getContentBounds()` 得到），**读不到才回落 DOM** —— 顺手落了之前"已验证未入库"的深链冷启动修复：页面还没排版完时 `clientWidth` 会读到 Electron 默认的 512x512，于是一开就开出 `512x512/480` 这块错尺寸显示。
+- ✅ ~~默认值会走偏~~ **已删（2026-09-28）**：`DEFAULT_NEW_DISPLAY="1280x960/160"` 是死码（生产唯一调用方总会覆盖，且 dpi 160 与任何档位都不符，真走到就静默开出错密度显示）。`buildMirrorOptions` 的 `newDisplay` 改成**必填**（缺了就抛），拼串收成一个 `formatNewDisplay(display)`（含非法尺寸抛错），喂死码的那条断言已改掉。
 
-- **几何有两个主人**：主进程按设备分辨率算窗口 bounds —— `electron/mirror/options.js:114-148` 里 `mirrorWindowBounds` 用的那组常量（`MIRROR_WINDOW_MAX_EDGE=1000`、`MARGIN=80`、`FALLBACK_RATIO=9/19.5`、下限 320/280），调用入口在 `electron/mirror/session.js:137-140`；渲染层按窗口 CSS 独立算显示像素（`shared/scrcpyConfig.js:64` 的 `computeDisplayMetrics`，调用点 `src/mirror/connect.js` 里建虚拟显示那一段 与 `src/mirror/direct-session.js` 的 `viewportDisplay` —— **同一套数学写了两遍**）。两套比例决策靠「app 会铺满显示」这个服务端假设才不打架（`options.js:138-142`、`electron/mirror/session.js:49-51` 注释）。这是裁切难定位的直接原因。
+仍然开着的：
+
+- **几何的两个主人**（这不算错，只是两套决策靠假设对齐）：主进程按设备分辨率算窗口 bounds —— `electron/mirror/options.js` 里 `mirrorWindowBounds` 用的那组常量（`MIRROR_WINDOW_MAX_EDGE=1000`、`MARGIN=80`、`FALLBACK_RATIO=9/19.5`、下限 320/280），调用入口 `electron/mirror/session.js` 的 `startMirrorSession`；渲染层按窗口 CSS 算显示像素（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`）。两边靠「app 会铺满显示」这个服务端假设才不打架。
 - **渲染层手写 letterbox**：`src/mirror/App.vue` 的 `syncCanvasBox`（min-scale + 取整 + `objectFit:'fill'`）重新实现了 CSS `object-fit: contain`；有 3 条触发路径（ResizeObserver / `sizeChanged` / `meta`）+ 「尺寸未知先拉伸、之后重贴」的两段式兜底。
-- **遮罩/重排状态机约 90 行**：`src/mirror/App.vue` 的遮罩那一块（`armCover/endCover/coverForReflow/cancelCover/onFrameSizeChanged`、`reflowGate`、`aspectDiffers` 容差 0.02），只为盖住 resize 闪烁；`displayFollow.js:150-154` 自陈是盖在早先「只看时间」的修复之上。建议收口成**只以 `reflowGate` 为单一判据**。**M**
-- **默认值会走偏**：`options.js:30` `DEFAULT_NEW_DISPLAY="1280x960/160"` 的 dpi 160 与档位 dpi 不一致，只在渲染层覆盖送不到时用到。
-- **编解码降级分家**：`options.js:86-97` `NATIVE_SUPPORTED_CODECS`（丢 av1）与 `connect.js` 各管一半。
+- **遮罩/重排状态机约 90 行**：`src/mirror/App.vue` 的遮罩那一块（`armCover/endCover/coverForReflow/cancelCover/onFrameSizeChanged`、`reflowGate`、`aspectDiffers` 容差 0.02），只为盖住 resize 闪烁；`displayFollow.js` 的 `createReflowGate` 注释自陈是盖在早先「只看时间」的修复之上。建议收口成**只以 `reflowGate` 为单一判据**。**M**
+- **编解码降级分家**：`options.js` 的 `NATIVE_SUPPORTED_CODECS`（丢 av1）与 `connect.js` 各管一半。
 - **未结的另一半**：`resizeDisplay` 不带 dpi，档位只在开会话时生效（中途换档就 1dp≠1CSSpx）。AndroMeld 的 resize 命令带 dpi（三个 int w/h/dpi），要跟就得**扩我们自己的协议** —— 那才能做到"窗口任意大也不掉清晰度/不漂移"。**M–L**
-- 待查假设（都还没验证）：若是窗口跑屏外 → 看 Electron 侧边界（`mirrorWindowBounds` 只约束**初始**尺寸，手动拖拽无 workArea 上限）；若是窗内被裁 → 看 contain-fit 的尺寸来源（`syncCanvasBox` 取解码器帧尺寸，与 `resizeDisplay` 后的真实显示尺寸之间是否漏同步一次）。
+- ~~待查假设（窗口跑屏外 / 窗内被裁）~~：随症状结案一并移除。
 - 顺带的真实缺陷（正常窗口尺寸不触发）：上游 `NewDisplayCapture` 对 flex display 用 `Size.constrain(constraints, false)` **逐维裁剪**，越界时显示形状与窗口形状脱钩（5600x5600 → 比例 1.296）。这台机 h265 上限**短边 4320 / 长边 8192**，倍率 3 下窗口任一边 >~1440 CSS px 就越界。
 - 未验：只有竖屏排版、没有宽布局的 app 在横形显示上会怎样；真机反馈后再决定要不要按包豁免（但注意 §4 的"仓库不留单 app 适配"）。
 
@@ -109,7 +111,7 @@
 
 ### 5.2 X 组：死代码清理
 
-**2026-09-28 已删干净、因此从本清单移除的**：`fsUtil` 的两个零调用函数、`engine` 字段全套（含 `ENGINES`、`ScrcpySession.pid` 与被镜像页遮蔽的 `MirrorSession` 重复 typedef）、`adb.js` 的 `launchApp`、七个 handler 的未用 `event` 形参、四个从未被调用的 `use*()` 包装与 `notify.info`、`main.js` 重复 import、`adb.js` 与 `electron/scrcpyConfig.js` 的透传再导出（连带把 `tests/electron/scrcpy.test.js` 那份**重复的** `normalizeScrcpyConfig` 套件折进 `scrcpyConfig.test.js` 并删文件，独有断言一条没丢）。
+**2026-09-28 已删干净、因此从本清单移除的**：`fsUtil` 的两个零调用函数、`engine` 字段全套（含 `ENGINES`、`ScrcpySession.pid` 与被镜像页遮蔽的 `MirrorSession` 重复 typedef）、`adb.js` 的 `launchApp`、七个 handler 的未用 `event` 形参、四个从未被调用的 `use*()` 包装与 `notify.info`、`main.js` 重复 import、`adb.js` 与 `electron/scrcpyConfig.js` 的透传再导出（连带把 `tests/electron/scrcpy.test.js` 那份**重复的** `normalizeScrcpyConfig` 套件折进 `scrcpyConfig.test.js` 并删文件，独有断言一条没丢）、`options.js` 的死兜底 `DEFAULT_NEW_DISPLAY`（同时把 `newDisplay` 改成必填，见 §3）。
 
 **仍然开着的**（要么不是零调用，要么删/改会动到行为或结构，所以没归进这轮）：
 
@@ -231,5 +233,5 @@
 - **安全边界已处理好**：包名进设备 shell 前有正则+长度校验（`adb.js` 起），`moveAppTaskToDisplay` 只接受校验过的整数；serial 走 `execFile` 参数数组而非拼 shell；dev launcher 脚本路径经 `shellQuote`（`shortcut.js:144`）；osascript 只接 argv（`iconImage.js:81`）；`.adr` 内容经 `URLSearchParams` 编解码并在读取时重新校验（`shortcutCore.js:67-93`）。
 - **并发与原子性已有守卫**：稳定标识解析有 in-flight 去重、缓存写 tmp+rename 原子、发现循环令牌化。**2026-09-28 补上第四、五、六道**：应用缓存的读-改-写按设备文件串行（`mutateAppCache`）；图标改成每包一个文件，一批只写自己的 png，不再参与快照的合并（图标批次之间已无共享可变状态）；`deleteAppCache` 走同一把锁（清除不会与在途写入互相覆盖）。注意锁守的是「同一台设备的多个批次」，不是「多台设备」。
 - **反馈链路**：P0-1（`useNotifications` + 列表/图标/Helper 失败提示）与 P0-2（心跳 + 退避重连）确实交付了。仍漏的死角只剩 `src/composables/useScrcpyPreferences.js` 里保存参数那条 `.catch(() => {})` 把失败吞干净了。⚠️ 配对弹窗那次的**根因仍在**：主进程 `waitForMdnsService` 不返回、被取代时返回永不 settle 的 Promise（= **D9**），弹窗侧只是自卫；真修要按 §5.1 改事件驱动。
-- **当前基线**：`adbExec` / `adbExecSafe` 每次调用都带超时（默认 15s、connect/pair 45s、安装卸载拉文件 5min），超时统一报「设备无响应」，`getDeviceState` 把超时归为 `offline`；`CHANNELS` 是唯一通道来源并有唯一性单测守着。**2026-09-28 复跑**：`typecheck` 通过、`test` **204 passed / 1 skipped / 20 文件**（净变化：动作键用例 -2、D4 串行 +1、D7 命名与择优 +7、图标落盘与冷启动 +5、删重复的 `scrcpy.test.js` 套件 -4、删老兼容 -6、`deleteAppCache` 补锁 +1）、`oxlint` 0 错、`eslint` 0 错（原体检里的 **O0「lint 门是红的」确已修掉**，故不再列为待办）。
+- **当前基线**：`adbExec` / `adbExecSafe` 每次调用都带超时（默认 15s、connect/pair 45s、安装卸载拉文件 5min），超时统一报「设备无响应」，`getDeviceState` 把超时归为 `offline`；`CHANNELS` 是唯一通道来源并有唯一性单测守着。**2026-09-28 复跑**：`typecheck` 通过、`test` **206 passed / 1 skipped / 20 文件**（净变化：动作键用例 -2、D4 串行 +1、D7 命名与择优 +7、图标落盘与冷启动 +5、删重复的 `scrcpy.test.js` 套件 -4、删老兼容 -6、`deleteAppCache` 补锁 +1、`newDisplay` 必填与 `formatNewDisplay` +2）、`oxlint` 0 错、`eslint` 0 错（原体检里的 **O0「lint 门是红的」确已修掉**，故不再列为待办）。
 - ⚠️ **`pnpm format:check` 现在是红的（56 个文件），与本轮改动无关**：拿未被触碰的 HEAD 版 `src/App.vue` 单独跑 `oxfmt --check` 同样报错 —— 是 `oxfmt` 升版（0.67 → 0.70，见 `9e3bfca`）后想重排全仓。**但它就是 O12 上 CI 的第一颗雷**：要么先单独跑一次 `pnpm format` 生成一个巨型重排提交（推荐单独一刀，别混在功能改动里），要么 CI 先不挂 `format:check`。

@@ -36,33 +36,27 @@ export function createScid() {
 
 /**
  * 推送并启动 scrcpy（官方 AdbScrcpyClient / AdbScrcpyOptions4_0 直用）。
- * 返回启动时**实际用于创建虚拟显示**的尺寸：调用方据此初始化「跟随窗口」的
- * 请求合并器，避免启动阶段再下发一条完全相同的 resizeDisplay。
- * @param {{ adb: unknown, serverPath: string, config: unknown }} params
- * @returns {Promise<{ client: unknown, display: { width: number, height: number, dpi: number, scale: number } }>}
+ * 虚拟显示尺寸由调用方算好后传入（`direct-session.js` 是全项目唯一算它的地方），
+ * 这里只拼成协议字符串；返回该尺寸供调用方初始化「跟随窗口」的请求合并器，
+ * 避免启动阶段再下发一条完全相同的 resizeDisplay。
+ * @param {{ adb: unknown, serverPath: string, config: unknown,
+ *           display: { width: number, height: number, dpi: number } }} params
+ * @returns {Promise<{ client: unknown, display: { width: number, height: number, dpi: number } }>}
  */
-export async function startScrcpy({ adb, serverPath, config }) {
+export async function startScrcpy({ adb, serverPath, config, display }) {
   const { AdbScrcpyClient, AdbScrcpyOptions4_0 } = req("@yume-chan/adb-scrcpy");
   const { DefaultServerPath } = req("@yume-chan/scrcpy");
   const { ReadableStream } = req("@yume-chan/stream-extra");
   const { createReadStream } = req("node:fs");
-  const { buildMirrorOptions, resolveNativeCodec } = await import(
+  const { buildMirrorOptions, resolveNativeCodec, formatNewDisplay } = await import(
     "../../electron/mirror/options.js"
   );
-  const { computeDisplayMetrics } = await import("../../shared/scrcpyConfig.js");
 
   const { codec, downgraded } = resolveNativeCodec(config);
   if (downgraded) {
     console.warn(`[mirror] 自研引擎暂不支持所选编码，改用 ${codec}`);
   }
-  // 初始虚拟显示 = 窗口 CSS × 画质档位倍率（dpi = 160 × 倍率，于是 1dp = 1 CSS px）；
-  // 之后由 resizeDisplay 跟随窗口。
-  const display = computeDisplayMetrics(
-    document.documentElement.clientWidth,
-    document.documentElement.clientHeight,
-    config?.quality,
-  );
-  const newDisplay = `${display.width}x${display.height}/${display.dpi}`;
+  const newDisplay = formatNewDisplay(display);
   const file = ReadableStream.from(createReadStream(serverPath));
   await AdbScrcpyClient.pushServer(adb, file, DefaultServerPath);
   const options = new AdbScrcpyOptions4_0({

@@ -24,20 +24,33 @@ export function parseBitRate(value) {
 }
 
 /**
- * 未提供窗口尺寸时的虚拟显示兜底（`<宽>x<高>/<dpi>`）。正常路径下
- * `src/mirror/connect.js` 会按窗口尺寸 × devicePixelRatio 计算并覆盖它。
+ * 虚拟显示尺寸的 scrcpy 命令行写法：`<宽>x<高>/<dpi>`。
+ * 数值本身由渲染层按「窗口 CSS × 画质档位」算（`shared/scrcpyConfig.js` 的
+ * `computeDisplayMetrics`）—— 这里只负责拼成协议字符串，所以**必须**由调用方给：
+ * 曾经有个 `1280x960/160` 的兜底常量，生产唯一调用方总会覆盖它，等于死码（且 dpi 与
+ * 任何档位都不一致，真走到就会静默开出一块错密度的显示），2026-09-28 删除。
+ * @param {{ width: number, height: number, dpi: number }} display
  */
-const DEFAULT_NEW_DISPLAY = "1280x960/160";
+export function formatNewDisplay(display) {
+  const { width, height, dpi } = display ?? {};
+  if (!(width > 0) || !(height > 0) || !(dpi > 0)) {
+    throw new Error("虚拟显示尺寸无效");
+  }
+  return `${Math.round(width)}x${Math.round(height)}/${Math.round(dpi)}`;
+}
 
 /**
  * 把归一化后的投屏参数映射为 scrcpy 4.0 server 选项对象。
  * 只覆盖作用于「服务端」的字段；置顶 / 全屏等窗口行为由 Electron 窗口负责，
  * 息屏等运行时控制后续通过控制消息下发。
  * @param {unknown} input
- * @param {{ videoCodec?: string, newDisplay?: string }} [overrides]
+ * @param {{ videoCodec?: string, newDisplay: string }} overrides
  * @returns {Record<string, unknown>}
  */
 export function buildMirrorOptions(input, overrides = {}) {
+  if (typeof overrides.newDisplay !== "string" || !overrides.newDisplay) {
+    throw new Error("缺少 newDisplay：虚拟显示尺寸必须由调用方计算后传入");
+  }
   const config = { ...normalizeScrcpyConfig(input) };
   if (overrides.videoCodec) config.videoCodec = overrides.videoCodec;
   /** @type {Record<string, unknown>} */
@@ -62,10 +75,11 @@ export function buildMirrorOptions(input, overrides = {}) {
     // 想要两边同时有声才需要 audioDup: true（ROUTE_FLAG_LOOP_BACK_RENDER）。
   }
 
-  // 恒定创建虚拟显示并开启 flex display（scrcpy `--flex-display` / -x）：虚拟
-  // 显示初始按窗口尺寸创建，之后窗口变化由客户端用官方 `resizeDisplay` 控制消息
-  // 驱动重排。服务端 `requestResize` 对非 flex 显示直接抛错，所以必须打开它。
-  options.newDisplay = overrides.newDisplay || DEFAULT_NEW_DISPLAY;
+  // 恒定创建虚拟显示并开启 flex display（scrcpy `--flex-display` / -x）：初始尺寸由调用方
+  // 按「窗口 CSS × 画质档位」算好再给（`formatNewDisplay`），之后窗口变化由客户端用官方
+  // `resizeDisplay` 控制消息驱动重排。服务端 `requestResize` 对非 flex 显示直接抛错，所以
+  // 必须打开它。
+  options.newDisplay = overrides.newDisplay;
   options.flexDisplay = true;
 
   // 「保持亮屏」是唯一能落到服务端选项的屏幕策略。

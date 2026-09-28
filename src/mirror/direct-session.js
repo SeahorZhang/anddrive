@@ -20,14 +20,31 @@ const current = {
   stopStolenWatch: null,
 };
 
-/** 当前窗口对应的虚拟显示尺寸（像素倍率与 dpi 都在 `computeDisplayMetrics` 里定）。 */
-function viewportDisplay() {
-  // 档位取本会话建立时那份 config：dpi 在建显示时定死，中途换档会让 1dp ≠ 1 CSS px。
-  return computeDisplayMetrics(
-    document.documentElement.clientWidth,
-    document.documentElement.clientHeight,
-    current.info?.config?.quality,
-  );
+/** 当前窗口的 CSS 尺寸（视口）。用 documentElement 而不是 innerWidth：后者含滚动条/边框口径。 */
+function cssViewport() {
+  return {
+    width: document.documentElement.clientWidth,
+    height: document.documentElement.clientHeight,
+  };
+}
+
+/**
+ * 虚拟显示尺寸的唯一算法：窗口 CSS × 画质档位倍率（dpi 同倍，于是 1dp = 1 CSS px）。
+ * 建显示和后续 resizeDisplay 必须走同一个公式，否则初始密度与跟随期的密度会错位。
+ * 档位取本会话建立时那份 config：dpi 在建显示时定死，中途换档会让 1dp ≠ 1 CSS px。
+ */
+function displayFor(css) {
+  return computeDisplayMetrics(css.width, css.height, current.info?.config?.quality);
+}
+
+/**
+ * 开会话时用的 CSS：主进程建窗口时就已知道内容区尺寸（`initialCss`），直接拿它，
+ * 不等渲染层布局。深链冷启动时镜像页可能还没排版完，读 DOM 会得到一个错误的默认值，
+ * 开出一块错尺寸的显示（2026-09-28 实测 512x512/480）。
+ */
+function initialDisplay(info) {
+  const css = info?.initialCss;
+  return displayFor(css?.width > 0 && css?.height > 0 ? css : cssViewport());
 }
 
 /**
@@ -49,13 +66,13 @@ export async function startSession(
 ) {
   current.info = info;
   const adb = await acquireDeviceAdb(getServerClient(), info.serial);
-  const { client, display: initialDisplay } = await startScrcpy({
+  const { client, display: createdDisplay } = await startScrcpy({
     adb,
     serverPath: info.serverPath,
     config: info.config,
+    display: initialDisplay(info),
   });
   current.client = client;
-  current.info = info;
 
   const video = await client.videoStream;
   if (!video) throw new Error("scrcpy 未返回视频流");
@@ -137,14 +154,12 @@ export async function startSession(
 
   // 虚拟显示跟随窗口（scrcpy `--flex-display` / -x 语义）：官方 resizeDisplay
   // 控制消息驱动，窗口一变化虚拟显示即按窗口尺寸重排（排版随之变化）。
-  // 像素 = 窗口 CSS × 画质档位倍率（`config.quality`，开会话时定死）；1dp = 1 CSS px。
   //
-  // 只在尺寸真的变化时才下发：初始尺寸已用于创建虚拟显示（`connect.js` 的
-  // `newDisplay`），启动阶段再补发一条完全相同的请求会让服务端白走一次
-  // `virtualDisplay.resize()` → capture reset；而虚拟显示是
-  // `VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT`，每次配置变更设备上的应用都会
-  // 重新决定方向，表现出来就是镜像画面反复旋转。合并/去重逻辑见
-  // `src/mirror/displayFollow.js`。
+  // 只在尺寸真的变化时才下发：初始尺寸已用于创建虚拟显示（`initialDisplay()`），
+  // 启动阶段再补发一条完全相同的请求会让服务端白走一次 `virtualDisplay.resize()`
+  // → capture reset；而虚拟显示是 `VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT`，
+  // 每次配置变更设备上的应用都会重新决定方向，表现出来就是镜像画面反复旋转。
+  // 合并/去重逻辑见 `src/mirror/displayFollow.js`。
   //
   // 尺寸来自 documentElement（视口）的 ResizeObserver，而不是 window 的
   // `resize` 事件 + innerWidth：macOS 上窗口被系统缩放/吸附时，resize 事件
@@ -157,11 +172,11 @@ export async function startSession(
     onSent: () => onReflowSent?.(),
     send: (size) => controller?.resizeDisplay({ width: size.width, height: size.height }),
   });
-  follower.seed(initialDisplay);
+  follower.seed(createdDisplay);
   current.follower = follower;
 
   // observe() 会立即回调一次当前尺寸：窗口在会话建立期间变过的话，这次就会补上。
-  const observer = new ResizeObserver(() => follower.request(viewportDisplay()));
+  const observer = new ResizeObserver(() => follower.request(displayFor(cssViewport())));
   observer.observe(document.documentElement);
   current.resizeObserver = observer;
 

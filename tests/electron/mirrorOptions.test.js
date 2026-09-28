@@ -8,6 +8,7 @@ vi.mock('electron', () => ({
 
 const {
   buildMirrorOptions,
+  formatNewDisplay,
   parseBitRate,
   resolveNativeCodec,
   resolveRuntimePrefs,
@@ -29,9 +30,13 @@ describe('parseBitRate', () => {
 })
 
 describe('buildMirrorOptions', () => {
+  /** newDisplay 已改成必填（调用方按窗口 CSS × 画质档位算），测试里统一给一个。 */
+  const NEW_DISPLAY = { newDisplay: '1080x2400/320' }
+  const optionsFor = (config, overrides = {}) =>
+    buildMirrorOptions(config, { ...NEW_DISPLAY, ...overrides })
+
   it('默认转视频 + 控制，音频按设置默认关', () => {
-    const options = buildMirrorOptions(undefined)
-    expect(options).toMatchObject({
+    expect(optionsFor(undefined)).toMatchObject({
       video: true,
       audio: false,
       control: true,
@@ -39,60 +44,71 @@ describe('buildMirrorOptions', () => {
       videoCodec: 'h265',
       videoBitRate: 24_000_000,
       maxFps: 60,
-      newDisplay: '1280x960/160',
+      newDisplay: '1080x2400/320',
       flexDisplay: true,
     })
-    expect(options.audioCodec).toBeUndefined()
   })
 
   it('打开音频转发时才有音频参数', () => {
-    expect(buildMirrorOptions({ audio: true })).toMatchObject({
+    expect(optionsFor({ audio: true })).toMatchObject({
       video: true,
       audio: true,
       audioCodec: 'opus',
     })
   })
 
-  it('uses the newDisplay override from the renderer', () => {
-    const options = buildMirrorOptions(undefined, { newDisplay: '920x1800/320' })
-    expect(options.newDisplay).toBe('920x1800/320')
-    expect(options.flexDisplay).toBe(true)
+  it('缺少 newDisplay 直接抛错（不能有兜底尺寸：dpi 与任何档位都不一致）', () => {
+    expect(() => buildMirrorOptions(undefined, {})).toThrow(/newDisplay/)
+    expect(() => buildMirrorOptions(undefined)).toThrow(/newDisplay/)
   })
 
   it('转发音频时才请求 Opus；关掉就完全不建音频采集', () => {
     // 抓系统音频会抢设备侧音频焦点（在播的 app 会暂停、会话结束时又自动续播），
     // 所以设置里的音频开关必须是真的开关 —— 早先这里写死 audio: true。
-    expect(buildMirrorOptions({ audio: true }).audio).toBe(true)
-    expect(buildMirrorOptions({ audio: true }).audioCodec).toBe('opus')
+    expect(optionsFor({ audio: true }).audio).toBe(true)
+    expect(optionsFor({ audio: true }).audioCodec).toBe('opus')
     // 用户 2026-09-21 明确要「投屏时手机不出声」= scrcpy 默认（不开 --audio-dup）。
-    expect(buildMirrorOptions({ audio: true }).audioDup).toBeUndefined()
+    expect(optionsFor({ audio: true }).audioDup).toBeUndefined()
 
-    expect(buildMirrorOptions({ audio: false }).audio).toBe(false)
-    expect(buildMirrorOptions({ audio: false }).audioCodec).toBeUndefined()
-    expect(buildMirrorOptions({ audio: false }).audioDup).toBeUndefined()
+    expect(optionsFor({ audio: false }).audio).toBe(false)
+    expect(optionsFor({ audio: false }).audioCodec).toBeUndefined()
+    expect(optionsFor({ audio: false }).audioDup).toBeUndefined()
 
-    expect(buildMirrorOptions(undefined).audio).toBe(false)
+    expect(optionsFor(undefined).audio).toBe(false)
   })
 
   it('overrides the codec when the native engine requests it', () => {
-    expect(buildMirrorOptions({ videoCodec: 'h265' }, { videoCodec: 'h264' }).videoCodec).toBe(
-      'h264',
-    )
+    expect(optionsFor({ videoCodec: 'h265' }, { videoCodec: 'h264' }).videoCodec).toBe('h264')
   })
 
   it('屏幕策略只有「保持亮屏」进服务端选项，「启动后息屏」不进', () => {
-    expect(buildMirrorOptions({ screenMode: 'keepActive' }).keepActive).toBe(true)
+    expect(optionsFor({ screenMode: 'keepActive' }).keepActive).toBe(true)
 
     // turnOff 曾被错映射成 stayAwake —— 那是「保持亮屏」的同义词，语义正好相反。
     // 息屏靠会话建立后的 setDisplayPower(false) 控制消息（resolveRuntimePrefs.turnScreenOff）。
-    const turnOff = buildMirrorOptions({ screenMode: 'turnOff' })
+    const turnOff = optionsFor({ screenMode: 'turnOff' })
     expect(turnOff.keepActive).toBeUndefined()
     expect(turnOff.stayAwake).toBeUndefined()
     expect(resolveRuntimePrefs({ screenMode: 'turnOff' }).turnScreenOff).toBe(true)
 
-    const normal = buildMirrorOptions({ screenMode: 'normal' })
+    const normal = optionsFor({ screenMode: 'normal' })
     expect(normal.keepActive).toBeUndefined()
     expect(normal.stayAwake).toBeUndefined()
+  })
+})
+
+describe('formatNewDisplay', () => {
+  it('拼成 scrcpy 的 <宽>x<高>/<dpi>，小数取整', () => {
+    expect(formatNewDisplay({ width: 1080, height: 2400, dpi: 320 })).toBe('1080x2400/320')
+    expect(formatNewDisplay({ width: 1080.4, height: 2400.6, dpi: 319.5 })).toBe('1080x2401/320')
+  })
+
+  it('非法尺寸抛错：宁可不建显示，也不静默开出一块错密度的', () => {
+    for (const bad of [undefined, {}, { width: 0, height: 100, dpi: 100 }]) {
+      expect(() => formatNewDisplay(bad)).toThrow(/虚拟显示/)
+    }
+    expect(() => formatNewDisplay({ width: 100, height: 100, dpi: 0 })).toThrow(/虚拟显示/)
+    expect(() => formatNewDisplay({ width: 100, height: NaN, dpi: 160 })).toThrow(/虚拟显示/)
   })
 })
 

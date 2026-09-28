@@ -164,6 +164,10 @@ export async function startMirrorSession(request) {
   // 页面主动 invoke 拉取启动参数（避免 did-finish-load 时序竞态）。
   // `prefs` 也要带上：`turnScreenOff` 得由镜像页在会话建立后用控制消息
   // `setDisplayPower(false)` 下发（scrcpy 没有「启动即息屏」这个服务端选项）。
+  // `initialCss` = 窗口内容区尺寸：渲染层拿它算第一块虚拟显示。不能让它读 DOM ——
+  // 深链冷启动时页面还没排版完，`clientWidth` 会读到 Electron 默认的 512x512，
+  // 于是开出一块和窗口完全不符的显示（2026-09-28 实测）。
+  const content = session.win.getContentBounds();
   session.pendingInit = {
     id: session.id,
     serial,
@@ -172,6 +176,7 @@ export async function startMirrorSession(request) {
     serverPath,
     config: request?.config ?? null,
     prefs,
+    initialCss: { width: content.width, height: content.height },
   };
 
   return { id: session.id, serial, packageName, label, startedAt: session.startedAt };
@@ -253,7 +258,7 @@ ipcMain.on(CHANNELS.mirrorState, (_event, payload) => {
     sessions.delete(session.id);
     // 会话已经没了（设备断开 / server 挂了），归属要一起放手。这里不 release 的话，
     // 窗口随后 closed → stopMirrorSession 会因为记录已删而什么都做不到。
-    }
+  }
 });
 
 // 断开设备或退出时，结束对应设备的自研镜像会话（直接关窗口）。

@@ -128,7 +128,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 4. 修复：`src/mirror/displayFollow.js` 记录「已下发尺寸」，相同尺寸直接丢弃；多次变化在 150ms 合并窗口内只发最后一次（服务端另有 300ms 去抖 `DisplayResizeDebouncer`）。`connect.js` 的 `startScrcpy` 现在返回实际用于创建虚拟显示的尺寸，供 `seed()` 初始化。
 5. 验证：HUD 的 `chg`（视频尺寸变化次数）在启动后应保持 0；拖动窗口时增长一次且画面不反复翻正。
 
-排查记录（2026-09-22 窗口拖大后画面被切 / 超出窗口）——**问题仍未解决**：
+排查记录（2026-09-22 窗口拖大后画面被切 / 超出窗口）——**2026-09-28 结案：用户已找到原因，不再追查；根因未记入本仓库**：
 
 
 
@@ -140,7 +140,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 
 4. 试过并已回退：把上述三处改成按比例收缩 `constrain(constraints, true)`，重建替换 `resources/scrcpy/scrcpy-server`。几何上确实生效（同一批请求 5600x5600 → 4320x4320、4320x9000 → 3932x8192，比例全保住；音频照常），**但用户实测症状照旧，所以整个改动已回退**（server 回到 85b7fb1 之前那份、fork 源码同步改回 `false`）。回退时顺便验了一件有用的小事：从回退后的 fork 源码重建，产物哈希与仓库里那份**逐字节相同**（`2df957b2…`，98893 字节），说明 server 构建是可复现的、源码树与随包二进制对得上。
 
-5. 下一步该查什么（都还没验证）：先弄清症状到底是哪一种；若是窗口跑到屏幕外/贴边 → 看 Electron 侧窗口边界（`electron/mirror/session.js` 的初始 `mirrorWindowBounds` 只约束**初始**尺寸，用户手动拖拽没有 workArea 上限）；若是画面在窗口内被裁 → 看 contain-fit 用的尺寸来源（`src/mirror/App.vue` `syncCanvasBox` 取的是解码器帧尺寸，与 `resizeDisplay` 之后的真实显示尺寸之间是否有一次没同步）。
+5. 下一步该查什么（**2026-09-28 起作废**：用户已找到原因，两种读法不必再区分，根因未入库）：原先列的是——先弄清症状到底是哪一种；若是窗口跑到屏幕外/贴边 → 看 Electron 侧窗口边界（`electron/mirror/session.js` 的初始 `mirrorWindowBounds` 只约束**初始**尺寸，用户手动拖拽没有 workArea 上限）；若是画面在窗口内被裁 → 看 contain-fit 用的尺寸来源（`src/mirror/App.vue` `syncCanvasBox` 取的是解码器帧尺寸，与 `resizeDisplay` 之后的真实显示尺寸之间是否有一次没同步）。
 
 
 
@@ -162,7 +162,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
    - 遮罩收尾改成**等关键帧**（`createReflowGate`：下发过 resize 之后要凑齐 configuration + 关键帧
      这一对，时间到了但没等到就再延 150ms，总时长仍被 3s 上限卡住）。
 5. 未解的代价与下一步：scrcpy 的 `resizeDisplay` 不带 dpi，dpi 在建显示时定死 → **档位只在开会话时
-   生效**（中途换档会造成 1dp ≠ 1 CSS px），所以 `viewportDisplay()` 固定读会话建立时那份 config。
+   生效**（中途换档会造成 1dp ≠ 1 CSS px），所以 `displayFor()` 固定读会话建立时那份 config。
    AndroMeld 的 resize 命令带 dpi（三个 int w/h/dpi），我们要跟就得扩自己的协议 —— 那才能真正做到
    "拖窗口任意大也不掉清晰度/不漂移"。
 
@@ -200,9 +200,10 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
    - h264：resize 生效但**高度被钳到 ≤1024**（2000x1200→2000x1024，比例丢）→ 显示尺寸要按设备上限**等比**预钳。
    - 快照易被强杀打坏（`goldfish_pipe`/`goldfish_address_space` 加载失败）→ `-no-snapshot-load` 冷启动可救。
    - WiFi 虚拟热点（AndroidWifi）会死（scan 空）→ `adb reboot` 救不回，需重启模拟器进程。
-6. **已知未落地的修复**：deep-link 冷启动开会话时初始虚拟显示 = 512x512/480 —— `startScrcpy` 读
-   `document.documentElement.clientWidth/Height` 拿到布局完成前的占位值。修法已验证（`typecheck` + 全量测试绿，
-   未入库）：`mirrorInitGet` 返回 `win.getContentBounds()` 作 `initialCss`，`connect.js` 优先用它、DOM 兜底。
+6. ~~**已知未落地的修复**~~ **已落地（2026-09-28）**：deep-link 冷启动开会话时初始虚拟显示 = 512x512/480 ——
+   `startScrcpy` 读 `document.documentElement.clientWidth/Height` 拿到布局完成前的占位值。现在显示尺寸的公式只在
+   `src/mirror/direct-session.js` 的 `displayFor(css)` 一处（`connect.js` 改为接收算好的 `display`），建显示用的
+   CSS 由 `mirrorInitGet` 返回的 `initialCss`（主进程 `win.getContentBounds()`）给出，读不到才回落 DOM。
 
 排查记录（2026-09-28 画面「卡住」三类根因）——**目前仓库里零防线，问题开放**：
 
