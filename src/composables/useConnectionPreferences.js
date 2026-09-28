@@ -8,6 +8,3 @@ import { ref } from "vue";
 /** 连接中断后是否自动尝试重连。默认开启。 */
 export const autoReconnect = ref(true);
 
-export function useConnectionPreferences() {
-  return { autoReconnect };
-}

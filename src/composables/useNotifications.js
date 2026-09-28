@@ -109,7 +109,6 @@ export function notify(options = {}) {
 
 notify.success = (message, options = {}) => notify({ ...options, type: "success", message });
 notify.error = (message, options = {}) => notify({ ...options, type: "error", message });
-notify.info = (message, options = {}) => notify({ ...options, type: "info", message });
 notify.loading = (message, options = {}) => notify({ ...options, type: "loading", message });
 notify.dismiss = dismiss;
 notify.update = update;
@@ -123,6 +122,3 @@ export function notifyError(error, options = {}) {
   return notify.error(readableError(error), options);
 }
 
-export function useNotifications() {
-  return { toast, notify, dismiss, update };
-}

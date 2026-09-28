@@ -7,15 +7,8 @@ import { fileURLToPath } from "node:url";
 import { CHANNELS } from "./ipcContract.js";
 import { browse } from "./mdns.js";
 import { pickStableId } from "./deviceIdentity.js";
-import { DEFAULT_SCRCPY_CONFIG, normalizeScrcpyConfig } from "./scrcpyConfig.js";
-import { sanitizeIcon, iconPngBuffer, MAX_ICON_BYTES, PNG_DATA_URL_PREFIX } from "./iconImage.js";
+import { iconPngBuffer, MAX_ICON_BYTES, PNG_DATA_URL_PREFIX } from "./iconImage.js";
 import helperVersion from "../resources/helper-app.version.json" with { type: "json" };
-
-// 归一化逻辑在 ./scrcpyConfig.js（主进程参数持久化），这里转发导出保持既有引用。
-export { DEFAULT_SCRCPY_CONFIG, normalizeScrcpyConfig };
-
-// 图标校验在 ./iconImage.js，应用列表缓存也用它，这里转发导出保持既有引用。
-export { sanitizeIcon };
 
 // ---------------------------------------------------------------------------
 // 资源路径
@@ -1472,25 +1465,6 @@ export async function getPhysicalScreenSize(serial) {
   return { width: Number(match[1]), height: Number(match[2]) };
 }
 
-/**
- * 用 launcher intent 把应用拉到前台（不指定 activity，包名通用）。
- * @param {string} serial
- * @param {string} packageName
- */
-export async function launchApp(serial, packageName) {
-  assertSerial(serial);
-  const pkg = normalizePackageName(packageName);
-  await ensureServer();
-  const { code, stderr } = await adbExecSafe(
-    "-s",
-    serial,
-    "shell",
-    `monkey -p ${pkg} -c android.intent.category.LAUNCHER 1`,
-  );
-  if (code !== 0) throw new Error(stderr || "启动应用失败");
-  return true;
-}
-
 /** 强制停止应用。 */
 export async function forceStopApp(serial, packageName) {
   assertSerial(serial);
@@ -1843,7 +1817,7 @@ ipcMain.handle(CHANNELS.adbGetDeviceState, (_, serial) => getDeviceState(serial)
 ipcMain.handle(CHANNELS.adbReconnect, (_, serial) => reconnectDevice(serial));
 
 // 配对设备
-ipcMain.handle(CHANNELS.adbPair, async (event, device, password) => {
+ipcMain.handle(CHANNELS.adbPair, async (_, device, password) => {
   return adbExec({ timeoutMs: ADB_CONNECT_TIMEOUT_MS }, "pair", device.address, password);
 });
 
@@ -1888,7 +1862,7 @@ ipcMain.handle(CHANNELS.adbDisconnect, async (_, rawSerial) => {
 });
 
 // 安装 Helper
-ipcMain.handle(CHANNELS.adbInstallHelper, async (event, serial) => {
+ipcMain.handle(CHANNELS.adbInstallHelper, async (_, serial) => {
   return installHelper(serial);
 });
 
@@ -1897,27 +1871,27 @@ ipcMain.handle(CHANNELS.adbInstallHelper, async (event, serial) => {
  * one-shot, so this resolves with the complete list.
  * @param {string} address
  */
-ipcMain.handle(CHANNELS.adbLoadInstalledApps, async (event, address) => {
+ipcMain.handle(CHANNELS.adbLoadInstalledApps, async (_, address) => {
   return loadInstalledApps(address);
 });
 
 // 批量获取应用图标（渲染层按每组 20 个包名调用）
-ipcMain.handle(CHANNELS.adbGetAppIcons, async (event, address, packages) => {
+ipcMain.handle(CHANNELS.adbGetAppIcons, async (_, address, packages) => {
   return getAppIcons(address, packages);
 });
 
 // 卸载 Helper（部分 ROM 卸载成功也返回 code 1 + Failure，输出仅记录，不作判断）
-ipcMain.handle(CHANNELS.adbUninstallHelper, async (event, address) => {
+ipcMain.handle(CHANNELS.adbUninstallHelper, async (_, address) => {
   return uninstallHelper(address);
 });
 
 // 清除该设备的应用列表缓存
-ipcMain.handle(CHANNELS.adbDeleteAppCache, async (event, address) => {
+ipcMain.handle(CHANNELS.adbDeleteAppCache, async (_, address) => {
   return deleteAppCache(address);
 });
 
 // 读取该设备的应用列表缓存，供界面秒开
-ipcMain.handle(CHANNELS.adbGetCachedApps, async (event, address) => {
+ipcMain.handle(CHANNELS.adbGetCachedApps, async (_, address) => {
   return getCachedApps(address);
 });
 

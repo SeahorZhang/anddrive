@@ -9,10 +9,12 @@ const {
   CACHE_MAX_AGE_MS,
   CACHE_VERSION,
   sanitizeApp,
-  sanitizeIcon,
   sanitizeSnapshot,
   serializeSnapshot,
 } = await import('../../electron/adb.js')
+
+// 图标校验住在 iconImage.js，不再借道 adb.js 的再导出。
+const { sanitizeIcon } = await import('../../electron/iconImage.js')
 
 const NOW = 2_000_000_000_000
 const iconUrl = `data:image/png;base64,${Buffer.from('png').toString('base64')}`

@@ -23,7 +23,6 @@ const props = defineProps({
 const draft = reactive({ ...SCRCPY_DEFAULTS })
 const saveAsDefault = ref(false)
 const launching = ref(false)
-draft.engine = 'native'
 
 const error = ref('')
 

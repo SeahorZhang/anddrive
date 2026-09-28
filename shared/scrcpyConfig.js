@@ -10,8 +10,6 @@ export const DEFAULT_SCRCPY_CONFIG = Object.freeze({
   screenMode: "keepActive",
   alwaysOnTop: false,
   fullscreen: false,
-  /** 默认引擎：`native` 自研渲染引擎 · `scrcpy` 原生窗口（兼容回退）。 */
-  engine: "native",
   /** 画质档位：见 DISPLAY_QUALITY_TIERS。默认 sharp = 与老版本一致（倍率 3）。 */
   quality: "sharp",
 });
@@ -76,13 +74,14 @@ export function computeDisplayMetrics(cssWidth, cssHeight, quality) {
 }
 
 const VIDEO_CODECS = new Set(["h264", "h265", "av1"]);
-const ENGINES = new Set(["scrcpy", "native"]);
 const SCREEN_MODES = new Set(["keepActive", "turnOff", "normal"]);
 const QUALITIES = new Set(Object.keys(DISPLAY_QUALITY_TIERS));
 const BIT_RATE_RE = /^\d{1,4}[KMG]?$/;
 
 /**
  * 归一化投屏参数：非法值静默回落到默认值，避免把任意字符串带进命令行。
+ * 已废弃的字段（`engine`、`tablet` 那类历史存盘键）在这里被**静默丢弃** ——
+ * 老用户的配置文件因此无需迁移，下次保存就干净了。
  * @param {unknown} input
  * @returns {typeof DEFAULT_SCRCPY_CONFIG}
  */
@@ -107,6 +106,5 @@ export function normalizeScrcpyConfig(input) {
     quality: QUALITIES.has(raw.quality) ? raw.quality : DEFAULT_SCRCPY_CONFIG.quality,
     alwaysOnTop: raw.alwaysOnTop === true,
     fullscreen: raw.fullscreen === true,
-    engine: ENGINES.has(raw.engine) ? raw.engine : DEFAULT_SCRCPY_CONFIG.engine,
   };
 }

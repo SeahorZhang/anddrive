@@ -32,7 +32,6 @@
  * @property {string} screenMode keepActive | turnOff | normal
  * @property {boolean} alwaysOnTop 窗口置顶
  * @property {boolean} fullscreen 全屏启动
- * @property {string} engine native | scrcpy
  */
 
 /**
@@ -44,29 +43,6 @@
  * @property {string} label
  * @property {ScrcpyConfig} [config]
  * @property {string} [iconUrl] 应用图标（PNG data URL），用作镜像窗口图标
- */
-
-/**
- * 主进程维护的运行中镜像会话快照。
- * @typedef {object} ScrcpySession
- * @property {string} id
- * @property {number | null} pid
- * @property {string} serial
- * @property {string} packageName
- * @property {string} label
- * @property {number} startedAt
- */
-
-/**
- * 自研客户端镜像会话快照（无独立窗口 pid，窗口由主进程持有）。
- * @typedef {object} MirrorSession
- * @property {string} id
- * @property {string} serial
- * @property {string} packageName
- * @property {string} label
- * @property {number} startedAt
- * @property {number} codec
- * @property {string} codecName
  */
 
 export {}

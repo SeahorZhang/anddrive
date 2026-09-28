@@ -10,6 +10,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
 }))
 
+// 纯函数从它住的地方 import（shared/），不借道主进程模块的再导出。
 const {
   DEFAULT_SCRCPY_CONFIG,
   normalizeScrcpyConfig,
@@ -17,6 +18,9 @@ const {
   DISPLAY_BASE_DPI,
   DISPLAY_PIXEL_SCALE,
   DISPLAY_QUALITY_TIERS,
+} = await import('../../shared/scrcpyConfig.js')
+
+const {
   loadScrcpyConfig,
   saveScrcpyConfig,
   currentScrcpyConfig,
@@ -42,7 +46,6 @@ describe('normalizeScrcpyConfig', () => {
         screenMode: 'turnOff',
         alwaysOnTop: true,
         fullscreen: true,
-        engine: 'native',
         quality: 'native',
       }),
       // 基线 = 默认值 + 被覆盖的字段：以后加字段不用回来补这张表。
@@ -55,7 +58,6 @@ describe('normalizeScrcpyConfig', () => {
       screenMode: 'turnOff',
       alwaysOnTop: true,
       fullscreen: true,
-      engine: 'native',
       quality: 'native',
     })
   })
@@ -65,13 +67,34 @@ describe('normalizeScrcpyConfig', () => {
     expect(normalizeScrcpyConfig({ quality: 3 }).quality).toBe(DEFAULT_SCRCPY_CONFIG.quality)
   })
 
-  it('drops removed legacy fields (newDisplay / renderFit / flex / tablet)', () => {
+  // 从 scrcpy.test.js 折过来：这几条是原来那份独有的，别跟着文件一起丢。
+  it('拒绝会带进命令行的畸形值', () => {
+    const config = normalizeScrcpyConfig({
+      bitRate: '24M; rm',
+      videoCodec: 'mpeg2',
+      screenMode: 'explode',
+      audio: 'yes',
+    })
+    expect(config.bitRate).toBe(DEFAULT_SCRCPY_CONFIG.bitRate)
+    expect(config.videoCodec).toBe(DEFAULT_SCRCPY_CONFIG.videoCodec)
+    expect(config.screenMode).toBe(DEFAULT_SCRCPY_CONFIG.screenMode)
+    expect(config.audio).toBe(false)
+  })
+
+  it('maxFps 只接受整数并夹在 1..240', () => {
+    expect(normalizeScrcpyConfig({ maxFps: 0 }).maxFps).toBe(1)
+    expect(normalizeScrcpyConfig({ maxFps: 999 }).maxFps).toBe(240)
+    expect(normalizeScrcpyConfig({ maxFps: 59.5 }).maxFps).toBe(DEFAULT_SCRCPY_CONFIG.maxFps)
+  })
+
+  it('drops removed legacy fields (newDisplay / renderFit / flex / tablet / engine)', () => {
     expect(
       normalizeScrcpyConfig({
         newDisplay: '1920x1080/320',
         renderFit: 'unscaled',
         flex: true,
         tablet: true,
+        engine: 'scrcpy',
       }),
     ).toEqual({ ...DEFAULT_SCRCPY_CONFIG })
   })

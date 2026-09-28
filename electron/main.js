@@ -21,7 +21,6 @@ import { loadScrcpyConfig, currentScrcpyConfig } from "./scrcpyConfig.js";
 import "./permissions.js";
 import "./favorites.js";
 import { installAppMenu } from "./menu.js";
-import "./mirror/session.js";
 import { CHANNELS } from "./ipcContract.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));

@@ -2,14 +2,7 @@ import { app, ipcMain } from "electron";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { CHANNELS } from "./ipcContract.js";
-import {
-  DEFAULT_SCRCPY_CONFIG,
-  normalizeScrcpyConfig,
-  computeDisplayMetrics,
-  DISPLAY_BASE_DPI,
-  DISPLAY_PIXEL_SCALE,
-  DISPLAY_QUALITY_TIERS,
-} from "../shared/scrcpyConfig.js";
+import { DEFAULT_SCRCPY_CONFIG, normalizeScrcpyConfig } from "../shared/scrcpyConfig.js";
 
 // ---------------------------------------------------------------------------
 // scrcpy 全局默认参数（scrcpyConfig）
@@ -20,16 +13,6 @@ import {
 // 之后在设置页改过的置顶等参数不会生效）。
 // 纯函数部分（normalize/默认值）已抽到 shared/scrcpyConfig.js 供渲染层复用。
 // ---------------------------------------------------------------------------
-
-export {
-  DEFAULT_SCRCPY_CONFIG,
-  normalizeScrcpyConfig,
-  computeDisplayMetrics,
-  DISPLAY_BASE_DPI,
-  DISPLAY_PIXEL_SCALE,
-  DISPLAY_QUALITY_TIERS,
-};
-
 
 const storePath = () => path.join(app.getPath("userData"), "scrcpy-config.json");
 

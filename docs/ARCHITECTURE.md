@@ -38,7 +38,7 @@ Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的无线 AD
 
 | 链路 | 入口 | 事实 |
 | --- | --- | --- |
-| 扫码配对 | `src/components/AddDeviceDialog.vue:16-35` | 就在组件里，**没有 `usePairing` composable**。随机 SSID+密码 → `uqr` 出 `WIFI:T:ADB;…` SVG → `findDeviceApi()` 等 `_adb-tls-pairing._tcp` → `pairApi` → `resolveConnectAddressApi(name)` → `emit('paired')` 交给父层。状态只有 `idle|waiting|error`，成功分支直接交给外面 |
+| 扫码配对 | `src/components/AddDeviceDialog.vue:38-95` | 就在组件里，**没有 `usePairing` composable**。随机 SSID+密码 → `uqr` 出 `WIFI:T:ADB;…` SVG → `findDeviceApi()` 等 `_adb-tls-pairing._tcp` → `pairApi` → `resolveConnectAddressApi(name)` → `emit('paired')` 交给父层。状态只有 `idle|waiting|error`，成功分支直接交给外面 |
 | 发现与接管 | `src/App.vue:217-237` `discoverLoop` | 1s 轮询 `adb mdns services` + `adb devices`；连上即停；令牌递增让后一次调用取代前一次。**扫码弹窗开着时不接管**（`:223-226`，否则右上角列表被清空） |
 | 心跳与重连 | `src/App.vue:59-73` / `:122-145` | 5s 查 `getDeviceState`，3s 退避重连 ×10。超时被 `adb.js` 归为 `offline`，所以心跳真能发现掉线 |
 | 设备标识 | `electron/deviceIdentity.js` | 收藏、应用缓存、快捷方式都按 `ro.serialno` **稳定标识**存，落盘别名表 `device-aliases.json` 反查当前传输地址（无线重连一次地址就换，早期按地址存会裂成多个桶） |
@@ -52,8 +52,8 @@ Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的无线 AD
 
 ## 4. 刻意设计（别当冗余清理）
 
-- **adb 超时阶梯**（`electron/adb.js:46-50`）：默认 15s / connect-pair 45s / 安装卸载拉文件 5min。transport 半死时子进程既不退出也不报错，全靠这层兜住并把超时归为 `offline`。
-- **ROM 怪癖嗅探**：卸载「报 Failure 却退出 1」、装 Helper 与 `clearAppData` 靠 stdout 里 `/Success/i` 判定、`exportApk` 靠 `N files pulled` 正则、helper 输出取最外层 `{`…`}` 以躲 linker/ART 噪声（`adb.js:861-871`、`:929-945`、`:1198-1214`、`:1279-1280`）。这些丑但**是真需要的**。
+- **adb 超时阶梯**（`electron/adb.js` 顶部的 `ADB_CONNECT_TIMEOUT_MS` / `ADB_TRANSFER_TIMEOUT_MS` 等常量）：默认 15s / connect-pair 45s / 安装卸载拉文件 5min。transport 半死时子进程既不退出也不报错，全靠这层兜住并把超时归为 `offline`。
+- **ROM 怪癖嗅探**：卸载「报 Failure 却退出 1」、装 Helper 与 `clearAppData` 靠 stdout 里 `/Success/i` 判定、`exportApk` 靠 `N files pulled` 正则、helper 输出取最外层 `{`…`}` 以躲 linker/ART 噪声（都在 `adb.js`：`uninstallHelper` / `installHelper` / `clearAppData` / `exportApk` 与 `normalizeListOutput`）。这些丑但**是真需要的**。
 - **投屏时手机静音**：服务端 `ROUTE_FLAG_LOOP_BACK`（不传 `audio_dup`）是刻意的 —— 只回环、不在本机渲染。副作用也已知：会话结束、AudioPolicy 撤销后手机当场出声，这不是 bug。要两边同时出声才需要 `audioDup`。
 - **`displayFollow` 用 debounce 不用 throttle**：`RESIZE_SETTLE_MS = 250`（`src/mirror/displayFollow.js:13-23`）。真机量过：throttle 每 150ms 发一步，服务端 300ms 去抖**并没有**合掉中间值，每一步都真的重排虚拟显示 → 画面"转好几次"。相同尺寸直接丢弃，因为重复 `resizeDisplay` 会让服务端白走一次 `virtualDisplay.resize()` → capture reset。
 - **`debug.anddrive.vd.isr` prop**：随包 server 是自编 scrcpy 4.0（`VirtualDisplayConfig.setIgnoreActivitySizeRestrictions`），该 prop 默认 `"1"`、留作 A/B 逃生口，系统缺 @hide API 时自动退回公开 `createVirtualDisplay`。既定接口，不要改成启动参数。

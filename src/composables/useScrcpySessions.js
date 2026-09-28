@@ -40,6 +40,3 @@ export function stopScrcpySessionPolling() {
   timer = null;
 }
 
-export function useScrcpySessions() {
-  return { mirrorSessions, refreshScrcpySessions };
-}

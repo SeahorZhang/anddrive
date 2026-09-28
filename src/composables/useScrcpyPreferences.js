@@ -59,6 +59,3 @@ export function resetScrcpyConfig() {
   Object.assign(scrcpyConfig, SCRCPY_DEFAULTS);
 }
 
-export function useScrcpyPreferences() {
-  return { scrcpyConfig, resetScrcpyConfig };
-}
