@@ -1,5 +1,4 @@
 <script setup>
-import { Icon } from '@iconify/vue'
 import BaseButton from '../BaseButton.vue'
 import { getDeviceStatsApi } from '@/api'
 import { readableError } from '@/utils/errors'
@@ -8,7 +7,6 @@ const props = defineProps({
   serial: { type: String, default: '' },
 })
 
-const expanded = ref(false)
 const loading = ref(false)
 const error = ref('')
 const stats = ref(null)
@@ -26,17 +24,16 @@ async function load(force = false) {
   }
 }
 
-function toggle() {
-  expanded.value = !expanded.value
-  if (expanded.value && !stats.value) load()
-}
+// 本组件只在弹层打开时被挂载 —— 所以「每次打开都是新数据」就是全部的加载时机。
+// force：主进程那份设备信息缓存 30 秒，不强制刷新会看到上一次打开时的读数。
+onMounted(() => load(true))
 
 watch(
   () => props.serial,
   () => {
     stats.value = null
     error.value = ''
-    if (expanded.value) load()
+    load()
   },
 )
 
@@ -76,12 +73,6 @@ function cpuText() {
   return parts.join(' · ') || '—'
 }
 
-function updatedText() {
-  const at = stats.value?.updatedAt
-  if (!at) return '—'
-  return new Date(at).toLocaleTimeString('zh-CN', { hour12: false })
-}
-
 const storagePercent = computed(() => {
   const value = stats.value?.storage?.percentUsed
   return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0
@@ -89,20 +80,8 @@ const storagePercent = computed(() => {
 </script>
 
 <template>
-  <section class="mb-3 shrink-0 overflow-hidden rounded-[12px] border border-black/[0.06] bg-white/60 backdrop-blur">
-    <button class="flex w-full cursor-pointer items-center gap-2 px-3.5 py-2 text-left outline-none" @click="toggle">
-      <Icon icon="lucide:cpu" :width="13" :height="13" class="shrink-0 text-black/40" />
-      <span class="shrink-0 text-[12px] font-medium text-black/65">设备信息</span>
-      <span v-if="stats" class="ml-1 truncate text-[11px] text-black/40">
-        {{ stats.model || '未知型号' }}
-        <template v-if="stats.battery?.level != null"> · 电量 {{ stats.battery.level }}%</template>
-        <template v-if="stats.storage?.percentUsed != null"> · 存储 {{ stats.storage.percentUsed }}%</template>
-      </span>
-      <Icon :icon="expanded ? 'lucide:chevron-up' : 'lucide:chevron-down'" :width="14" :height="14"
-        class="ml-auto shrink-0 text-black/35" />
-    </button>
-
-    <div v-if="expanded" class="border-t border-black/[0.06] px-3.5 py-3">
+  <!-- 外壳（圆角/描边/阴影）由 PopoverContent 给，这里只管内容 -->
+  <div class="text-[12px]">
       <div v-if="loading && !stats" class="flex items-center justify-center gap-2 py-6 text-[12px] text-black/45">
         <span class="size-3.5 animate-spin rounded-full border-2 border-black/15 border-t-black/45" />
         正在读取设备信息…
@@ -170,14 +149,6 @@ const storagePercent = computed(() => {
           </div>
         </div>
 
-        <div class="mt-3 flex items-center justify-between">
-          <span class="text-[10px] text-black/35">更新于 {{ updatedText() }}</span>
-          <button class="cursor-pointer text-[11px] text-[#007aff] outline-none hover:underline disabled:opacity-50"
-            :disabled="loading" @click="load(true)">
-            {{ loading ? '刷新中…' : '刷新' }}
-          </button>
-        </div>
       </template>
-    </div>
-  </section>
+  </div>
 </template>
