@@ -31,6 +31,8 @@ export const scrcpyServerPath = () => path.join(resourcesBase(), "scrcpy", "scrc
 // ---------------------------------------------------------------------------
 
 let serverStarted = false;
+/** 在途的 `start-server`；并发调用共用它，避免同时 fork 多个 adb 抢 5037。 */
+let pendingServerStart = null;
 
 /**
  * adb 子进程超时。transport 半死（手机休眠、换地址、Wi-Fi 抖动）时 `adb` 会**一直挂着**：
@@ -75,17 +77,26 @@ function adbTimeoutError() {
   return Object.assign(new Error(ADB_TIMEOUT_MESSAGE), { code: "ETIMEDOUT" });
 }
 
-export async function ensureServer() {
-  if (serverStarted) return;
-  await new Promise((resolve, reject) => {
+/**
+ * 起 adb 守护进程。**并发调用必须共用同一次启动**：标记要等 `start-server` 返回才置位，
+ * 这段时间里每个调用者都会各自 fork 一个 adb，第二个会死在
+ * `could not install *smartsocket* listener: Address already in use` → `ADB server didn't ACK`
+ * → 上层报「发现设备失败」（真机踩过）。失败时清空在途 promise，让后续调用能重试。
+ */
+export function ensureServer() {
+  if (serverStarted) return Promise.resolve();
+  pendingServerStart ??= new Promise((resolve, reject) => {
     execFile(adbPath(), ["start-server"], { timeout: ADB_TIMEOUT_MS }, (err) => {
-      if (err) reject(err);
-      else {
-        serverStarted = true;
-        resolve();
+      pendingServerStart = null;
+      if (err) {
+        reject(err);
+        return;
       }
+      serverStarted = true;
+      resolve();
     });
   });
+  return pendingServerStart;
 }
 
 /** @param {...(string | AdbCallOptions)} args */
