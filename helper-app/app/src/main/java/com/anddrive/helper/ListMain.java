@@ -41,7 +41,7 @@ public final class ListMain {
             PackageManager pm = context.getPackageManager();
 
             // `--icons pkg1,pkg2,...` returns icons for exactly those packages;
-            // no args lists all launchable third-party apps with labels only.
+            // no args lists every launchable app with labels only.
             if (args.length >= 2 && "--icons".equals(args[0])) {
                 System.out.println(iconMode(pm, args[1].split(",")));
                 System.out.flush();
@@ -55,8 +55,10 @@ public final class ListMain {
             for (ResolveInfo info : activities) {
                 ApplicationInfo appInfo =
                         info.activityInfo != null ? info.activityInfo.applicationInfo : null;
-                if (appInfo == null || (appInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0)
-                    continue;
+                // 不按 FLAG_SYSTEM 过滤：HyperOS 的「设置」带 SYSTEM 位，日历/计算器因为被更新过
+                // 反而不带 —— 按这个位筛会让列表看起来随机缺项，且每次 OTA 都可能变。
+                // 凡 LAUNCHER 拉得起的都列（含系统应用）。
+                if (appInfo == null) continue;
                 String pkg = appInfo.packageName;
                 // Guard against the helper ever listing itself.
                 if (SELF_PACKAGE.equals(pkg) || unique.containsKey(pkg)) continue;
@@ -64,6 +66,9 @@ public final class ListMain {
                 JSONObject obj = new JSONObject();
                 obj.put("packageName", pkg);
                 obj.put("label", safeLabel(pm, info, pkg));
+                // 系统应用照样列出来，但带上标志：卸载 / 清除数据 对它们本来就会失败，
+                // 让桌面端把这两项禁掉，而不是让用户点了才知道。
+                obj.put("system", (appInfo.flags & ApplicationInfo.FLAG_SYSTEM) != 0);
                 unique.put(pkg, obj);
             }
 

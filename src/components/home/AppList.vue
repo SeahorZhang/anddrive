@@ -12,7 +12,6 @@ import {
   getAppIconsApi,
   uninstallHelperApi,
   deleteAppCacheApi,
-  forceStopAppApi,
   clearAppDataApi,
   uninstallAppApi,
   getAppInfoApi,
@@ -22,6 +21,7 @@ import {
 } from '@/api'
 import { notify, notifyError } from '@/composables/useNotifications'
 import { useFavorites } from '@/composables/useFavorites'
+import { useAppSearch } from '@/composables/useAppSearch'
 import { scrcpyConfig } from '@/composables/useScrcpyPreferences'
 import { refreshScrcpySessions } from '@/composables/useScrcpySessions'
 import { copyToClipboard } from '@/utils/clipboard'
@@ -38,8 +38,10 @@ const ICON_BATCH_CONCURRENCY = 3
 /** 图标缓存有效期：7 天内不重新拉取 */
 const ICON_REFRESH_MS = 7 * 24 * 60 * 60 * 1000
 
+// 禁用项要有样子：reka-ui 在 disabled 时打 `data-disabled`，这里靠它换光标并压暗，
+// 否则「系统应用」那两项看着照样能点。
 const MENU_ITEM_CLASS =
-  'flex cursor-pointer items-center gap-2 rounded-[7px] px-2 py-1.5 text-[12px] text-black/75 outline-none select-none data-[highlighted]:bg-black/[0.06]'
+  'flex cursor-pointer items-center gap-2 rounded-[7px] px-2 py-1.5 text-[12px] text-black/75 outline-none select-none data-[highlighted]:bg-black/[0.06] data-[disabled]:cursor-default data-[disabled]:opacity-45 data-[disabled]:text-black/45'
 const MENU_ITEM_DANGER_CLASS = 'text-[#ff3b30]'
 
 /** 图标缺失或已过期才需要重新获取 */
@@ -55,25 +57,19 @@ const searchText = ref('')
 const busyPackage = ref('')
 
 /** 按名称过滤后的应用列表，空搜索时返回全部 */
-const filteredApps = computed(() => {
-  const q = searchText.value.trim().toLowerCase()
-  if (!q) return apps.value
-  return apps.value.filter((app) => app.label.toLowerCase().includes(q))
-})
+const filteredApps = useAppSearch(() => apps.value, searchText)
 
 /** 收藏（置顶）状态，按设备隔离并跨重启保留 */
 const { isFavorite, toggleFavorite } = useFavorites(() => props.address)
 
-/** 收藏单独分组置顶，其余归入“全部应用” */
+/** 收藏的排在前面，两组之间只画一条横线，不写标题 */
 const sections = computed(() => {
   const list = filteredApps.value
   const favoriteApps = list.filter((app) => isFavorite(app.packageName))
   const otherApps = list.filter((app) => !isFavorite(app.packageName))
   const result = []
-  if (favoriteApps.length) result.push({ key: 'favorites', title: '收藏', apps: favoriteApps })
-  if (otherApps.length) {
-    result.push({ key: 'all', title: favoriteApps.length ? '全部应用' : '', apps: otherApps })
-  }
+  if (favoriteApps.length) result.push({ key: 'favorites', apps: favoriteApps })
+  if (otherApps.length) result.push({ key: 'all', apps: otherApps })
   return result
 })
 
@@ -243,17 +239,6 @@ async function withBusy(app, task) {
   }
 }
 
-async function forceStopApp(app) {
-  await withBusy(app, async () => {
-    try {
-      await forceStopAppApi(props.address, app.packageName)
-      notify.success(`已强制停止 ${app.label}`)
-    } catch (error) {
-      notifyError(error, { title: `强制停止 ${app.label} 失败` })
-    }
-  })
-}
-
 async function copyPackageName(app) {
   try {
     const ok = await copyToClipboard(app.packageName)
@@ -389,7 +374,7 @@ function confirmUninstall(app) {
       <div class="relative flex h-8 min-w-0 flex-1 items-center">
         <Icon icon="lucide:search" :width="14" :height="14"
           class="pointer-events-none absolute left-2.5 text-black/35" />
-        <input v-model="searchText" type="text" placeholder="搜索应用"
+        <input v-model="searchText" type="text" placeholder="搜索应用 · 名字 / 拼音 / 包名"
           class="h-full w-full rounded-[8px] bg-black/[0.05] pr-8 pl-8 text-[12px] text-black/80 transition-colors outline-none placeholder:text-black/30 focus:bg-black/[0.07] focus:ring-2 focus:ring-[#007aff]/35" />
         <button v-if="searchText"
           class="absolute right-2 flex size-4 cursor-pointer items-center justify-center rounded-full bg-black/20 text-white transition-colors hover:bg-black/35"
@@ -448,31 +433,14 @@ function confirmUninstall(app) {
           </div>
 
           <div v-else-if="filteredApps.length > 0" class="flex flex-col gap-3">
-            <section v-for="section in sections" :key="section.key">
-              <div v-if="section.title"
-                class="mb-1 flex items-center gap-1.5 px-1 text-[11px] font-medium text-black/40">
-                <Icon v-if="section.key === 'favorites'" icon="lucide:star" :width="11" :height="11"
-                  class="fill-current text-[#f5a623]" />
-                {{ section.title }}
-                <span class="text-black/25">{{ section.apps.length }}</span>
-              </div>
+            <section v-for="(section, index) in sections" :key="section.key">
+              <div v-if="index > 0" class="mb-3 h-px bg-black/[0.08]" aria-hidden="true" />
               <div class="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-1">
                 <ContextMenuRoot v-for="app in section.apps" :key="app.packageName">
                   <ContextMenuTrigger as-child>
                     <div role="button" tabindex="0" :title="`启动 ${app.label}`"
-                      class="group relative flex cursor-pointer flex-col items-center gap-1.5 rounded-[12px] p-2 transition-colors outline-none hover:bg-black/[0.05] focus-visible:bg-black/[0.05] active:bg-black/[0.09]"
-                      @click="launchApp(app)" @keydown.enter="launchApp(app)"
-                      @keydown.space.prevent="launchApp(app)">
-                      <button type="button" :title="isFavorite(app.packageName) ? '取消收藏' : '收藏并置顶'"
-                        :aria-pressed="isFavorite(app.packageName)"
-                        class="absolute top-1 right-1 z-10 flex size-5 cursor-pointer items-center justify-center rounded-full bg-white/85 shadow-[0_1px_2px_rgba(0,0,0,0.15)] transition-opacity"
-                        :class="isFavorite(app.packageName)
-                          ? 'text-[#f5a623] opacity-100'
-                          : 'text-black/35 opacity-0 group-hover:opacity-100 hover:text-[#f5a623]'
-                          " @click.stop="toggleFavorite(app.packageName)">
-                        <Icon icon="lucide:star" :width="12" :height="12"
-                          :class="isFavorite(app.packageName) && 'fill-current'" />
-                      </button>
+                      class="relative flex cursor-pointer flex-col items-center gap-1.5 rounded-[12px] p-2 transition-colors outline-none hover:bg-black/[0.05] focus-visible:bg-black/[0.05] active:bg-black/[0.09]"
+                      @click="launchApp(app)" @keydown.enter="launchApp(app)" @keydown.space.prevent="launchApp(app)">
                       <img v-if="app.iconUrl" :src="app.iconUrl"
                         class="pointer-events-none size-11 rounded-[11px] shadow-[0_1px_3px_rgba(0,0,0,0.14)]" />
                       <div v-else
@@ -500,38 +468,53 @@ function confirmUninstall(app) {
                         <Icon icon="lucide:settings-2" :width="13" :height="13" class="shrink-0 text-black/40" />
                         启动（自定义参数）
                       </ContextMenuItem>
-                      <ContextMenuItem :class="MENU_ITEM_CLASS" @select="forceStopApp(app)">
-                        <Icon icon="lucide:square" :width="13" :height="13" class="shrink-0 text-black/40" />
-                        强制停止
-                      </ContextMenuItem>
-                      <ContextMenuSeparator class="my-1 h-px bg-black/[0.06]" />
-                      <ContextMenuItem :class="MENU_ITEM_CLASS" @select="showAppInfo(app)">
-                        <Icon icon="lucide:info" :width="13" :height="13" class="shrink-0 text-black/40" />
-                        应用信息
-                      </ContextMenuItem>
-                      <ContextMenuItem :class="MENU_ITEM_CLASS" @select="copyPackageName(app)">
-                        <Icon icon="lucide:copy" :width="13" :height="13" class="shrink-0 text-black/40" />
-                        复制包名
-                      </ContextMenuItem>
-                      <ContextMenuItem :class="MENU_ITEM_CLASS" @select="exportAppApk(app)">
-                        <Icon icon="lucide:download" :width="13" :height="13" class="shrink-0 text-black/40" />
-                        导出 APK
+                      <ContextMenuItem :class="MENU_ITEM_CLASS" @select="toggleFavorite(app.packageName)">
+                        <Icon icon="lucide:star" :width="13" :height="13"
+                          :class="['shrink-0', isFavorite(app.packageName) ? 'fill-[#f5a623] text-[#f5a623]' : 'text-black/40']" />
+                        {{ isFavorite(app.packageName) ? '取消置顶' : '置顶' }}
                       </ContextMenuItem>
                       <ContextMenuItem :class="MENU_ITEM_CLASS" @select="sendToDesktop(app)">
                         <Icon icon="lucide:monitor-down" :width="13" :height="13" class="shrink-0 text-black/40" />
                         发送到桌面
                       </ContextMenuItem>
                       <ContextMenuSeparator class="my-1 h-px bg-black/[0.06]" />
-                      <ContextMenuItem :class="[MENU_ITEM_CLASS, MENU_ITEM_DANGER_CLASS]"
-                        @select="confirmClearData(app)">
-                        <Icon icon="lucide:eraser" :width="13" :height="13" class="shrink-0" />
-                        清除数据
-                      </ContextMenuItem>
-                      <ContextMenuItem :class="[MENU_ITEM_CLASS, MENU_ITEM_DANGER_CLASS]"
-                        @select="confirmUninstall(app)">
-                        <Icon icon="lucide:trash-2" :width="13" :height="13" class="shrink-0" />
-                        卸载
-                      </ContextMenuItem>
+                      <ContextMenuSub>
+                        <ContextMenuSubTrigger :class="MENU_ITEM_CLASS">
+                          <Icon icon="lucide:ellipsis" :width="13" :height="13" class="shrink-0 text-black/40" />
+                          应用操作
+                          <Icon icon="lucide:chevron-right" :width="13" :height="13"
+                            class="ml-auto shrink-0 text-black/30" />
+                        </ContextMenuSubTrigger>
+                        <ContextMenuSubContent
+                          class="z-[101] min-w-40 rounded-[10px] border border-black/[0.08] bg-white/95 p-1 shadow-[0_8px_30px_rgba(0,0,0,0.18)] backdrop-blur-xl">
+                          <ContextMenuItem :class="MENU_ITEM_CLASS" @select="showAppInfo(app)">
+                            <Icon icon="lucide:info" :width="13" :height="13" class="shrink-0 text-black/40" />
+                            应用信息
+                          </ContextMenuItem>
+                          <ContextMenuItem :class="MENU_ITEM_CLASS" @select="copyPackageName(app)">
+                            <Icon icon="lucide:copy" :width="13" :height="13" class="shrink-0 text-black/40" />
+                            复制包名
+                          </ContextMenuItem>
+                          <ContextMenuItem :class="MENU_ITEM_CLASS" @select="exportAppApk(app)">
+                            <Icon icon="lucide:download" :width="13" :height="13" class="shrink-0 text-black/40" />
+                            导出 APK
+                          </ContextMenuItem>
+                          <ContextMenuSeparator class="my-1 h-px bg-black/[0.06]" />
+                          <!-- 系统应用点了也只会失败（未 root 卸不掉），直接禁掉并说明原因 -->
+                          <ContextMenuItem :class="[MENU_ITEM_CLASS, MENU_ITEM_DANGER_CLASS]"
+                            :disabled="app.system" @select="confirmClearData(app)">
+                            <Icon icon="lucide:eraser" :width="13" :height="13" class="shrink-0" />
+                            清除数据
+                            <span v-if="app.system" class="ml-auto text-[10px] text-black/30">系统应用</span>
+                          </ContextMenuItem>
+                          <ContextMenuItem :class="[MENU_ITEM_CLASS, MENU_ITEM_DANGER_CLASS]"
+                            :disabled="app.system" @select="confirmUninstall(app)">
+                            <Icon icon="lucide:trash-2" :width="13" :height="13" class="shrink-0" />
+                            卸载
+                            <span v-if="app.system" class="ml-auto text-[10px] text-black/30">系统应用</span>
+                          </ContextMenuItem>
+                        </ContextMenuSubContent>
+                      </ContextMenuSub>
                     </ContextMenuContent>
                   </ContextMenuPortal>
                 </ContextMenuRoot>

@@ -1227,6 +1227,7 @@ export function normalizeListOutput(stdout, stderr = "") {
       typeof app?.iconPng === "string" && app.iconPng
         ? `data:image/png;base64,${app.iconPng}`
         : null,
+    system: app?.system === true,
   }));
 }
 
@@ -1236,6 +1237,7 @@ function normalizeApp(app) {
     packageName: app.packageName,
     label: app.label || app.packageName,
     iconUrl: app.iconUrl || null,
+    system: app.system === true,
   };
 }
 

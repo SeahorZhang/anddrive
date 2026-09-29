@@ -141,6 +141,9 @@ export default defineConfig(({ command }) => {
             groups: [
               // 三方/共享模块独立 chunk，确保镜像页不会 import 主页入口
               // chunk（否则主页 createApp 的顶层挂载在镜像页执行）。
+              // 拼音表只在「用户开始敲字母」时才用得到，必须排在 vendor 前面单独成块，
+              // 否则会被 /node_modules/ 吸进主 vendor，280KB 变成首屏必付的成本。
+              { name: "pinyin", test: /node_modules[\\/]pinyin-pro/ },
               { name: "vendor", test: /node_modules/ },
               {
                 name: "mirror-support",
