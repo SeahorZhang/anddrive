@@ -29,6 +29,27 @@ function cssViewport() {
   };
 }
 
+/** 画面区元素，由镜像页在 `bootstrap()` 之前设好（`App.vue` 的 `canvasHost`）。 */
+let contentEl = null;
+
+export function setContentElement(el) {
+  contentEl = el;
+}
+
+/**
+ * **画面区**的 CSS 尺寸 —— 虚拟显示按它算，不按视口。
+ *
+ * 生产里画面区就是整个视口（两者相等）；dev 的 HUD 在右侧占一条边栏，画面区比窗口窄，
+ * 若仍按视口算，画面比例与显示比例对不上，contain 适配会多出黑边、`1dp = 1 CSS px`
+ * 的等式也会错位。元素没挂上或还没排版（尺寸为 0）时回落视口。
+ */
+function contentCss() {
+  const width = contentEl?.clientWidth ?? 0;
+  const height = contentEl?.clientHeight ?? 0;
+  if (width > 0 && height > 0) return { width, height };
+  return cssViewport();
+}
+
 /**
  * 虚拟显示尺寸的唯一算法：窗口 CSS × 画质档位倍率（dpi 同倍，于是 1dp = 1 CSS px）。
  * 建显示和后续 resizeDisplay 必须走同一个公式，否则初始密度与跟随期的密度会错位。
@@ -45,7 +66,7 @@ function displayFor(css) {
  */
 function initialDisplay(info) {
   const css = info?.initialCss;
-  return displayFor(css?.width > 0 && css?.height > 0 ? css : cssViewport());
+  return displayFor(css?.width > 0 && css?.height > 0 ? css : contentCss());
 }
 
 /**
@@ -161,8 +182,8 @@ export async function startSession(
   // 每次配置变更设备上的应用都会重新决定方向，表现出来就是镜像画面反复旋转。
   // 合并/去重逻辑见 `src/mirror/displayFollow.js`。
   //
-  // 尺寸来自 documentElement（视口）的 ResizeObserver，而不是 window 的
-  // `resize` 事件 + innerWidth：macOS 上窗口被系统缩放/吸附时，resize 事件
+  // 尺寸来自**画面区**（dev 时比窗口窄，右侧那条 HUD 边栏不算）的 ResizeObserver，
+  // 而不是 window 的 `resize` 事件 + innerWidth：macOS 上窗口被系统缩放/吸附时，resize 事件
   // 可能滞后甚至不触发，innerWidth 会读到旧值，导致宽度不跟随。
   const follower = createDisplayFollower({
     // 手一拖就通知页面盖遮罩（`onIntent` 每次尺寸请求都回调），停手合并完才真正下发；
@@ -176,8 +197,10 @@ export async function startSession(
   current.follower = follower;
 
   // observe() 会立即回调一次当前尺寸：窗口在会话建立期间变过的话，这次就会补上。
-  const observer = new ResizeObserver(() => follower.request(displayFor(cssViewport())));
-  observer.observe(document.documentElement);
+  // dev 的 HUD 边栏只在渲染层存在，`initialCss`（主进程算的整窗内容区）比画面区宽，
+  // 所以首帧往往是一次**真实的尺寸修正** —— 与上面说的「补发完全相同的请求」不是一回事。
+  const observer = new ResizeObserver(() => follower.request(displayFor(contentCss())));
+  observer.observe(contentEl ?? document.documentElement);
   current.resizeObserver = observer;
 
   report("ready", {

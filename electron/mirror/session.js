@@ -1,10 +1,9 @@
-import { BrowserWindow, ipcMain, screen } from "electron";
+import { BrowserWindow, ipcMain } from "electron";
 import path from "node:path";
 import { CHANNELS } from "../ipcContract.js";
 import {
   ensureServer,
   getDeviceVideoCodecs,
-  getPhysicalScreenSize,
   isMiuiDevice,
   onDeviceTeardown,
   scrcpyServerPath,
@@ -147,11 +146,10 @@ export async function startMirrorSession(request) {
   await ensureServer();
   const serverPath = scrcpyServerPath();
   const prefs = resolveRuntimePrefs(request?.config);
-  // 窗口形状按设备分辨率算；查不到就走兜底比例，不值得为它挡住开会话。
-  const screenSize = await getPhysicalScreenSize(serial).catch(() => null);
+  // 窗口初始尺寸固定 850x600，不看设备分辨率、也不看桌面可用区域（见 mirrorWindowBounds）。
+  const bounds = mirrorWindowBounds();
   // 设备能编码哪些：给镜像页落地 `auto`，也顺带进 pendingInit（渲染层不再自己查）。
   const deviceEncoders = await getDeviceVideoCodecs(serial).catch(() => null);
-  const bounds = mirrorWindowBounds(screenSize, screen.getPrimaryDisplay().workAreaSize);
 
   /** @type {MirrorSession} */
   const session = {

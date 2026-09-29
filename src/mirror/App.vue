@@ -2,6 +2,7 @@
 import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { useMirrorInput } from './useMirrorInput.js'
 import { bootstrap, dispose as disposeSession, reclaimApp, getSessionInfo } from './session.js'
+import { setContentElement } from './direct-session.js'
 import { aspectDiffers, createReflowGate } from './displayFollow.js'
 
 // 镜像窗口（渲染层直连）：adb/scrcpy 全在本进程内由 Tango 官方库建立，
@@ -16,6 +17,20 @@ const status = ref('正在连接设备…')
 const meta = shallowRef(null)
 const fps = ref(0)
 const showHud = import.meta.env.DEV
+/** dev HUD 边栏宽度：`mirror-main` 让出的右侧宽度与 `aside` 宽度都用这一个值。 */
+const HUD_WIDTH = 240
+/** 字节数 → 人类可读（HUD 显示用，保留一位小数）。 */
+function bytesText(bytes) {
+  if (!bytes) return '0'
+  const units = ['B', 'KB', 'MB', 'GB']
+  let value = bytes
+  let index = 0
+  while (value >= 1024 && index < units.length - 1) {
+    value /= 1024
+    index += 1
+  }
+  return `${index === 0 ? value : Math.round(value * 10) / 10} ${units[index]}`
+}
 const hud = reactive({
   packets: 0,
   configs: 0,
@@ -28,7 +43,7 @@ const hud = reactive({
   resets: 0,
   rendered: 0,
   skipRender: 0,
-  gl: webglSupported ? 'Y' : 'N',
+  gl: webglSupported ? '可用' : '不可用',
   audioPackets: 0,
   audioPlayed: 0,
   audioQueue: 0,
@@ -351,6 +366,9 @@ async function booted() {
 }
 
 onMounted(() => {
+  // 虚拟显示按**画面区**算（见 direct-session 的 contentCss）：dev 右侧那条 HUD 边栏
+  // 不算进画面区，否则显示比例与画面比例对不上。必须在 bootstrap 之前设好。
+  setContentElement(canvasHost.value)
   hostResize = new ResizeObserver(() => syncCanvasBox())
   if (canvasHost.value) hostResize.observe(canvasHost.value)
   void booted()
@@ -374,52 +392,147 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="h-full bg-black text-white">
-    <div ref="canvasHost" class="absolute inset-0 flex items-center justify-center overflow-hidden bg-black"
-      style="touch-action: none"></div>
+    <!-- 画面区：dev 时右侧让出一条 HUD 边栏，画面上的覆盖层（遮罩/接回/提示）都只盖这一块，
+         这样调试信息永远不被盖住，也不会压在镜像画面上。 -->
+    <div class="mirror-main" :style="showHud ? { right: `${HUD_WIDTH}px` } : undefined">
+      <div ref="canvasHost" class="absolute inset-0 flex items-center justify-center overflow-hidden bg-black"
+        style="touch-action: none"></div>
 
-    <!-- 拖窗口时的遮罩：设备侧每次重排都会 reset 采集、画面会跳/翻，所以盖上这层。
-         出现得快（90ms）、消失得慢（320ms 渐变），免得「啪」一下黑屏又「啪」一下揭开。
-         一直挂在 DOM 上只切 opacity，这样才有淡出；不透明才盖得住闪烁，
-         底色用中心偏亮的径向渐变，比纯黑柔和。 -->
-    <div class="mirror-cover" :class="{ 'is-shown': covering }">
-      <div class="mirror-cover__pill">
-        <span class="mirror-cover__spinner" aria-hidden="true"></span>
-        <span class="mirror-cover__text">调整画面尺寸…</span>
+      <!-- 拖窗口时的遮罩：设备侧每次重排都会 reset 采集、画面会跳/翻，所以盖上这层。
+           出现得快（90ms）、消失得慢（320ms 渐变），免得「啪」一下黑屏又「啪」一下揭开。
+           一直挂在 DOM 上只切 opacity，这样才有淡出；不透明才盖得住闪烁，
+           底色用中心偏亮的径向渐变，比纯黑柔和。 -->
+      <div class="mirror-cover" :class="{ 'is-shown': covering }">
+        <div class="mirror-cover__pill">
+          <span class="mirror-cover__spinner" aria-hidden="true"></span>
+          <span class="mirror-cover__text">调整画面尺寸…</span>
+        </div>
       </div>
+
+      <div class="pointer-events-auto absolute inset-x-0 top-0 z-10 h-6" style="-webkit-app-region: drag"></div>
+
+      <!-- 应用被别的显示拿走时，画面中间给一个接回入口（带应用图标）。
+           平时不显示：没被抢就不该有多余控件压在画面上。 -->
+      <div v-if="stolen" class="mirror-reclaim" style="-webkit-app-region: no-drag">
+        <img v-if="appIcon" :src="appIcon" class="mirror-reclaim__icon" alt="" />
+        <span v-else class="mirror-reclaim__icon mirror-reclaim__icon--letter">{{ (appTitle || '?').slice(0, 1) }}</span>
+        <button type="button" class="mirror-reclaim__button" :disabled="reclaiming" @click="reclaim">
+          {{ reclaiming ? '接回中…' : '接回画面' }}
+        </button>
+      </div>
+      <p v-if="notice" class="mirror-notice">{{ notice }}</p>
+
+      <p v-if="status"
+        class="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-[12px] text-white/60">
+        {{ status }}
+      </p>
     </div>
 
-    <div class="pointer-events-auto absolute inset-x-0 top-0 z-10 h-6" style="-webkit-app-region: drag"></div>
+    <!-- dev 专用：调试信息在画面**右边**的独立边栏里，不遮挡镜像内容。 -->
+    <aside v-if="showHud" class="mirror-hud" :style="{ width: `${HUD_WIDTH}px` }">
+      <div class="mirror-hud__title">{{ title }}</div>
+      <div class="mirror-hud__sub">{{ meta?.codecName }} · {{ fps }} 帧/秒</div>
 
-    <!-- 应用被别的显示拿走时，画面中间给一个接回入口（带应用图标）。
-         平时不显示：没被抢就不该有多余控件压在画面上。 -->
-    <div v-if="stolen" class="mirror-reclaim" style="-webkit-app-region: no-drag">
-      <img v-if="appIcon" :src="appIcon" class="mirror-reclaim__icon" alt="" />
-      <span v-else class="mirror-reclaim__icon mirror-reclaim__icon--letter">{{ (appTitle || '?').slice(0, 1) }}</span>
-      <button type="button" class="mirror-reclaim__button" :disabled="reclaiming" @click="reclaim">
-        {{ reclaiming ? '接回中…' : '接回画面' }}
-      </button>
-    </div>
-    <p v-if="notice" class="mirror-notice">{{ notice }}</p>
+      <div class="mirror-hud__group">画面</div>
+      <div class="mirror-hud__row"><span>画面区</span><b>{{ hud.win }}</b></div>
+      <div class="mirror-hud__row"><span>视频</span><b>{{ hud.vid }}</b></div>
+      <div class="mirror-hud__row"><span>尺寸变化</span><b>{{ hud.vidChanges }} 次</b></div>
+      <div class="mirror-hud__row"><span>已显示</span><b>{{ hud.frames }}</b></div>
+      <div class="mirror-hud__row"><span>已绘制</span><b>{{ hud.rendered }}</b></div>
+      <div class="mirror-hud__row"><span>跳过绘制</span><b>{{ hud.skipRender }}</b></div>
 
-    <p v-if="status"
-      class="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-[12px] text-white/60">
-      {{ status }}
-    </p>
-    <div v-if="showHud"
-      class="pointer-events-none absolute bottom-2 left-2 z-10 rounded bg-black/60 px-2 py-1 font-mono text-[10px] leading-tight text-white/60">
-      {{ title }} · {{ meta?.codecName }} · {{ fps }} fps
-      <br />
-      win={{ hud.win }} vid={{ hud.vid }} chg={{ hud.vidChanges }}
-      <br />
-      gl={{ hud.gl }} {{ hud.renderer }}/{{ hud.type }} shown={{ hud.frames }} draw={{ hud.rendered }} skipDraw={{ hud.skipRender }}
-      q={{ hud.queue }} skipDec={{ hud.skipped }} reset={{ hud.resets }} packets={{ hud.packets }} bytes={{ hud.bytes }}
-      audio={{ hud.audioPackets }} ap={{ hud.audioPlayed }} asq={{ hud.audioQueue }} ad={{ hud.audioDecoded }}
-      atime={{ Math.round(hud.audioTime * 10) / 10 }} astate={{ hud.audioState }} {{ hud.audioIssue }}
-    </div>
+      <div class="mirror-hud__group">解码</div>
+      <div class="mirror-hud__row"><span>WebGL</span><b>{{ hud.gl }}</b></div>
+      <div class="mirror-hud__row"><span>渲染方式</span><b>{{ hud.renderer }} / {{ hud.type }}</b></div>
+      <div class="mirror-hud__row"><span>解码队列</span><b>{{ hud.queue }}</b></div>
+      <div class="mirror-hud__row"><span>跳过解码</span><b>{{ hud.skipped }}</b></div>
+      <div class="mirror-hud__row"><span>解码器重置</span><b>{{ hud.resets }}</b></div>
+
+      <div class="mirror-hud__group">传输</div>
+      <div class="mirror-hud__row"><span>视频包</span><b>{{ hud.packets }}</b></div>
+      <div class="mirror-hud__row"><span>接收字节</span><b>{{ bytesText(hud.bytes) }}</b></div>
+
+      <div class="mirror-hud__group">音频</div>
+      <div class="mirror-hud__row"><span>收到包</span><b>{{ hud.audioPackets }}</b></div>
+      <div class="mirror-hud__row"><span>已播放</span><b>{{ hud.audioPlayed }}</b></div>
+      <div class="mirror-hud__row"><span>播放队列</span><b>{{ hud.audioQueue }}</b></div>
+      <div class="mirror-hud__row"><span>已解码</span><b>{{ hud.audioDecoded }}</b></div>
+      <div class="mirror-hud__row"><span>时钟</span><b>{{ Math.round(hud.audioTime * 10) / 10 }} 秒</b></div>
+      <div class="mirror-hud__row"><span>状态</span><b>{{ hud.audioState }}</b></div>
+      <div v-if="hud.audioIssue && hud.audioIssue !== '-'" class="mirror-hud__issue">{{ hud.audioIssue }}</div>
+    </aside>
   </div>
 </template>
 
 <style scoped>
+/* 画面区：canvas + 全部覆盖层都在这一块里。生产中它就是整个视口；
+   dev 时右侧让出 HUD 边栏（`right` 内联覆盖），所以覆盖层也只盖画面、不盖调试信息。 */
+.mirror-main {
+  position: absolute;
+  inset: 0;
+}
+
+/* dev 调试信息边栏：独立于画面区，永不被镜像内容或它的覆盖层遮挡。 */
+.mirror-hud {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  padding: 10px 12px 16px;
+  overflow-y: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  color: rgb(255 255 255 / 72%);
+  background: #0d0e10;
+  border-left: 1px solid rgb(255 255 255 / 8%);
+}
+
+.mirror-hud__title {
+  overflow: hidden;
+  font-size: 11px;
+  color: rgb(255 255 255 / 85%);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mirror-hud__sub {
+  color: rgb(255 255 255 / 45%);
+}
+
+.mirror-hud__group {
+  margin-top: 9px;
+  margin-bottom: 3px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: rgb(255 255 255 / 32%);
+}
+
+.mirror-hud__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mirror-hud__row span {
+  color: rgb(255 255 255 / 45%);
+}
+
+.mirror-hud__row b {
+  font-weight: 400;
+  color: rgb(255 255 255 / 78%);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.mirror-hud__issue {
+  margin-top: 8px;
+  color: rgb(255 196 120 / 85%);
+  word-break: break-all;
+}
+
 .mirror-cover {
   position: absolute;
   inset: 0;

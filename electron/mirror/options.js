@@ -117,39 +117,20 @@ export function resolveRuntimePrefs(input) {
   };
 }
 
-/** 镜像窗口长边上限：再大就超出笔电可用高度，且 1dp = 1 CSS px 下字会跟着变大。 */
-const MIRROR_WINDOW_MAX_EDGE = 1000;
-/** 从桌面可用区域里留出的边距（菜单栏、Dock、以及还能拖动的手感）。 */
-const MIRROR_WINDOW_MARGIN = 80;
-/** 查不到设备分辨率时的兜底比例（常见直板机 9:19.5）。 */
-const MIRROR_WINDOW_FALLBACK_RATIO = 9 / 19.5;
+/** 镜像窗口初始尺寸（CSS px），打开镜像就用这个，不随设备、桌面大小变。 */
+const MIRROR_WINDOW_DEFAULT_SIZE = { width: 850, height: 600 };
 
 /**
- * 镜像窗口的初始尺寸 = **设备屏幕的宽高比**（用户 2026-09-19 要求「和手机一样的宽高」）。
+ * 镜像窗口的初始尺寸 = **固定 850x600**（2026-09-29 用户定）。
  *
- * 形状可以随便选：随包 server 建的虚拟显示带「忽略应用尺寸限制」，app 会按显示的逻辑尺寸铺满
+ * 之前是按设备屏幕宽高比算的（2026-09-19 定的「和手机一样的宽高」，长边封顶 1000、留 80 边距、
+ * 查不到分辨率按 9:19.5 兜底），那套逻辑已作废，所以这里不再需要设备分辨率和桌面可用区域。
+ *
+ * 形状仍然不用操心：随包 server 建的虚拟显示带「忽略应用尺寸限制」，app 会按显示的逻辑尺寸铺满
  * （`mBounds == mMaxBounds`，真机量过 `2462x1924/256` 横形与 `1200x2608/160` 竖形），
- * 所以窗口形状和设备一致也不会出现黑边。
- * @param {{ width: number, height: number } | null | undefined} screenSize 设备物理分辨率
- * @param {{ width: number, height: number }} workArea 桌面可用区域（CSS px）
+ * 所以窗口是横是竖都不会出现黑边——只是画面被放进 850x600 这个形状里。
  * @returns {{ width: number, height: number }}
  */
-export function mirrorWindowBounds(screenSize, workArea) {
-  const valid =
-    screenSize && Number.isFinite(screenSize.width) && Number.isFinite(screenSize.height)
-      ? screenSize.width > 0 && screenSize.height > 0
-      : false;
-  const ratio = valid ? screenSize.width / screenSize.height : MIRROR_WINDOW_FALLBACK_RATIO;
-  const portrait = ratio <= 1;
-  const longEdge = Math.max(
-    320,
-    Math.min(
-      (portrait ? workArea.height : workArea.width) - MIRROR_WINDOW_MARGIN,
-      MIRROR_WINDOW_MAX_EDGE,
-    ),
-  );
-  const shortEdge = Math.max(280, Math.round(longEdge * (portrait ? ratio : 1 / ratio)));
-  return portrait
-    ? { width: shortEdge, height: Math.round(longEdge) }
-    : { width: Math.round(longEdge), height: shortEdge };
+export function mirrorWindowBounds() {
+  return { ...MIRROR_WINDOW_DEFAULT_SIZE };
 }

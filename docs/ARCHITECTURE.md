@@ -74,7 +74,7 @@ pnpm mirror:spike <serial> h265 /tmp/m.m265 15    # 无界面协议验证
 pnpm build-helper && pnpm verify-resources
 ```
 
-镜像窗口 HUD **仅 dev 显示**（`src/mirror/App.vue:19` `showHud`）：`q` 长期 >0 且 `reset` 增长 = 解码跟不上；`gl=N … bitmap` = WebGL 被判软件渲染；`win/vid/chg` 里 `chg` 启动后应为 0（否则是重复 resize）。量帧率前必读 `NATIVE_MIRROR.md` §4.0 的取证纪律（并发 `app_process` 会话与静止画面会骗人）。
+镜像窗口 HUD **仅 dev 显示**（`src/mirror/App.vue` `showHud`），放在**画面右侧的独立边栏**（宽 `HUD_WIDTH`，不遮挡镜像内容：画面上的覆盖层只盖 `mirror-main` 那一块），字段名用中文：「解码队列」长期 >0 且「解码器重置」增长 = 解码跟不上；「WebGL 不可用 … bitmap」= WebGL 被判软件渲染；「尺寸变化」启动后应为 0（否则是重复 resize）。虚拟显示按**画面区**算（`direct-session.js` 的 `contentCss`），不按视口 —— 边栏宽度不计入画面区，否则画面比例与显示比例对不上、`1dp = 1 CSS px` 也会错位（生产里画面区 = 视口，行为不变）。量帧率前必读 `NATIVE_MIRROR.md` §4.0 的取证纪律（并发 `app_process` 会话与静止画面会骗人）。
 
 需要判断"用户实际跑的是哪份产物"：`out/dist/dist-electron` 的 chunk 哈希会变，旧构建残留在 `release/` 里会被 LaunchServices 抢走 `.adr`（§3 快捷方式）。
 

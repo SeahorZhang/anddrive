@@ -52,12 +52,12 @@
 
 **状态**（2026-09-28 用户口径）：**裁切症状的原因他已找到，这件事不需要再查**；根因**没有记进仓库**，本文与 `NATIVE_MIRROR.md` 都只有历史取证，别再据此重开调查。本节剩下的只是**结构性债务**（已收口的两条契约：显示像素单一主人 + `newDisplay` 必填，写进 `ARCHITECTURE.md` §4「刻意设计」）。
 
-- **几何的两个主人**（这不算错，只是两套决策靠假设对齐）：主进程按设备分辨率算窗口 bounds —— `electron/mirror/options.js` 里 `mirrorWindowBounds` 用的那组常量（`MIRROR_WINDOW_MAX_EDGE=1000`、`MARGIN=80`、`FALLBACK_RATIO=9/19.5`、下限 320/280），调用入口 `electron/mirror/session.js` 的 `startMirrorSession`；渲染层按窗口 CSS 算显示像素（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`）。两边靠「app 会铺满显示」这个服务端假设才不打架。
+- **几何的两个主人**（这不算错，只是两套决策靠假设对齐）：主进程定窗口 bounds —— `electron/mirror/options.js` 的 `mirrorWindowBounds`（2026-09-29 起写死 850x600，不再按设备分辨率算，所以原来那组常量 `MIRROR_WINDOW_MAX_EDGE=1000` / `MARGIN=80` / `FALLBACK_RATIO=9/19.5` / 下限 320/280 已删），调用入口 `electron/mirror/session.js` 的 `startMirrorSession`；渲染层按窗口 CSS 算显示像素（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`）。两边靠「app 会铺满显示」这个服务端假设才不打架。
 - **渲染层手写 letterbox**：`src/mirror/App.vue` 的 `syncCanvasBox`（min-scale + 取整 + `objectFit:'fill'`）重新实现了 CSS `object-fit: contain`；有 3 条触发路径（ResizeObserver / `sizeChanged` / `meta`）+ 「尺寸未知先拉伸、之后重贴」的两段式兜底。
 - **遮罩/重排状态机约 90 行**：`src/mirror/App.vue` 的遮罩那一块（`armCover/endCover/coverForReflow/cancelCover/onFrameSizeChanged`、`reflowGate`、`aspectDiffers` 容差 0.02），只为盖住 resize 闪烁；`displayFollow.js` 的 `createReflowGate` 注释自陈是盖在早先「只看时间」的修复之上。建议收口成**只以 `reflowGate` 为单一判据**。**M**
 - **未结的另一半**：`resizeDisplay` 不带 dpi，档位只在开会话时生效（中途换档就 1dp≠1CSSpx）。AndroMeld 的 resize 命令带 dpi（三个 int w/h/dpi），要跟就得**扩我们自己的协议** —— 那才能做到"窗口任意大也不掉清晰度/不漂移"。**M–L**
 - 顺带的真实缺陷（正常窗口尺寸不触发）：上游 `NewDisplayCapture` 对 flex display 用 `Size.constrain(constraints, false)` **逐维裁剪**，越界时显示形状与窗口形状脱钩（5600x5600 → 比例 1.296）。这台机 h265 上限**短边 4320 / 长边 8192**，倍率 3 下窗口任一边 >~1440 CSS px 就越界。
-- 未验：只有竖屏排版、没有宽布局的 app 在横形显示上会怎样；真机反馈后再决定要不要按包豁免（但注意 §4 的"仓库不留单 app 适配"）。
+- 未验：只有竖屏排版、没有宽布局的 app 在横形显示上会怎样；真机反馈后再决定要不要按包豁免（但注意 §4 的"仓库不留单 app 适配"）。**2026-09-29 起窗口固定 850x600（横屏），这从边角情况变成了默认形态**，优先级该往上提。
 
 ---
 

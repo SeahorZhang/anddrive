@@ -91,7 +91,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 - [x] **拖宽时画面反复重排 → 改成停手才发**（2026-09-19）：原来的 150ms 是 **throttle**（第一次变化起计时，期间每 150ms 仍发一条），拖一次宽度要发十几条。真机量过：每 150ms 发一步把 920 宽拖到 1880，服务端 300ms 去抖**并没有**合掉中间值，每一步都真的改了显示 → app 每一步重新决定布局（`≤1560x1800` 跟着填满，`1720x1800` 翻成固定比例竖条 + 左右黑边，`1880x1800` 又重排），就是「转好几次」。改成 **debounce**（每次变化都把定时器推后，`RESIZE_SETTLE_MS = 250`），一次拖拽只剩最后一次重排。
   - 剩下的那一次重排仍然看得见（画面跳一下/翻一次），用户否掉了「不越过方向」「不跟随窗口」「重编 server 抹 flag」三条（都会牺牲跟随或引入黑边），选了**遮罩**：`src/mirror/App.vue` 里 `covering` + `showCover/hideCover` —— 窗口比例与当前画面比例差超过 2%（`aspectDiffers`，容差防止抖动就盖）时盖上遮罩（`.mirror-cover`：不透明径向渐变 + 居中小胶囊「转圈 + 调整画面尺寸…」；毛玻璃被否掉 —— 模糊挡不住整体位移，透明度低于 ~95% 就看得见闪烁。出现 90ms、淡出 320ms，元素常驻只切 opacity 才有渐变消失）。**盖上/揭开的时机（2026-09-20 改过一次）**：先做过「一有尺寸变化就盖」，当时被否（`resizeDisplay` 还没发，盖住的是什么都没发生的一段时间）；改成在 `createDisplayFollower` 真正下发的那一刻由 `onReflowStart` 通知页面盖。真横屏落地后（拖一次只剩一次重排）用户又要求回到**手一拖就盖**，所以现在是：`createDisplayFollower` 每次收到尺寸请求都回调 `onIntent` → 页面盖并把总兜底线往前推（慢拖超过 3s 也不会中途露出），真正下发 `resizeDisplay` 与否不再影响盖的时机；停手合并后如果发现尺寸其实没变（拖出去又拖回来）回调 `onSkip` → `cancelCover` 立刻撤罩。揭开不用「第一次画面尺寸变化」，而是等尺寸**连续 420ms 不再变**（设备往往先翻方向再改尺寸，看到第一次就揭会露出旋转），另有 3s 总兜底。同比例的纯缩放不触发遮盖（`aspectDiffers` 容差 2%），解码器报回新画面尺寸（`sizeChanged`）后 180ms 揭开，另有 3s 兜底自动揭开（设备没回传也不能一直盖着）。
 - [x] **虚拟显示比例吸附（已回退）**（2026-09-19 试错）：曾把显示尺寸吸附到横 16:9 / 竖 9:16 的内接盒，当天回退。黑边的真正变量不是比例，而是 **Android 的 600dp 大屏门槛**：`smallestWidth ≥ 600dp` 时系统判定大屏并**忽略 app 的方向锁**，锁方向的 app 走 size-compat 被 letterbox 在帧内（双层黑）；`sw < 600dp` 时锁被尊重，`FLAG_ROTATES_WITH_CONTENT` 让显示跟着 app 转，app 填满帧。实测（Redmi 2509FPN0BC / Android 17 / 抖音）：`1920x1080/320`(sw540) 与 `3424x1926/640`(sw481) → 转竖填满；`3424x1926/320`(sw963) 与 `1920x1080/160`(sw1080) → 保持横并 letterbox。`flexDisplay` 对该行为无影响（A/B 过）
-- [x] **真横屏虚拟显示（大屏 / pad 的唯一形态）**（2026-09-20 落地）：随包的 `resources/scrcpy/scrcpy-server` 换成**我们自己编的 scrcpy 4.0**，它建虚拟显示时走隐藏的 `VirtualDisplayConfig` 路径并打开 `setIgnoreActivitySizeRestrictions(true)`，于是固定竖屏的 app 在横形逻辑尺寸的虚拟显示上**真的按横屏铺满**，不再被 size-compat 压成中间一条竖屏带。窗口初始形状仍 = 设备屏幕宽高比（`mirrorWindowBounds`，长边封顶 1000 CSS px，查不到分辨率按 9:19.5 兜底）。
+- [x] **真横屏虚拟显示（大屏 / pad 的唯一形态）**（2026-09-20 落地）：随包的 `resources/scrcpy/scrcpy-server` 换成**我们自己编的 scrcpy 4.0**，它建虚拟显示时走隐藏的 `VirtualDisplayConfig` 路径并打开 `setIgnoreActivitySizeRestrictions(true)`，于是固定竖屏的 app 在横形逻辑尺寸的虚拟显示上**真的按横屏铺满**，不再被 size-compat 压成中间一条竖屏带。窗口初始尺寸**固定 850x600**（`mirrorWindowBounds`，2026-09-29 用户改口：不再按设备宽高比算；之前那套「长边封顶 1000 CSS px、留 80 边距、查不到分辨率按 9:19.5 兜底」已作废，也因此开会话时不再查设备分辨率）。
   - 机制来源：对照 AndroMeld Fusion 的虚拟显示（`dumpsys window displays` → `DisplayWindowSettingsProvider SettingsEntry{... mIsHomeSupported=true, mShouldShowIme=0, mForceAppsUniversalResizable=true}`，我们的显示这一项是 `null`）。该字段由 `VirtualDisplayConfig.Builder#setIgnoreActivitySizeRestrictions` 写入（HyperOS/Android 16 里 dump 名作 `mForceAppsUniversalResizable`，服务端读作 `shouldIgnoreActivitySizeRestrictionsForDisplay`）。它的 `uniqueId` 形如 `virtual:com.android.shell:andromeld-fusion-<uuid>` 也来自 `VirtualDisplayConfig.Builder#setUniqueId`。
   - **单变量对照（同一台机、同一显示几何 `2462x1924/256`、抖音冷启动）**：开关开 → `sw1203dp w1539dp h1113dp 256dpi land`，`mBounds == mAppBounds == mMaxBounds == Rect(0,0-2462,1924)`；开关关（只走 config 路径）→ `sw985dp w985dp h1112dp port`，`mBounds=Rect(443,0-2019,1924)` 竖条。
   - **不动主屏**：全程没有 `wm size`/`wm density`、没有 compat 开关、没有 force-stop + 重启 app。开会话前后 `wm size` 都只有 `Physical size: 1200x2608`（无 Override），手机本体画面不变，之前「先在手机上打开 app 又消失」的闪动随配方一起消失。
@@ -277,16 +277,16 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 
 - 图形验证：`pnpm dev` → 连接设备 → 应用列表右键「启动镜像」（自研引擎是唯一形态，**没有引擎开关**）。
 - 协议验证：`pnpm mirror:spike <serial> h265 /tmp/mirror.h265 15`，用 `ffprobe` 检查裸码流。
-- 镜像窗口 HUD（仅 dev 显示）：`gl`（WebGL 是否可用）、`renderer/type`（webgl/bitmap、hardware/software）、`shown/draw/skipDraw`、`q`（decodeQueueSize）、`skipDec/reset`、`win/vid/chg`（窗口尺寸 / 视频尺寸 / 视频尺寸变化次数）、`audio`（音频包数）、`ap/asq/ad`（音频播放/队列/解码）、`atime/astate`（音频时钟与上下文状态）。
+- 镜像窗口 HUD（仅 dev 显示，**在画面右侧的独立边栏里、不遮挡镜像内容**，字段名中文）：「WebGL」（是否可用）、「渲染方式」（webgl/bitmap、hardware/software 两个原值）、「已显示 / 已绘制 / 跳过绘制」、「解码队列」（decodeQueueSize）、「跳过解码 / 解码器重置」、「画面区 / 视频 / 尺寸变化」（画面区尺寸 / 视频尺寸 / 视频尺寸变化次数）、「视频包 / 接收字节」、音频那组「收到包 / 已播放 / 播放队列 / 已解码 / 时钟 / 状态」。
 - 需要镜像窗口 DevTools 时设 `ANDRIVE_MIRROR_DEVTOOLS=1`（默认不开，避免影响性能）。
 
 | HUD 现象 | 结论 |
 | --- | --- |
-| `q` 长期 >0、`reset` 增长 | 解码跟不上：缩小镜像窗口 / 降 `maxFps` / 码率，或换 H.264 |
-| `gl=N ... bitmap` | WebGL 被判定为软件渲染，回落 2D |
-| `skipDraw` 增长、`shown` 约等于 `draw` | 同一 vsync 内合并多帧（降延迟的预期行为） |
-| `audio>0` 但 `ad=0` | 音频解码未推进。**先怀疑我们自己的回调**：`audio` 计数是在把包交给播放器**之前**加的，所以回调里任何一次抛错都会让"包一直在收、解码永远为 0"（2026-09-28 就有一个正式版必踩的实例：一个 dev-only 闭包在生产是 `null`，抛错被 `pumpLoop` 的 `catch { break }` 吞掉 → 音频流直接不再读取）。查 `renderer` 控制台的未处理 rejection，别只对着 `AudioDecoder`/`astate` 找 |
-| `astate=suspended` | 自动播放策略拦了 AudioContext：确认镜像窗口 `autoplayPolicy` 设置 |
+| 「解码队列」长期 >0、「解码器重置」增长 | 解码跟不上：缩小镜像窗口 / 降 `maxFps` / 码率，或换 H.264 |
+| 「WebGL 不可用」… `bitmap` | WebGL 被判定为软件渲染，回落 2D |
+| 「跳过绘制」增长、「已显示」约等于「已绘制」 | 同一 vsync 内合并多帧（降延迟的预期行为） |
+| 「收到包」>0 但「已解码」=0 | 音频解码未推进。**先怀疑我们自己的回调**：`audio` 计数是在把包交给播放器**之前**加的，所以回调里任何一次抛错都会让"包一直在收、解码永远为 0"（2026-09-28 就有一个正式版必踩的实例：一个 dev-only 闭包在生产是 `null`，抛错被 `pumpLoop` 的 `catch { break }` 吞掉 → 音频流直接不再读取）。查 `renderer` 控制台的未处理 rejection，别只对着 `AudioDecoder` /「状态」找 |
+| 「状态」= `suspended` | 自动播放策略拦了 AudioContext：确认镜像窗口 `autoplayPolicy` 设置 |
 
 ### 4.0 帧率怎么量才不会自欺（2026-09-22 踩过才写下的）
 
