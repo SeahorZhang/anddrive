@@ -14,7 +14,7 @@ import {
 const props = defineProps({
   config: { type: Object, required: true },
   disabled: Boolean,
-  /** 设备侧能编哪些（`{usable, mimes}`），null = 还不知道（设置页没有目标设备）。 */
+  /** 设备侧能编哪些（`parseEncoderMimes` 的 `usable`），null = 还不知道（设置页没有目标设备）。 */
   deviceCodecs: { type: Object, default: null },
   /** 本机 WebCodecs 能解哪些，null = 探测还没回来。 */
   localCodecs: { type: Object, default: null },
@@ -27,19 +27,17 @@ const SELECT_CLASS =
 const FPS_OPTIONS = [30, 60, 90, 120]
 /** 某一头明确说「不行」才标记；null（没探测到）不标，免得凭猜测拦用户。 */
 /**
- * 编码下拉与被挡清单全由 `planCodecList` 算（纯函数，单测覆盖）：
+ * 编码下拉全由 `planCodecList` 算（纯函数，单测覆盖）：
  * 协议认得 ∩ 设备能编 ∩ 本机能解才进下拉，所以换一台设备这份列表就不一样。
  */
 const codecPlan = computed(() =>
   planCodecList({
-    mimes: props.deviceCodecs?.mimes ?? [],
     device: props.deviceCodecs?.usable ?? null,
     local: props.localCodecs,
     current: props.config.videoCodec,
   }),
 )
 const codecOptions = computed(() => codecPlan.value.options)
-const blockedCodecs = computed(() => codecPlan.value.blocked)
 
 // 倍率与码率都从 shared 的两张表取，标签里不手抄数字（档位数值改了这里跟着变）。
 // 选项标签只放「名字 + 倍率 / 码率」：select 最宽 190px，再塞档位说明就会被裁掉，
@@ -88,8 +86,7 @@ function updateQuality(tier) {
 
 <template>
   <div
-    class="divide-y divide-black/[0.06] overflow-hidden rounded-[12px] border border-black/[0.06] bg-white/70 shadow-[0_1px_2px_rgba(0,0,0,0.04)] backdrop-blur"
-  >
+    class="divide-y divide-black/[0.06] overflow-hidden rounded-[12px] border border-black/[0.06] bg-white/70 shadow-[0_1px_2px_rgba(0,0,0,0.04)] backdrop-blur">
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
         <div class="text-[13px] text-black/70">画质档位</div>
@@ -120,13 +117,7 @@ function updateQuality(tier) {
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
         <div class="text-[13px] text-black/70">视频编码</div>
-        <div class="mt-0.5 text-[11px] text-black/40">
-          只列「设备能编 + 本机也能解」的格式，换设备这份列表会变{{
-            blockedCodecs.length
-              ? `；设备还有 ${blockedCodecs.map((entry) => entry.label + (entry.reason ? `（${entry.reason}）` : '')).join(' / ')}`
-              : ''
-          }}
-        </div>
+        <div class="mt-0.5 text-[11px] text-black/40">投屏协议</div>
       </div>
       <select :class="SELECT_CLASS" :value="props.config.videoCodec" :disabled="disabled"
         @change="update({ videoCodec: $event.target.value })">

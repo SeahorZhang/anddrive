@@ -199,16 +199,15 @@ const BIT_RATE_RE = /^\d{1,4}[KMG]?$/;
 const LEGACY_DEFAULT_BIT_RATE = "24M";
 
 /**
- * 编码下拉该列什么、设备多出来的那些为什么进不来。纯函数，UI 只负责渲染。
+ * 编码下拉该列什么。纯函数，UI 只负责渲染。
  *
- * - `options` = `auto` + 「协议认得 ∩ 设备能编 ∩ 本机能解」；`current` 落在能力之外时补一项并标灰，
- *   否则下拉会对着空选项，看不出自己以前选过什么。
- * - `blocked` = 设备报了、但进不了下拉的那些，带原因。某一头整表没探到（null）时不下判断 ——
- *   探测失败不该被说成「不支持」。
- * @param {{mimes?: Array<{name: string | null, label: string, protocol: boolean}>, device?: Record<string, boolean> | null, local?: Record<string, boolean> | null, current?: string | null}} input
- * @returns {{options: Array<{value: string, label: string, disabled: boolean}>, blocked: Array<{label: string, reason: string}>, auto: string}}
+ * `options` = `auto` + 「协议认得 ∩ 设备能编 ∩ 本机能解」；`current` 落在能力之外时补一项并标灰，
+ * 否则下拉会对着空选项，看不出自己以前选过什么。某一头整表没探到（null）时不下判断 ——
+ * 探测失败不该被说成「不支持」。
+ * @param {{device?: Record<string, boolean> | null, local?: Record<string, boolean> | null, current?: string | null}} input
+ * @returns {{options: Array<{value: string, label: string, disabled: boolean}>, auto: string}}
  */
-export function planCodecList({ mimes = [], device = null, local = null, current = null } = {}) {
+export function planCodecList({ device = null, local = null, current = null } = {}) {
   const caps = { device, local };
   const usable = VIDEO_CODEC_CATALOG.filter((entry) => entry.protocol && isCodecUsable(entry.name, caps));
   const options = [{ value: "auto", label: `自动（当前选 ${codecLabel(pickAutoCodec(caps))}）`, disabled: false }];
@@ -227,18 +226,7 @@ export function planCodecList({ mimes = [], device = null, local = null, current
     });
   }
 
-  const blocked = mimes
-    .filter((entry) => !usable.some((item) => item.name === entry.name))
-    .map((entry) => ({
-      label: entry.label,
-      reason: !entry.protocol
-        ? "投屏协议带不动"
-        : local && local[entry.name] === false
-          ? "本机不能解"
-          : "",
-    }));
-
-  return { options, blocked, auto: pickAutoCodec(caps) };
+  return { options, auto: pickAutoCodec(caps) };
 }
 
 /**

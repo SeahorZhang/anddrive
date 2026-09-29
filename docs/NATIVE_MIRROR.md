@@ -48,8 +48,9 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
   设备侧能力 = 扫 `media_codecs*.xml` 里 encoder 行的 mime（`parseEncoderMimes`，多 SKU 取并集，**可能多报**），
   本机侧 = `VideoDecoder.isConfigSupported` 探测。已知格式全在 `VIDEO_CODEC_CATALOG` 一张表里（10 项，
   `protocol: true` = 随包 server 的 `VideoCodec` 枚举里有位置）；**下拉只列「协议认得 ∩ 设备能编 ∩ 本机能解」**，
-  设备多出来但带不动的（APV / H.263 / Dolby Vision / MV-HEVC…）不进下拉，只在下面一行小字里带原因
-  （`投屏协议带不动` / `本机不能解`）。这套筛选是纯函数 `planCodecList`（有单测），组件只渲染。
+  设备多出来但带不动的（APV / H.263 / Dolby Vision / MV-HEVC…）不进下拉，也**不在 UI 里逐条列**
+  （2026-09-29 用户原话：「没必要这么多说明，不会有人看的」，副标题只剩一句「投屏协议」）。
+  这套筛选是纯函数 `planCodecList`（有单测），组件只渲染。
   某一头整表没探测到（null）按未知放行，不因为探测失败把能用的藏掉；存盘里的值在当前设备不可用时
   仍列出来、标灰并写原因，不让下拉对着空选项。
   `auto` 只活在设置里：`buildMirrorOptions` 收到没解析过的 `auto` 直接抛错，不留静默兜底。

@@ -232,14 +232,14 @@ describe('parseEncoderMimes', () => {
       ['APV', 'apv', false],
       ['H.263', 'h263', false],
     ])
-    // 协议带不动的那些 protocol=false，planCodecList 靠它们算「被挡清单」而不是列进下拉。
+    // 协议带不动的那些 protocol=false，planCodecList 不会把它们列进下拉。
     expect(mimes.filter((entry) => !entry.protocol).map((entry) => entry.label)).toEqual(['APV', 'H.263'])
   })
 
   it('读不到内容时 mimes 为空 —— 调用方要把它当「未知」，不能当「全不支持」', () => {
     expect(parseEncoderMimes("").mimes).toEqual([])
     // 全 false 的 usable 曾把显式选的 AV1 判成不可用、回落成 H.264；未知必须是 device=null。
-    expect(planCodecList({ mimes: [], device: null }).options.map((entry) => entry.value)).toEqual([
+    expect(planCodecList({ device: null }).options.map((entry) => entry.value)).toEqual([
       "auto", "h264", "h265", "av1", "vp8", "vp9",
     ])
   })
@@ -297,7 +297,6 @@ describe('planCodecList', () => {
   it('下拉只列「协议认得 + 设备能编 + 本机能解」，自动档排在最前并写明会选谁', () => {
     const dev = deviceOf("video/avc\nvideo/hevc\nvideo/apv\n")
     const { options } = planCodecList({
-      mimes: dev.mimes,
       device: dev.usable,
       local: { h264: true, h265: true },
     })
@@ -308,27 +307,12 @@ describe('planCodecList', () => {
   it('存盘里的值在当前设备上不可用时，仍然列出来但标灰并写清原因', () => {
     const dev = deviceOf("video/avc\nvideo/av01\n")
     const { options } = planCodecList({
-      mimes: dev.mimes,
       device: dev.usable,
       local: { av1: false },
       current: "av1",
     })
     const av1 = options.find((entry) => entry.value === "av1")
     expect(av1).toMatchObject({ label: 'AV1（本机不能解）', disabled: true })
-  })
-
-  it('被挡的清单带原因：协议没有位置 vs 本机解不了', () => {
-    const dev = deviceOf("video/avc\nvideo/apv\nvideo/x-vnd.on2.vp9\n")
-    const { blocked } = planCodecList({
-      mimes: dev.mimes,
-      device: dev.usable,
-      local: { h264: true, vp9: false },
-    })
-    // 顺序跟着设备报出来的次序走
-    expect(blocked).toEqual([
-      { label: 'APV', reason: '投屏协议带不动' },
-      { label: 'VP9', reason: '本机不能解' },
-    ])
   })
 
   it('两头都没探测到时不拦：列表就是协议认得的那几个', () => {

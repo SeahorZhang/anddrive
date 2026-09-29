@@ -89,17 +89,14 @@ async function launch() {
             <Icon icon="lucide:x" :width="14" :height="14" />
           </button>
         </div>
-        <p class="px-5 pb-2 text-[11px] text-black/40">以下参数只作用于这一次启动。</p>
-
         <div class="min-h-0 flex-1 overflow-y-auto px-5 pb-2">
           <ScrcpyConfigFields :config="draft" :disabled="launching" :local-codecs="localCodecs"
             :device-codecs="deviceCodecs" @change="onChange" />
         </div>
 
         <!-- 整行可点，开关本身不吃点击（否则会翻两下）。 -->
-        <div class="mx-5 mb-2 flex items-center gap-3 rounded-[10px] border px-3 py-2.5 transition-colors"
-          :class="[saveAsDefault ? 'border-[#007aff]/35 bg-[#007aff]/[0.07]' : 'border-black/10 bg-black/[0.03]',
-            launching ? 'cursor-default opacity-50' : 'cursor-pointer']"
+        <div class="mx-5 mb-2 flex items-center gap-3 rounded-[10px] border px-3 py-2.5 transition-colors" :class="[saveAsDefault ? 'border-[#007aff]/35 bg-[#007aff]/[0.07]' : 'border-black/10 bg-black/[0.03]',
+        launching ? 'cursor-default opacity-50' : 'cursor-pointer']"
           @click="saveAsDefault = launching ? saveAsDefault : !saveAsDefault">
           <SwitchToggle :model-value="saveAsDefault" :disabled="launching" class="pointer-events-none" />
           <span class="min-w-0 flex-1">
