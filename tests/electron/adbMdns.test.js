@@ -118,6 +118,26 @@ describe('parseAdbDevices', () => {
     )
   })
 
+  it('keeps USB serials and the authorization handshake states', () => {
+    const output = [
+      'List of devices attached',
+      'fb637d72\tdevice',
+      'R58M1234567\tauthorizing',
+      '0123456789ABCDEF\tconnecting',
+      '1A2B3C4D\tunauthorized',
+      '',
+    ].join('\n')
+
+    expect(parseAdbDevices(output)).toEqual(
+      new Map([
+        ['fb637d72', 'device'],
+        ['R58M1234567', 'authorizing'],
+        ['0123456789ABCDEF', 'connecting'],
+        ['1A2B3C4D', 'unauthorized'],
+      ]),
+    )
+  })
+
   it('returns an empty map when nothing is attached', () => {
     expect(parseAdbDevices('List of devices attached\n')).toEqual(new Map())
     expect(parseAdbDevices(undefined)).toEqual(new Map())

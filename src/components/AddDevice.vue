@@ -15,8 +15,9 @@ const modelValue = defineModel({ default: false })
 
     <div class="space-y-1.5">
       <h1 class="text-[17px] font-semibold text-[#1d1d1f]">连接你的 Android 设备</h1>
-      <p class="mx-auto max-w-[280px] text-[12px] leading-relaxed text-black/45">
-        在手机开启无线调试后，扫描二维码即可完成配对，并在这里浏览已安装的应用。
+      <p class="mx-auto max-w-[300px] text-[12px] leading-relaxed text-black/45">
+        用 USB
+        数据线连接手机并允许调试，设备会自动出现在右上角列表；也可以开启无线调试，扫描二维码完成配对。
       </p>
     </div>
 

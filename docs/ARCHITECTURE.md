@@ -6,7 +6,7 @@
 
 ## 1. 形态
 
-Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的无线 ADB 设备管理器 + 自研镜像（投屏）客户端。代码分四块：主进程 + `shared/`（**`electron/adb.js` 是全仓最大文件**，8 个职责挤在一起，见 `TODO.md` O1）、渲染层 `src/**`、测试 `tests/`（vitest，纯逻辑为主）、设备侧 Helper（一个 Java 类）。规模数字不写在这里 —— 会过期，用 `cloc`/`wc` 现量。
+Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的 Android 设备管理器（USB 有线 / 无线调试两种传输）+ 自研镜像（投屏）客户端。代码分四块：主进程 + `shared/`（**`electron/adb.js` 是全仓最大文件**，8 个职责挤在一起，见 `TODO.md` O1）、渲染层 `src/**`、测试 `tests/`（vitest，纯逻辑为主）、设备侧 Helper（一个 Java 类）。规模数字不写在这里 —— 会过期，用 `cloc`/`wc` 现量。
 
 ```text
 主窗口 (isolated)          镜像窗口 (nodeIntegration, contextIsolation:false)

@@ -63,6 +63,10 @@ const POPOVER_CLASS =
       <div class="mt-0.5 flex items-center gap-1.5 text-[11px] text-black/45">
         <span class="size-1.5 rounded-full bg-[#34c759] shadow-[0_0_0_2px_rgba(52,199,89,0.18)]" />
         <span>已连接</span>
+        <template v-if="device.transport === 'usb'">
+          <span class="text-black/20">·</span>
+          <span>USB</span>
+        </template>
         <span class="text-black/20">·</span>
         <span class="truncate">{{ device.displayAddress || device.address }}</span>
       </div>

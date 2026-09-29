@@ -83,8 +83,13 @@ function handleConnectionLost(target, state) {
   if (pageType.value === "settings") pageType.value = "addDevice";
   lostDevice = target;
   const label = target.label || target.name || "设备";
-  const offline = state === "offline" || state === "unauthorized";
+  const usb = target.transport === "usb";
+  const offline = ["offline", "unauthorized", "authorizing"].includes(state);
   const title = offline ? "设备离线" : "连接已断开";
+  const offlineHint = usb
+    ? "请检查数据线，并在手机上允许 USB 调试"
+    : "设备暂时无法访问，请检查网络后重试";
+  const lostHint = usb ? "USB 连接已断开，请检查数据线" : "与设备的无线连接已断开";
 
   if (autoReconnect.value && autoAdopt) {
     notify.loading(`正在尝试恢复与 ${label} 的连接…`, {
@@ -96,7 +101,7 @@ function handleConnectionLost(target, state) {
     return;
   }
 
-  notify.error(offline ? "设备暂时无法访问，请检查网络后重试" : "与设备的无线连接已断开", {
+  notify.error(offline ? offlineHint : lostHint, {
     key: CONNECTION_TOAST_KEY,
     title,
     action: {
@@ -299,8 +304,8 @@ function closeSettings() {
 
 <template>
   <PageHeader :pageType="pageType" :disconnecting="disconnecting" :disconnect-error="disconnectError"
-    :devices="discoveredDevices" @disconnect="disconnect" @open-settings="openSettings" @close-settings="closeSettings"
-    @connect-device="connectDevice" />
+    :devices="discoveredDevices" :device-transport="device?.transport" @disconnect="disconnect"
+    @open-settings="openSettings" @close-settings="closeSettings" @connect-device="connectDevice" />
 
   <div v-if="pageType === 'loading'" class="flex flex-1 items-center justify-center">
     <span class="size-5 animate-spin rounded-full border-2 border-black/10 border-t-[#007aff]" aria-label="加载中" />

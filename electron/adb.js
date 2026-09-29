@@ -137,10 +137,32 @@ export function adbExecSafe(...args) {
 }
 
 /**
- * Disconnect a wireless ADB transport. Missing transports are idempotent.
+ * serial 是否是 USB（有线）传输：不是 `host:port`、不是无线调试的 mDNS 实例名、
+ * 不是模拟器。USB serial 天然稳定（不像无线地址每次重连就换）。
+ * @param {unknown} serial
+ * @returns {boolean}
+ */
+export function isUsbSerial(serial) {
+  if (typeof serial !== "string" || !serial.trim()) return false;
+  if (serial.includes(":") || serial.includes("._adb-tls-connect._tcp")) return false;
+  if (serial.startsWith("emulator-")) return false;
+  return true;
+}
+
+/** 传输类型：USB 有线，其余（无线调试 / 老式 tcpip）按无线处理。 */
+export function deviceTransport(serial) {
+  return isUsbSerial(serial) ? "usb" : "wifi";
+}
+
+/**
+ * Disconnect an ADB transport. Missing transports are idempotent.
+ * USB 没有 tcp transport：`adb disconnect <serial>` 会把 USB 传输直接摘掉，
+ * 而且 adb 不会自己恢复（要 kill-server 或重插才行），所以有线设备只做幂等成功，
+ * 真正的「停用」由调用方的设备级清理（镜像、缓存）完成。
  * @param {string} serial
  */
 async function disconnectTransport(serial) {
+  if (isUsbSerial(serial)) return true;
   await ensureServer();
   try {
     await adbExec("disconnect", serial);
@@ -196,17 +218,22 @@ export function parseMdnsServices(output) {
   return services;
 }
 
+const ADB_DEVICE_LINE_RE = /^(\S+)\s+(device|offline|unauthorized|authorizing|connecting)\b/;
+
 /**
- * 解析 `adb devices` 输出，返回 serial → 状态（device / offline / unauthorized）。
+ * 解析 `adb devices` 输出，返回 serial → 状态。
  * 无线调试自动连接后 serial 形如 `adb-XXXX._adb-tls-connect._tcp`，
- * 手动 connect 后形如 `192.168.1.5:37000`。
+ * 手动 connect 后形如 `192.168.1.5:37000`，USB 有线则是设备自己的序列号
+ * （形如 `fb637d72` / `R58M1234567`，不含冒号）。
+ * `authorizing` / `connecting` 是 USB 插入到可用之间的过渡态，也要认出来，
+ * 否则等待授权的手机在界面上完全不出现。
  * @param {string} output
  * @returns {Map<string, string>}
  */
 export function parseAdbDevices(output) {
   const devices = new Map();
   for (const line of String(output ?? "").split("\n")) {
-    const match = line.trim().match(/^(\S+)\s+(device|offline|unauthorized)\b/);
+    const match = line.trim().match(ADB_DEVICE_LINE_RE);
     if (match) devices.set(match[1], match[2]);
   }
   return devices;
@@ -363,7 +390,9 @@ async function deviceDisplayName(serial) {
  *
  * 名称优先取 mDNS TXT 的 given_name，其次读设备上的展示名称。
  * `address` 一律取 adb 的 serial（可直接用于 `adb -s`），展示用 displayAddress。
- * @returns {Promise<{ name: string, type: string, address: string, displayAddress: string, label: string | null, connected: boolean }[]>}
+ * `transport` 区分有线 / 无线：USB 直插的设备没有 mDNS 条目，展示与断开逻辑都按它分支。
+ * 未授权（unauthorized）也返回，`connected: false` 供界面提示「在手机上点允许」。
+ * @returns {Promise<{ name: string, type: string, address: string, displayAddress: string, label: string | null, connected: boolean, state: string, transport: "usb" | "wifi" }[]>}
  */
 async function listConnectDevices() {
   ensureConnectBrowser();
@@ -382,22 +411,28 @@ async function listConnectDevices() {
   }
 
   const entries = [...parseAdbDevices(devicesOutput)].filter(
-    ([serial, state]) => state !== "unauthorized" && !serial.startsWith("emulator-"),
+    ([serial]) => !serial.startsWith("emulator-"),
   );
 
   return Promise.all(
     entries.map(async ([serial, state]) => {
       const svc = bySerial.get(serial);
-      warmDeviceStableId(serial);
+      if (state === "device") warmDeviceStableId(serial);
+      // 没授权的设备 shell 读什么都失败，直接不读，别让标签和名字一起卡住。
       const label =
-        (svc && connectNames.get(svc.name)) || (await deviceDisplayName(serial)) || null;
+        state === "device"
+          ? (svc && connectNames.get(svc.name)) || (await deviceDisplayName(serial)) || null
+          : null;
       return {
         name: svc?.name || serial,
-        type: svc?.type || "_adb-tls-connect._tcp",
+        // USB 直插没有 mDNS 服务条目，不硬塞一个无线服务类型骗界面。
+        type: svc?.type || "",
         address: serial,
         displayAddress: svc?.address || serial,
         label,
         connected: state === "device",
+        state,
+        transport: deviceTransport(serial),
       };
     }),
   );
@@ -407,7 +442,7 @@ async function listConnectDevices() {
  * 返回当前 adb 已连接（状态 device）的设备，供启动时接管其他工具
  * （Android Studio / 终端 adb 等）已建立的连接。优先无线设备，
  * address 用 adb 的 serial，可直接用于后续 `adb -s`。
- * @returns {Promise<{ name: string, address: string, displayAddress: string, label: string | null } | null>}
+ * @returns {Promise<{ name: string, address: string, displayAddress: string, label: string | null, transport: "usb" | "wifi" } | null>}
  */
 async function getConnectedDevice() {
   await ensureServer();
@@ -439,7 +474,7 @@ async function getConnectedDevice() {
   } catch {
     // ignore
   }
-  return { name, address, displayAddress, label };
+  return { name, address, displayAddress, label, transport: deviceTransport(address) };
 }
 
 // ---------------------------------------------------------------------------
@@ -450,10 +485,11 @@ async function getConnectedDevice() {
  * 读取某台设备在 `adb devices` 中的实时状态，用于连接健康检查：
  * - `device`：在线可用
  * - `offline`：仍登记在 adb 中但无法通信（设备休眠 / 网络抖动）
- * - `unauthorized`：未授权
- * - `absent`：transport 已断开，设备从列表消失
+ * - `unauthorized` / `authorizing`：未授权或正在等手机上点「允许」（USB 插入常见）
+ * - `connecting`：transport 正在建立
+ * - `absent`：transport 已断开，设备从列表消失（USB 场景 = 数据线被拔）
  * @param {string} serial
- * @returns {Promise<"device" | "offline" | "unauthorized" | "absent">}
+ * @returns {Promise<"device" | "offline" | "unauthorized" | "authorizing" | "connecting" | "absent">}
  */
 export async function getDeviceState(serial) {
   if (typeof serial !== "string" || !serial) return "absent";
@@ -487,15 +523,28 @@ async function resolveReconnectAddress(serial) {
 }
 
 /**
- * 尝试恢复与某台设备的无线连接。设备已在线时直接返回；否则解析可用地址后
+ * 尝试恢复与某台设备的连接。设备已在线时直接返回；无线设备解析可用地址后
  * 重新 `adb connect`。与 disconnectTransport 一致，「已经断开」走幂等成功路径，
  * 由调用方重新读取当前设备。
+ *
+ * USB 没有地址可 connect：不在列表里就是被拔了（等重新插入），还在列表里但
+ * offline / 未授权则踢一次 host 侧连接，让 adb 重新枚举它。
  * @param {string} serial
  * @returns {Promise<{ online: boolean, address?: string, reason?: string }>}
  */
 export async function reconnectDevice(serial) {
   if (typeof serial !== "string" || !serial) return { online: false, reason: "no-serial" };
-  if ((await getDeviceState(serial)) === "device") return { online: true, address: serial };
+  const state = await getDeviceState(serial);
+  if (state === "device") return { online: true, address: serial };
+
+  if (isUsbSerial(serial)) {
+    if (state === "absent") return { online: false, reason: "usb-absent" };
+    await adbExecSafe("-s", serial, "reconnect");
+    const again = await getDeviceState(serial);
+    return again === "device"
+      ? { online: true, address: serial }
+      : { online: false, reason: again || state };
+  }
 
   // 配对场景 serial 本身就是 host:port；发现场景回落到 mDNS 广播的地址。
   const address = /:\d+$/.test(serial) ? serial : await resolveReconnectAddress(serial);
@@ -1771,8 +1820,18 @@ async function getDeviceStats(serial, force = false) {
 // IPC handlers
 // ---------------------------------------------------------------------------
 
-// 连接设备
+// 连接设备：无线走 `adb connect <host:port>`；USB serial 没有 tcp 端点，
+// 前提是它已经被 adb 枚举到，这里只做确认并给出可读的失败原因。
 ipcMain.handle(CHANNELS.adbConnect, async (_, address) => {
+  if (isUsbSerial(address)) {
+    const state = await getDeviceState(address);
+    if (state === "device") return address;
+    throw new Error(
+      state === "absent"
+        ? "USB 设备未连接，请插好数据线后重试"
+        : "USB 设备未授权，请在手机上允许 USB 调试后重试",
+    );
+  }
   const output = await adbExec({ timeoutMs: ADB_CONNECT_TIMEOUT_MS }, "connect", address);
   if (!/connected to /i.test(output)) throw new Error(output || "连接失败");
   return output.trim();
@@ -1836,7 +1895,8 @@ export async function runDeviceTeardown(serial) {
   );
 }
 
-// 断开设备：先停掉该设备的镜像会话，再断开无线 ADB 传输
+// 断开设备：先停掉该设备的镜像会话，再断开 ADB 传输（USB 只停用、不摘传输，
+// 详见 disconnectTransport）
 ipcMain.handle(CHANNELS.adbDisconnect, async (_, rawSerial) => {
   const serial = normalizeDisconnectSerial(rawSerial);
   await runDeviceTeardown(serial);

@@ -1,17 +1,17 @@
 # AndDrive
 
-AndDrive 是一个 macOS 桌面工具，通过 Android 无线调试连接单台 Android 设备，浏览已安装应用，并在自研镜像窗口里投屏与操作该应用（复用 scrcpy 服务端）。
+AndDrive 是一个 macOS 桌面工具，通过 USB 数据线或 Android 无线调试连接单台 Android 设备，浏览已安装应用，并在自研镜像窗口里投屏与操作该应用（复用 scrcpy 服务端）。
 
 > 仅支持 macOS（Apple Silicon）。Windows/Linux 构建配置已移除。
 
 ## 工作方式
 
-1. 在 Android 设备开启无线调试。
-2. 在 AndDrive 扫描二维码完成 ADB 配对。
+1. 用 USB 数据线连接设备并允许 USB 调试，或在 Android 设备开启无线调试。
+2. 走无线时，在 AndDrive 扫描二维码完成 ADB 配对；走 USB 时无需配对。
 3. AndDrive 自动发现并连接设备，安装/启动 Helper App，读取应用列表和图标。
 4. 点击应用启动镜像窗口。
 5. 在应用右键菜单选择“发送到桌面”，可在桌面生成带应用图标的 `.adr` 快捷方式，双击由系统交给 AndDrive 打开并投屏该应用；投屏参数始终使用设置中的最新全局参数，镜像窗口也使用该应用图标。
-6. 点击“断开连接”会结束当前无线 ADB 传输并停止 scrcpy；Android 中保存的配对记录不会被删除。
+6. 点击“断开连接”会结束当前连接并停止 scrcpy：无线断开 ADB 传输（Android 中保存的配对记录不会被删除），USB 只在 AndDrive 内停用，数据线连接与调试授权都保留。
 
 AndDrive 遵循**单设备优先**规则：当前只维护一台活动设备，不提供设备切换器或多设备列表。
 
@@ -20,7 +20,7 @@ AndDrive 遵循**单设备优先**规则：当前只维护一台活动设备，�
 - macOS（Apple Silicon）
 - Node.js 22.18+（或满足 `package.json` engines 的更新版本）
 - pnpm
-- Android 11+ 设备，开启无线调试并与 Mac 位于同一网络
+- Android 11+ 设备；USB 数据线直连，或开启无线调试并与 Mac 位于同一网络
 - Android SDK（构建 Helper App 时需要；仅打包已有 APK 时不需要）
 
 Helper 协议见 [`helper-app/README.md`](helper-app/README.md)；文档只剩三份：**架构与约定** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)、**待办总账** [`docs/TODO.md`](docs/TODO.md)、**镜像引擎现状与取证记录** [`docs/NATIVE_MIRROR.md`](docs/NATIVE_MIRROR.md)。
@@ -134,7 +134,9 @@ Vue renderer (src/)
 
 ## 连接与断开
 
-断开按钮只移除当前无线 ADB transport，不会撤销 Android 配对记录；若要永久撤销配对，请在设备的无线调试设置中移除已配对电脑。设备已经因网络变化离线时，断开操作按幂等成功处理；其他 ADB 错误会保留当前页面并显示错误。
+**USB 有线**：插好数据线并在手机上允许 USB 调试即可，设备会出现在添加设备页右上角的列表里（未授权时标「待授权」并提示在手机上点允许），通常自动接管进首页。断开按钮只在 AndDrive 内停用该设备（停镜像、清缓存），不会动 USB 传输；拔线后会尝试自动重连，重新插入即恢复。
+
+**无线调试**：断开按钮只移除当前无线 ADB transport，不会撤销 Android 配对记录；若要永久撤销配对，请在设备的无线调试设置中移除已配对电脑。设备已经因网络变化离线时，断开操作按幂等成功处理；其他 ADB 错误会保留当前页面并显示错误。
 
 ## 许可与资源
 

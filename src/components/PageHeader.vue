@@ -8,9 +8,45 @@ const props = defineProps({
   disconnecting: Boolean,
   disconnectError: { type: String, default: '' },
   devices: { type: Array, default: () => [] },
+  // 当前设备的传输类型：有线 / 无线的断开语义不一样（USB 不摘 ADB 传输）
+  deviceTransport: { type: String, default: '' },
 })
 const showConfirm = ref(false)
 const emit = defineEmits(['disconnect', 'openSettings', 'closeSettings', 'connectDevice'])
+
+const isUsb = computed(() => props.deviceTransport === 'usb')
+
+const disconnectMessage = computed(() =>
+  isUsb.value
+    ? '将在 AndDrive 中断开这台 USB 设备（停止镜像与应用读取），数据线连接与手机上的调试授权都会保留。'
+    : '将断开当前无线 ADB 连接。手机端的配对记录仍会保留，之后可以再次连接。若设备已经离线，断开操作仍会视为成功。',
+)
+
+/** 列表里每台设备的状态文案：未授权要点手机，USB 插着没调试授权时最常见。 */
+function stateText(device) {
+  if (device.connected) return '可连接'
+  if (device.state === 'unauthorized' || device.state === 'authorizing') return '待授权'
+  return '离线'
+}
+
+function stateClass(device) {
+  if (device.connected) return 'bg-[#34c759]/12 text-[#248a3d]'
+  if (stateText(device) === '待授权') return 'bg-[#ff9500]/14 text-[#b25f00]'
+  return 'bg-black/[0.06] text-black/40'
+}
+
+function stateDotClass(device) {
+  if (device.connected) return 'bg-[#34c759]'
+  return stateText(device) === '待授权' ? 'bg-[#ff9500]' : 'bg-black/25'
+}
+
+/** 待授权时地址那一行改成操作提示，否则用户只看到一串序列号不知道要点什么。 */
+function deviceHint(device) {
+  if (stateText(device) === '待授权') {
+    return device.transport === 'usb' ? '请在手机上点「允许 USB 调试」' : '请在手机上允许此电脑调试'
+  }
+  return device.displayAddress || device.address
+}
 
 const actions = computed(() => {
   if (props.pageType === 'settings') {
@@ -66,9 +102,9 @@ watch(
         </TooltipRoot>
       </div>
 
-      <ConfirmDialog v-model="showConfirm" title="断开连接"
-        message="将断开当前无线 ADB 连接。手机端的配对记录仍会保留，之后可以再次连接。若设备已经离线，断开操作仍会视为成功。" confirm-label="断开" :loading="disconnecting"
-        :error="disconnectError" @confirm="handleConfirm" @cancel="handleCancel" @close="handleCancel" />
+      <ConfirmDialog v-model="showConfirm" title="断开连接" :message="disconnectMessage" confirm-label="断开"
+        :loading="disconnecting" :error="disconnectError" @confirm="handleConfirm" @cancel="handleCancel"
+        @close="handleCancel" />
 
       <div v-if="devices.length && pageType === 'addDevice'" style="-webkit-app-region: no-drag"
         class="absolute top-12 right-4 z-60 flex w-72 flex-col gap-2">
@@ -83,16 +119,18 @@ watch(
               <span class="truncate text-[13px] font-semibold text-[#1d1d1f]">
                 {{ device.label || device.name || '未知设备' }}
               </span>
-              <span class="flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none" :class="device.connected
-                ? 'bg-[#34c759]/12 text-[#248a3d]'
-                : 'bg-black/[0.06] text-black/40'
-                ">
-                <span class="size-1.5 rounded-full" :class="device.connected ? 'bg-[#34c759]' : 'bg-black/25'" />
-                {{ device.connected ? '可连接' : '离线' }}
+              <span v-if="device.transport === 'usb'"
+                class="shrink-0 rounded-[4px] bg-black/[0.06] px-1 py-0.5 text-[10px] leading-none font-medium text-black/50">
+                USB
+              </span>
+              <span class="flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none"
+                :class="stateClass(device)">
+                <span class="size-1.5 rounded-full" :class="stateDotClass(device)" />
+                {{ stateText(device) }}
               </span>
             </div>
             <div class="mt-0.5 truncate text-[11px] text-black/45">
-              {{ device.displayAddress || device.address }}
+              {{ deviceHint(device) }}
             </div>
           </div>
           <BaseButton variant="primary" size="sm" :disabled="!device.connected" @click="emit('connectDevice', device)">
