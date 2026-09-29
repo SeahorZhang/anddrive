@@ -2,7 +2,8 @@
 
 /** 默认投屏参数。渲染层可覆盖，字段经 normalizeScrcpyConfig 校验后才会进入命令行。 */
 export const DEFAULT_SCRCPY_CONFIG = Object.freeze({
-  bitRate: "24M",
+  /** 码率跟着画质档位走（设置页里两者是同一个下拉），默认清晰档 = 32M。 */
+  bitRate: "32M",
   maxFps: 60,
   /** 视频编码：auto = 按「设备能编 + 本机 WebCodecs 能解」自动挑（见 pickAutoCodec）。 */
   videoCodec: "auto",
@@ -43,6 +44,24 @@ export const DISPLAY_QUALITY_TIERS = Object.freeze({
   compat: 1.5,
   native: 2,
   sharp: 3,
+});
+
+/**
+ * 画质档位 → 该档的码率上限。设置页把这两项并成**一个下拉**：上表实测每档的稳态码率
+ * 差着 5 倍（~5 / ~5.2 / ~27Mbps），两者本来就一一对应，拆成两个选择器只会让人配错
+ * （3 档配 8M 会糊，1.5 档配 32M 白占带宽）。
+ *
+ * sharp 给 32M 而非 24M：实测 ~27Mbps 已越过 24M 上限，24M 装不下这一档（默认值随之为 32M）。
+ *
+ * **存盘仍是 `quality` + `bitRate` 两个字段**（结构零迁移）：老配置里两者对不上这张表时，
+ * 设置页补一项标灰的「自定义」照实显示，不静默改用户的值 —— 同 `planCodecList` 对
+ * 越界编码的处理。唯一例外是改版前的出厂组合 `sharp + 24M`，由 `normalizeScrcpyConfig`
+ * 升级到 `sharp + 32M`（否则老用户打开设置页全看到「自定义」）。
+ */
+export const DISPLAY_QUALITY_BIT_RATES = Object.freeze({
+  compat: "8M",
+  native: "16M",
+  sharp: "32M",
 });
 
 /** 老注释与调用点里的「倍率」= 默认档位的倍率。 */
@@ -176,6 +195,8 @@ export function resolveVideoCodec(requested, caps = {}) {
 }
 const QUALITIES = new Set(Object.keys(DISPLAY_QUALITY_TIERS));
 const BIT_RATE_RE = /^\d{1,4}[KMG]?$/;
+/** 改版前（画质档位还没带码率时）的出厂码率，见 `normalizeScrcpyConfig` 的升级说明。 */
+const LEGACY_DEFAULT_BIT_RATE = "24M";
 
 /**
  * 编码下拉该列什么、设备多出来的那些为什么进不来。纯函数，UI 只负责渲染。
@@ -224,6 +245,11 @@ export function planCodecList({ mimes = [], device = null, local = null, current
  * 归一化投屏参数：非法值静默回落到默认值，避免把任意字符串带进命令行。
  * 已废弃的字段（`engine`、`tablet` 那类历史存盘键）在这里被**静默丢弃** ——
  * 老用户的配置文件因此无需迁移，下次保存就干净了。
+ *
+ * 唯一一处**主动改值**：改版前的出厂组合 `sharp + 24M` 升级成新的出厂组合
+ * `sharp + 32M`（见 `DISPLAY_QUALITY_BIT_RATES`）。存盘里分不清「出厂值」和
+ * 「用户选的 24M」—— 而 24M 本来就是下拉里的默认项，按出厂值处理；否则每个老用户
+ * 打开新设置页看到的都会是标灰的「自定义」。其他不匹配预设的组合一律原样保留。
  * @param {unknown} input
  * @returns {typeof DEFAULT_SCRCPY_CONFIG}
  */
@@ -232,17 +258,22 @@ export function normalizeScrcpyConfig(input) {
   const maxFps = Number.isInteger(raw.maxFps)
     ? Math.min(240, Math.max(1, raw.maxFps))
     : DEFAULT_SCRCPY_CONFIG.maxFps;
+  const quality = QUALITIES.has(raw.quality) ? raw.quality : DEFAULT_SCRCPY_CONFIG.quality;
+  const storedBitRate =
+    typeof raw.bitRate === "string" && BIT_RATE_RE.test(raw.bitRate.trim())
+      ? raw.bitRate.trim()
+      : DEFAULT_SCRCPY_CONFIG.bitRate;
   return {
     bitRate:
-      typeof raw.bitRate === "string" && BIT_RATE_RE.test(raw.bitRate.trim())
-        ? raw.bitRate.trim()
-        : DEFAULT_SCRCPY_CONFIG.bitRate,
+      quality === DEFAULT_SCRCPY_CONFIG.quality && storedBitRate === LEGACY_DEFAULT_BIT_RATE
+        ? DEFAULT_SCRCPY_CONFIG.bitRate
+        : storedBitRate,
     maxFps,
     videoCodec: VIDEO_CODECS.has(raw.videoCodec)
       ? raw.videoCodec
       : DEFAULT_SCRCPY_CONFIG.videoCodec,
     audio: raw.audio === true,
-    quality: QUALITIES.has(raw.quality) ? raw.quality : DEFAULT_SCRCPY_CONFIG.quality,
+    quality,
     alwaysOnTop: raw.alwaysOnTop === true,
     fullscreen: raw.fullscreen === true,
   };

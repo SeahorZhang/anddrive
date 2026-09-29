@@ -18,6 +18,7 @@ const {
   DISPLAY_BASE_DPI,
   DISPLAY_PIXEL_SCALE,
   DISPLAY_QUALITY_TIERS,
+  DISPLAY_QUALITY_BIT_RATES,
   VIDEO_CODEC_CHOICES,
   VIDEO_ENCODER_PROBE_CMD,
   isCodecUsable,
@@ -145,6 +146,35 @@ describe('computeDisplayMetrics', () => {
     expect(computeDisplayMetrics(800, 1600, 'nope').scale).toBe(DISPLAY_PIXEL_SCALE)
     expect(computeDisplayMetrics(0, 0).width).toBeGreaterThanOrEqual(2)
     expect(computeDisplayMetrics(NaN, 300).height).toBeGreaterThan(0)
+  })
+})
+
+describe('DISPLAY_QUALITY_BIT_RATES', () => {
+  it('码率档位与画质档位一一对应，且默认值正好落在默认档位上', () => {
+    expect(Object.keys(DISPLAY_QUALITY_BIT_RATES)).toEqual(Object.keys(DISPLAY_QUALITY_TIERS))
+    // 对不上的话设置页的合并下拉默认会显示「自定义」，等于默认配置就没命中预设。
+    expect(DISPLAY_QUALITY_BIT_RATES[DEFAULT_SCRCPY_CONFIG.quality]).toBe(DEFAULT_SCRCPY_CONFIG.bitRate)
+  })
+
+  it('每档的码率都要装得下该档实测的稳态码率（~5 / ~5.2 / ~27Mbps）', () => {
+    expect(DISPLAY_QUALITY_BIT_RATES).toEqual({ compat: '8M', native: '16M', sharp: '32M' })
+  })
+
+  it('老出厂组合 sharp + 24M 升级到新出厂组合 sharp + 32M', () => {
+    // 24M 是改版前的默认值，存盘里分不出「出厂」还是「用户选的」；不升级的话
+    // 每个老用户打开新设置页看到的都是标灰的「自定义」。
+    expect(normalizeScrcpyConfig({ quality: 'sharp', bitRate: '24M' })).toMatchObject({
+      quality: 'sharp',
+      bitRate: '32M',
+    })
+  })
+
+  it('其他对不上预设的组合原样保留（不静默改用户的码率）', () => {
+    const capped = normalizeScrcpyConfig({ quality: 'sharp', bitRate: '8M' })
+    expect(capped.bitRate).toBe('8M')
+    expect(DISPLAY_QUALITY_BIT_RATES[capped.quality]).not.toBe(capped.bitRate)
+    // 非默认档位上的 24M 也不是出厂值：换档后留下的码率，一个字都不动。
+    expect(normalizeScrcpyConfig({ quality: 'compat', bitRate: '24M' }).bitRate).toBe('24M')
   })
 })
 

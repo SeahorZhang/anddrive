@@ -25,7 +25,8 @@
 /**
  * scrcpy 启动参数（渲染层与设置页共用；主进程会再次校验并回落默认值）。
  * @typedef {object} ScrcpyConfig
- * @property {string} bitRate 视频码率，如 `24M`
+ * @property {string} bitRate 视频码率上限，如 `32M`。设置页由画质档位派生（`DISPLAY_QUALITY_BIT_RATES`），存盘仍是独立字段
+ * @property {string} quality 画质档位 compat | native | sharp（决定虚拟显示倍率，与 bitRate 在设置页里是同一个下拉）
  * @property {number} maxFps 帧率上限
  * @property {string} videoCodec auto | h264 | h265 | av1 | vp8 | vp9（auto 在建立会话时按能力表落地）
  * @property {boolean} audio 是否转发音频

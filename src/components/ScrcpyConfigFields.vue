@@ -1,10 +1,15 @@
 <script setup>
 import SwitchToggle from './SwitchToggle.vue'
-import { DISPLAY_QUALITY_TIERS, planCodecList } from '../../shared/scrcpyConfig.js'
+import {
+  DISPLAY_QUALITY_TIERS,
+  DISPLAY_QUALITY_BIT_RATES,
+  planCodecList,
+} from '../../shared/scrcpyConfig.js'
 
 /**
- * scrcpy 参数表单。无内部状态：读取 `config`，字段变化时 emit `change(key, value)`，
- * 由父组件决定写回全局偏好还是单次启动草稿。
+ * scrcpy 参数表单。无内部状态：读取 `config`，字段变化时 emit `change(patch)`，
+ * 由父组件决定写回全局偏好还是单次启动草稿。patch 是对象（一次可能改多个字段，
+ * 比如选画质档位会同时改倍率与码率）。
  */
 const props = defineProps({
   config: { type: Object, required: true },
@@ -19,7 +24,6 @@ const emit = defineEmits(['change'])
 const SELECT_CLASS =
   'h-7 max-w-[190px] cursor-pointer rounded-[7px] border border-black/10 bg-white px-2 text-[12px] text-black/70 outline-none disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-[#007aff]/40'
 
-const BIT_RATE_OPTIONS = ['8M', '16M', '24M', '32M']
 const FPS_OPTIONS = [30, 60, 90, 120]
 /** 某一头明确说「不行」才标记；null（没探测到）不标，免得凭猜测拦用户。 */
 /**
@@ -37,19 +41,48 @@ const codecPlan = computed(() =>
 const codecOptions = computed(() => codecPlan.value.options)
 const blockedCodecs = computed(() => codecPlan.value.blocked)
 
-// 倍率从 DISPLAY_QUALITY_TIERS 取，标签里不再手抄数字（档位数值改了这里跟着变）。
-const QUALITY_META = {
-  compat: { name: '兼容', note: '给排版的异常应用' },
-  native: { name: '均衡', note: '屏幕原生精度' },
-  sharp: { name: '清晰', note: '最费带宽' },
-}
+// 倍率与码率都从 shared 的两张表取，标签里不手抄数字（档位数值改了这里跟着变）。
+// 选项标签只放「名字 + 倍率 / 码率」：select 最宽 190px，再塞档位说明就会被裁掉，
+// 什么时候选哪档写在下面那行（那行会换行，不会被裁）。
+const QUALITY_META = { compat: '兼容', native: '均衡', sharp: '清晰' }
 const QUALITY_OPTIONS = Object.entries(DISPLAY_QUALITY_TIERS).map(([value, scale]) => {
-  const meta = QUALITY_META[value] ?? { name: value, note: '' }
-  return { value, label: `${meta.name}（${scale}x${meta.note ? `，${meta.note}` : ''}）` }
+  const name = QUALITY_META[value] ?? value
+  return { value, label: `${name}（${scale}x / ${DISPLAY_QUALITY_BIT_RATES[value]}）` }
 })
 
-function update(key, value) {
-  emit('change', key, value)
+/** 档位与码率存盘是两个字段，只有值等于某个预设时下拉才落在那一档（否则是「自定义」）。 */
+const CUSTOM_QUALITY = 'custom'
+const qualityValue = computed(() =>
+  DISPLAY_QUALITY_BIT_RATES[props.config.quality] === props.config.bitRate
+    ? props.config.quality
+    : CUSTOM_QUALITY,
+)
+/**
+ * 档位与码率并成**一个**下拉，但不因此改存盘结构：老配置里两者对不上（手动挑过码率）
+ * 时不静默改用户的值，只补一项标灰的「自定义」照实显示 —— 同 `planCodecList` 对越界
+ * 编码的处理。挑回任一档位即写入该档的倍率与码率，「自定义」不可再选。
+ */
+const qualityOptions = computed(() => {
+  if (qualityValue.value !== CUSTOM_QUALITY) return QUALITY_OPTIONS
+  const name = QUALITY_META[props.config.quality] ?? props.config.quality
+  return [
+    ...QUALITY_OPTIONS,
+    {
+      value: CUSTOM_QUALITY,
+      label: `自定义（${name} · ${props.config.bitRate}）`,
+      disabled: true,
+    },
+  ]
+})
+
+function update(patch) {
+  emit('change', patch)
+}
+
+/** 选档位 = 一次写入倍率与码率两个字段。 */
+function updateQuality(tier) {
+  if (tier === CUSTOM_QUALITY) return
+  update({ quality: tier, bitRate: DISPLAY_QUALITY_BIT_RATES[tier] })
 }
 </script>
 
@@ -59,12 +92,17 @@ function update(key, value) {
   >
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
-        <div class="text-[13px] text-black/70">视频码率</div>
-        <div class="mt-0.5 text-[11px] text-black/40">码率越高画质越好，网络占用也越大</div>
+        <div class="text-[13px] text-black/70">画质档位</div>
+        <div class="mt-0.5 text-[11px] text-black/40">
+          一档 = 像素倍率 + 码率上限，会话建立时读取（改动不影响进行中的镜像）。
+          实测只影响清晰度与带宽、不影响帧率：排版异常的应用用兼容，Wi-Fi 不稳时降档
+        </div>
       </div>
-      <select :class="SELECT_CLASS" :value="props.config.bitRate" :disabled="disabled"
-        @change="update('bitRate', $event.target.value)">
-        <option v-for="rate in BIT_RATE_OPTIONS" :key="rate" :value="rate">{{ rate }}</option>
+      <select :class="SELECT_CLASS" :value="qualityValue" :disabled="disabled"
+        @change="updateQuality($event.target.value)">
+        <option v-for="tier in qualityOptions" :key="tier.value" :value="tier.value" :disabled="tier.disabled">
+          {{ tier.label }}
+        </option>
       </select>
     </div>
 
@@ -74,7 +112,7 @@ function update(key, value) {
         <div class="mt-0.5 text-[11px] text-black/40">限制镜像的最大帧率</div>
       </div>
       <select :class="SELECT_CLASS" :value="props.config.maxFps" :disabled="disabled"
-        @change="update('maxFps', Number($event.target.value))">
+        @change="update({ maxFps: Number($event.target.value) })">
         <option v-for="fps in FPS_OPTIONS" :key="fps" :value="fps">{{ fps }} fps</option>
       </select>
     </div>
@@ -91,25 +129,9 @@ function update(key, value) {
         </div>
       </div>
       <select :class="SELECT_CLASS" :value="props.config.videoCodec" :disabled="disabled"
-        @change="update('videoCodec', $event.target.value)">
+        @change="update({ videoCodec: $event.target.value })">
         <option v-for="codec in codecOptions" :key="codec.value" :value="codec.value" :disabled="codec.disabled">
           {{ codec.label }}
-        </option>
-      </select>
-    </div>
-
-    <div class="flex items-center gap-3 px-4 py-2.5">
-      <div class="min-w-0 flex-1">
-        <div class="text-[13px] text-black/70">画质档位</div>
-        <div class="mt-0.5 text-[11px] text-black/40">
-          镜像画面的像素倍率，会话建立时读取（改动不影响进行中的镜像）。
-          实测只影响清晰度与带宽、不影响帧率：Wi-Fi 不稳时降到均衡
-        </div>
-      </div>
-      <select :class="SELECT_CLASS" :value="props.config.quality" :disabled="disabled"
-        @change="update('quality', $event.target.value)">
-        <option v-for="tier in QUALITY_OPTIONS" :key="tier.value" :value="tier.value">
-          {{ tier.label }}
         </option>
       </select>
     </div>
@@ -120,7 +142,7 @@ function update(key, value) {
         <div class="mt-0.5 text-[11px] text-black/40">把设备声音转发到电脑播放</div>
       </div>
       <SwitchToggle :model-value="props.config.audio" :disabled="disabled"
-        @update:model-value="(value) => update('audio', value)" />
+        @update:model-value="(value) => update({ audio: value })" />
     </div>
 
     <div class="flex items-center gap-3 px-4 py-2.5">
@@ -129,7 +151,7 @@ function update(key, value) {
         <div class="mt-0.5 text-[11px] text-black/40">镜像窗口始终显示在其他窗口之上</div>
       </div>
       <SwitchToggle :model-value="props.config.alwaysOnTop" :disabled="disabled"
-        @update:model-value="(value) => update('alwaysOnTop', value)" />
+        @update:model-value="(value) => update({ alwaysOnTop: value })" />
     </div>
 
     <div class="flex items-center gap-3 px-4 py-2.5">
@@ -138,7 +160,7 @@ function update(key, value) {
         <div class="mt-0.5 text-[11px] text-black/40">镜像窗口以全屏模式打开</div>
       </div>
       <SwitchToggle :model-value="props.config.fullscreen" :disabled="disabled"
-        @update:model-value="(value) => update('fullscreen', value)" />
+        @update:model-value="(value) => update({ fullscreen: value })" />
     </div>
   </div>
 </template>

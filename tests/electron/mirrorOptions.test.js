@@ -42,7 +42,8 @@ describe('buildMirrorOptions', () => {
       control: true,
       sendStreamMeta: true,
       videoCodec: 'h265',
-      videoBitRate: 24_000_000,
+      // 默认码率跟着默认档位走：清晰档 3x 实测 ~27Mbps，默认上限 32M（见 DISPLAY_QUALITY_BIT_RATES）。
+      videoBitRate: 32_000_000,
       maxFps: 60,
       newDisplay: '1080x2400/320',
       flexDisplay: true,

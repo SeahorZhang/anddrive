@@ -39,8 +39,8 @@ watch(modelValue, (open) => {
   error.value = ''
 })
 
-function onChange(key, value) {
-  draft[key] = value
+function onChange(patch) {
+  Object.assign(draft, patch)
 }
 
 function applyDefaults() {

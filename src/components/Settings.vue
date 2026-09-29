@@ -156,7 +156,7 @@ onMounted(refreshPermissions)
         </button>
       </div>
       <ScrcpyConfigFields :config="scrcpyConfig" :local-codecs="localCodecs" :device-codecs="deviceCodecs"
-        @change="(key, value) => (scrcpyConfig[key] = value)" />
+        @change="(patch) => Object.assign(scrcpyConfig, patch)" />
     </section>
 
     <section v-if="isMac">
