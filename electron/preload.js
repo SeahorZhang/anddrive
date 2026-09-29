@@ -51,6 +51,10 @@ expose("electronAPI", {
     getAppInfo: (serial, packageName) => invoke(CHANNELS.adbAppInfo, serial, packageName),
     exportApk: (serial, packageName) => invoke(CHANNELS.adbExportApk, serial, packageName),
     getDeviceStats: (serial, force) => invoke(CHANNELS.adbGetDeviceStats, serial, force),
+    getStorageVolumes: (serial, force) => invoke(CHANNELS.adbStorageVolumes, serial, force),
+    mountStorage: (payload) => invoke(CHANNELS.adbStorageMount, payload),
+    unmountStorage: (volumeId) => invoke(CHANNELS.adbStorageUnmount, volumeId),
+    revealStorage: (volumeId) => invoke(CHANNELS.adbStorageReveal, volumeId),
     getVideoCodecs: (serial) => invoke(CHANNELS.adbVideoCodecs, serial),
   },
   permissions: {

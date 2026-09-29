@@ -1,6 +1,7 @@
 <script setup>
 import BaseButton from '../BaseButton.vue'
 import { getDeviceStatsApi } from '@/api'
+import { formatBytes } from '@/utils/format'
 import { readableError } from '@/utils/errors'
 
 const props = defineProps({
@@ -37,18 +38,6 @@ watch(
   },
 )
 
-function formatBytes(bytes) {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '—'
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let value = bytes
-  let index = 0
-  while (value >= 1024 && index < units.length - 1) {
-    value /= 1024
-    index += 1
-  }
-  return `${value >= 100 || index < 2 ? Math.round(value) : value.toFixed(1)} ${units[index]}`
-}
-
 const BATTERY_STATUS_TEXT = {
   charging: '充电中',
   discharging: '放电中',
@@ -72,11 +61,6 @@ function cpuText() {
   if (cpu.load1 != null) parts.push(`负载 ${cpu.load1.toFixed(2)}`)
   return parts.join(' · ') || '—'
 }
-
-const storagePercent = computed(() => {
-  const value = stats.value?.storage?.percentUsed
-  return Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : 0
-})
 </script>
 
 <template>
@@ -126,18 +110,6 @@ const storagePercent = computed(() => {
             <div class="text-[11px] text-black/40">内存</div>
             <div class="text-[12px] text-black/75">
               {{ formatBytes(stats.memory?.usedBytes) }} / {{ formatBytes(stats.memory?.totalBytes) }}
-            </div>
-          </div>
-          <div class="col-span-2">
-            <div class="flex items-center justify-between text-[11px] text-black/40">
-              <span>存储（/data）</span>
-              <span class="tabular-nums">
-                {{ formatBytes(stats.storage?.usedBytes) }} / {{ formatBytes(stats.storage?.totalBytes) }}
-                <span v-if="stats.storage?.percentUsed != null">（{{ stats.storage.percentUsed }}%）</span>
-              </span>
-            </div>
-            <div class="mt-1 h-1.5 w-full overflow-hidden rounded-full bg-black/[0.08]">
-              <div class="h-full rounded-full bg-[#007aff]" :style="{ width: `${storagePercent}%` }" />
             </div>
           </div>
           <div class="col-span-2">

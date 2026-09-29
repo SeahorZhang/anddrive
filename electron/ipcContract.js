@@ -32,6 +32,12 @@ export const CHANNELS = {
 
   /** 设备信息面板（electron/adb.js）。 */
   adbGetDeviceStats: 'adb:getDeviceStats',
+  /** 设备存储按卷列表（electron/storage.js）。 */
+  adbStorageVolumes: 'adb:storageVolumes',
+  /** 把某个卷挂到本机 / 取消挂载 / 在访达里打开（electron/storage.js）。 */
+  adbStorageMount: 'adb:storageMount',
+  adbStorageUnmount: 'adb:storageUnmount',
+  adbStorageReveal: 'adb:storageReveal',
   /** 设备侧能编码哪些视频（设置页标记 + 会话落地 `auto`）。 */
   adbVideoCodecs: 'adb:videoCodecs',
 

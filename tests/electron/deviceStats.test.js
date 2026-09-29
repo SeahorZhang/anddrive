@@ -17,11 +17,6 @@ const PROPS = [
   '[ro.soc.model]: [Google Tensor]',
 ].join('\n')
 
-const STORAGE = [
-  'Filesystem      1K-blocks      Used Available Use% Mounted on',
-  '/dev/block/dm-6 117182328  45123456  72058872  39% /data',
-].join('\n')
-
 const BATTERY = [
   'Current Battery Service state:',
   '  AC powered: false',
@@ -42,9 +37,9 @@ const NETWORK = [
 ].join('\n')
 
 describe('parseDeviceStats', () => {
-  it('parses props, cpu, memory, storage, battery and network', () => {
+  it('parses props, cpu, memory, battery and network', () => {
     const stats = parseDeviceStats(
-      { props: PROPS, storage: STORAGE, battery: BATTERY, memory: MEMORY, cpu: CPU, network: NETWORK },
+      { props: PROPS, battery: BATTERY, memory: MEMORY, cpu: CPU, network: NETWORK },
       '192.168.1.55:5555',
     )
 
@@ -60,13 +55,6 @@ describe('parseDeviceStats', () => {
       totalBytes: 3836524 * 1024,
       availableBytes: 1200000 * 1024,
       usedBytes: (3836524 - 1200000) * 1024,
-    })
-
-    expect(stats.storage).toEqual({
-      totalBytes: 117182328 * 1024,
-      usedBytes: 45123456 * 1024,
-      availableBytes: 72058872 * 1024,
-      percentUsed: 39,
     })
 
     expect(stats.battery).toEqual({
@@ -101,7 +89,7 @@ describe('parseDeviceStats', () => {
     expect(stats.model).toBeNull()
     expect(stats.sdk).toBeNull()
     expect(stats.memory).toBeNull()
-    expect(stats.storage).toBeNull()
+    expect(stats.storage).toBeUndefined()
     expect(stats.battery).toEqual({ level: null, status: null, temperatureC: null, charging: false })
     expect(stats.network).toEqual({ ip: null, interface: null })
   })

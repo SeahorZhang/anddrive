@@ -20,6 +20,10 @@ const {
   getAppInfo,
   exportApk,
   getDeviceStats,
+  getStorageVolumes,
+  mountStorage,
+  unmountStorage,
+  revealStorage,
   getVideoCodecs,
 } = window.electronAPI.adb;
 
@@ -107,8 +111,17 @@ export const getAppInfoApi = (serial, packageName) => getAppInfo(serial, package
 // 导出应用 APK 到用户选择的目录
 export const exportApkApi = (serial, packageName) => exportApk(serial, packageName);
 
-// 读取设备信息（型号 / 系统 / 存储 / 电量 / 网络 / CPU / 内存），force 跳过缓存
+// 读取设备信息（型号 / 系统 / 电量 / 网络 / CPU / 内存），force 跳过缓存
 export const getDeviceStatsApi = (serial, force = false) => getDeviceStats(serial, force);
+
+/** 设备存储按卷列表（内部存储 / 可移动卡 / 根目录），force 跳过 15s 缓存。 */
+export const getStorageVolumesApi = (serial, force = false) => getStorageVolumes(serial, force);
+
+/** 把某个卷挂到 ~/Volumes 下（只读）；返回挂载点路径。 */
+export const mountStorageApi = (payload) => mountStorage(payload);
+export const unmountStorageApi = (volumeId) => unmountStorage(volumeId);
+/** 在访达里打开已挂载的卷。 */
+export const revealStorageApi = (volumeId) => revealStorage(volumeId);
 
 /** 设备侧能编码哪些视频（h264/h265/av1）。设置页标记与 `auto` 落地都用它。 */
 export const getVideoCodecsApi = (serial) => getVideoCodecs(serial);

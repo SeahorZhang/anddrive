@@ -20,6 +20,7 @@ import { readShortcutFile, ensureFileAssociation } from "./shortcut.js";
 import { loadScrcpyConfig, currentScrcpyConfig } from "./scrcpyConfig.js";
 import "./permissions.js";
 import "./favorites.js";
+import "./storage.js";
 import { installAppMenu } from "./menu.js";
 import { CHANNELS } from "./ipcContract.js";
 

@@ -84,6 +84,11 @@ pnpm build-helper && pnpm verify-resources
 electron/
   main.js            建窗、argv/anddrive:// 唤起、runDeviceTeardown、dev 孤儿看门狗
   adb.js             adb 执行+超时+错误归一、发现、helper、应用缓存与图标、应用操作、设备统计、IPC 注册
+  storage.js         设备存储：跑 helper 的 StorageMain 取数 + 15s 缓存 + 挂载/卸载编排（mount_webdav 到 ~/Volumes）
+  devfs.js           设备文件系统：per-serial adb 长连接 + sync（列/stat/读/写，compression 必须显式关）；取一段按偏移量分原语（start=0 走 sync RECV，中间偏移才 spawn `dd`）；mkdir/rm/mv/cp 走 exec:；stat 与目录清单走 TTL 缓存（写后精确失效）；adapter 交给 webdav
+  webdav.js          127.0.0.1 WebDAV（Class 2：可写卷必须会答 LOCK），按随机 token 路由到某个卷的 adapter；macOS 自造的 ._xxx/.DS_Store 在进设备前就回 404
+  fileCache.js       文件内容缓存：读过一段后物化整份到 userData/file-cache，键含 size+mtime，2GB/文件、4GB 总量 LRU；fetch 交的是 Buffer（不是流），每块之间过 `beforeChunk` 让路钩子
+  readWindow.js      顺序读窗口的存放/命中规则 + `planWindowFetch`（按访问形状决定同步取 256KB/2MB，大窗在背后补）——拆出来是为了给这两条上回归测试
   ipcContract.js     CHANNELS 唯一定义处
   preload.js         electronAPI（隔离时）/ __anddriveIpc（非隔离时）
   scrcpyConfig.js    全局参数持久化（userData/scrcpy-config.json）

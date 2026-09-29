@@ -47,6 +47,7 @@ declare module 'vue' {
     ScrollAreaThumb: typeof import('reka-ui')['ScrollAreaThumb']
     ScrollAreaViewport: typeof import('reka-ui')['ScrollAreaViewport']
     Settings: typeof import('./src/components/Settings.vue')['default']
+    StoragePanel: typeof import('./src/components/home/StoragePanel.vue')['default']
     SwitchRoot: typeof import('reka-ui')['SwitchRoot']
     SwitchThumb: typeof import('reka-ui')['SwitchThumb']
     SwitchToggle: typeof import('./src/components/SwitchToggle.vue')['default']

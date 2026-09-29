@@ -139,6 +139,178 @@
 | F7 | 「把手机带到无线调试二维码页」 | helper 里的 `QrPairActivity`（manifest `:11`）**Mac 侧从来没调用过**；已连接时一条 `am start` 就够。适合放进"添加第二台设备 / 无线调试失效"两个入口 | S | P3-5 |
 | F8 | logcat 面板 + 崩溃过滤 + 导出 | `adb logcat` 流式；面板关闭要杀进程（复用 `runDeviceTeardown` 钩子） | M | P2-6 |
 | F9 | 音频-only / 反向转发 | `adb reverse/forward` 是 shell 级；纯音频只需放开 `options.js` 写死的 `video: true` | S | — |
+| F10 | 存储面板 + Finder 挂载（**可写**） `[x]` | **已落地**（2026-09-29）：`shared/storageVolumes.js` 按卷建模（内部存储 / 可移动卡 / 根目录），入口是设备名后第二个图标，设备信息弹层里的存储两行随之删除。挂载 = 本地 WebDAV（`electron/webdav.js` + `devfs.js`）挂到 `~/Volumes/<设备> <卷>`，走 `mount_webdav`，**只读**；面板是**三格横排**（相机 / 内部存储 / 根目录，相机是从内部存储派生的 `DCIM` 目录、不是卷），未挂载给「挂载」，已挂载给「打开 + 取消挂载」 | — | P2-? |
+
+**F10 当初的两条路（2026-09-29 选了 B1 并已落地；B2 仍然是唯一能拿到"原生 Finder 观感"的路，留档）**
+
+AndroMeld 那套「挂载」不是 adb 命令，也不是 FUSE：随包 `Contents/PlugIns/AndDriveFileProvider.appex`
+（bundle id `com.catchingnow.andfiles.fileproviderextension`，`NSExtensionPointIdentifier =
+com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载/弹出/打开」=
+向 `NSFileProviderDomain` 注册/注销一个 Finder 卷。词表能对上：`mount.segment.{camera,sd_card,root}`、
+`mount.control.{mount,eject}`、`mount.action.{register,refresh,remove}`、
+`app_state.no_finder_mount`。所以要"抄"它，抄的是扩展，不是命令。
+
+- **B1 本地 WebDAV + `mount_webdav`（推荐，Electron 里能做完）**：主进程用 `@yume-chan/adb` 起一个
+  只监听 127.0.0.1 的 WebDAV，再 `mount_webdav` 挂到 `/Volumes/…`，弹出用 `diskutil eject`。
+  不需要 appex、不需要额外安装、不需要 entitlement；顺带把 F2 文件互传的读写底座一起拿到。
+  代价：Finder 侧缓存与增量得自己做对，根目录在 shell uid 下只能读到全局可读的那部分（本机实测
+  `ls /` 可列、`ls /data` 拒绝），要读全得走 root。
+- **B2 原生 FileProvider appex（等价于 AndroMeld）**：Finder 观感最好（原生图标、缩略图、增量），
+  但要新增 Swift 扩展 target、签名 entitlement、`electron-builder` 嵌 `PlugIns/`、扩展与主进程 IPC。
+  按多天算，且和现在的打包链路冲突。
+
+**容量口径（2026-09-29 与竞品逐位对齐，别再改回去）**
+
+采集只有一条路：helper 的 `StorageMain`（`app_process`，shell uid）→ `shared/storageVolumes.js` 建模。
+内部卷的总容量**不走 StatFs**，走 `IStorageStatsManager.getTotalBytes(null, "com.android.shell")`
+= 528,000,000,000；可用量走 `StatFs(path).getAvailableBytes()`；已用 = 总 − 可用 = 255.8 GB → 48%。
+这三个数与竞品在同一台机器上的读数逐位相同，也和手机设置一致。
+
+踩过的三个坑，别再踩：
+
+1. **`df -k` / `stat -f`（= Java `StatFs`）/ `dumpsys diskstats` 三者完全一致，但都是文件系统容量**
+   （这台机 512.4 GB），比设置页少 ~15.6 GB 保留区 —— 拿它当"总共"就会永远和手机设置对不上。
+   显示侧另外还有一处：必须按 **1000 进制**（`src/utils/format.js` 的 `formatStorage`），
+   按 1024 进制会把 512 GB 的机器显示成 477 GB。内存仍按 1024（`formatBytes`）。
+2. **`StorageManager.UUID_DEFAULT` 原样送进服务会抛 `Failed to find storage device for UUID 41217664-…`**，
+   传 **null** 才落到默认卷（实测 null → 528000000000）。
+3. **app_process 里造不出 shell 包上下文**：`createPackageContext("com.android.shell", IGNORE_SECURITY)`
+   拿到的 `getOpPackageName()` 仍是 `"android"`（竞品用 `getSystemService` + 这个上下文能过，我们不行），
+   所以直接打 binder、把 `callingPackage` 显式传成 `com.android.shell`（uid 2000 与它自洽，服务侧
+   `watchUid` 才不报错）。方法按名字找，不绑版本。
+
+`VolumeInfo` 常量：TYPE_PUBLIC=0 / TYPE_PRIVATE=1 / TYPE_EMULATED=2；**内部卷 = type 2 且 id 以
+`emulated` 开头**，TYPE_PRIVATE 只是它的底层挂载点，不单独列行。竞品那条**分段用量条**的数据源是
+它 helper 的 `apps` 命令（逐包 `StorageStatsManager.queryStatsForPackage` 累加 app/data/cache），
+不是一次调用能拿到的。
+
+**挂载落地后的实测与边界（2026-09-29，同一台 2509FPN0BC 无线 adb）**
+
+- 挂载 0.4s、列一层目录 0.5s、经挂载点读 2.6 MB 文件 1.3s 且**字节与 `adb exec-out cat` 完全一致**；
+  一次「挂载 + 列根 + 读一个文件」总共只有 13 个 HTTP 请求（macOS 不会把它拆成海量小请求）。
+- `mount_webdav` 允许普通用户挂到**任意自有目录**，所以挂载点放 `~/Volumes/`；
+  `/Volumes` 建目录要管理员，别往那儿写。
+- **可写**（2026-09-29）：PUT/MKCOL/DELETE/MOVE/COPY 已落地，真机验收过 —— 2.6 MB 二进制经挂载点
+  写进手机后 **sha256 与本机完全一致**，改名与删除也生效。写用 `adb push`（先落本机临时文件）：
+  **不能走 `adb shell "cat > 文件"`**，那条经过 pty 会改坏二进制；这版 adb 的 `push` 又不吃 stdin。
+- ⚠️ **必须是 WebDAV Class 2（会答 `LOCK`）才可写**：`man 8 mount_webdav` 写明连 Class 1 服务器时
+  即使没要求也会强制 `rdonly`。锁只是记账（同一路径给个 opaque token，UNLOCK 幂等回 204），
+  不做并发强制。`dav` / `ms-author-via` 头**每个响应都要带**，漏一次 `mount_webdav` 就静默挂不上
+  且不报错（踩过）。
+- 访达自造的 `.DS_Store` / `._xxx` / `.Spotlight-V100` 一律**吞掉**（回成功但不落手机），
+  所以从 Mac 往卷里 `touch .DS_Store` 会看到 EPERM —— 这是预期。
+- 媒体扫描**不用我们做**：实测 `cp` 进 DCIM/Camera 的照片立刻能 `content query` 查到（Android 16
+  的 FUSE 自己通知 MediaProvider），广播是多余的。
+- 按卷决定可写：`/`（根目录卷）在 Android 上是只读文件系统（实测 `touch /x` → Read-only file system），
+  所以 `readOnly` 挂在 adapter 上，面板那格标「只读」。
+- **热路径走 adb sync 长连接**（2026-09-29）：`electron/devfs.js` 用 `@yume-chan/adb-server-node-tcp`
+  建一条 per-serial 的 `Adb` 连接，列目录/取属性/读/写全跑 `adb.sync`（它自带 socket 池）。
+  实测（同一台机、无线 adb）：`createAdb` 11ms（spawn 一次 adb ≈ 300ms）、895 项目录 readdir 111ms
+  （shell `stat -c` 200–360ms）、RECV 2.6MB 208ms（`exec-out cat` 1.3s）。设备断开时连接随
+  `onDeviceTeardown` 一起关掉。
+  - ⚠️ **必须显式传 `compression: 0`（None）**：`@yume-chan/adb` 的 `chooseFormat` 在设备支持时会自动升到
+    **Zstd**，而这一跳是本机 adb server、根本不过网络，压缩纯属倒贴 —— 实测写 2.6 MB 自动档 **4.4s**，
+    关掉后 **433ms**。那个枚举没从包导出，值取自 AOSP `file_sync_protocol.h`（None=0/Brotli=2/Lz4=3/Zstd=4），
+    改的时候别按名字去找。
+  - sync 没有对应操作的（带偏移的读、`mkdir/rm/mv/cp`）也走**同一条连接上的 `exec:`**
+    （`adb.subprocess.noneProtocol`，不分配 pty 所以二进制安全；但仍经设备侧 `sh -c`，参数必须自己引）。
+    全文件读与元数据操作已经不再 spawn adb 进程。
+- **开文件慢的两次真因（2026-09-29 实测，别再照直觉改）**：
+  1. 带 Range 的读原先用 `tail -c +N`：设备侧要 350–830ms。换成
+     `toybox dd if=<f> bs=1M iflag=skip_bytes,count_bytes skip=<字节> count=<字节>` 后是 100–150ms，
+     **字节精确**且不用本机截断（`openDeviceFile` 第三个参数就是长度）。
+  2. 访达每打开一个文件会**逐层 PROPFIND 解析路径**（实测一次开视频 12 次）。加了
+     `createTtlCache`（stat 与目录清单，TTL 2s，按 serial 隔离，写操作精确失效"自身+内容+父目录清单"）：
+     同样 12 次查询冷 395ms → 热 **20ms**；新建文件后立刻列父目录仍然看得见（失效路径真机验过）。
+  合起来：开视频那三步（PROPFIND + 头 1MB + 尾 1MB）现在 **674ms**，其中大头是尾块 1MB 的传输本身。
+- **窗大小按"访问形状"分两档，大窗在背后补**（2026-09-29 改，`planWindowFetch` + `prefetchWindow`）：
+  未命中时同步只取 `max(请求长度, 256 KB)`；只有这次请求**正好接在上一窗尾部**（播放/拷贝的形状）
+  才按 2 MB 档取，并立刻在背后把它补满 8 MB 大窗。
+  - ⚠️ 旧规则"不管请求多小都按 2 MB 起取"是给图片夹造的祸：访达要缩略图就是每个文件读文件头
+    100–230 KB，一开文件夹就是几十个文件各拉 2 MB。**同轮 A/B（2509FPN0BC 无线，24 张 12 MB 照片
+    并发 6 路各读 128 KB）：旧规则墙钟 4175ms（单张平均 823ms）→ 新规则 649ms（平均 129ms）**。
+  - 顺序读不能跟着缩小（实测同一串 40×64 KB：小窗档 800ms，2 MB 档 350ms）—— 所以要分两档，
+    不是把下限一刀调小。
+  - **别把大窗算进用户正在等的那一块**：把"顺序读就同步取 8 MB"写成这样，播放式读从 350ms
+    劣化到 900ms（8 MB 的传输全算在第二个 64 KB 请求上）。补窗必须放背后。
+  - ② 未命中时只取被要求的 64 KB 也太慢（整窗落地前每个分块各自往返一次）—— 这条仍然成立。
+  - ① **"背后预取整窗更慢"作废，别当结论用**：那组数是带着下面 `storeWindow` 那个守卫 bug 量的
+    （换偏移量的新窗被旧窗挡下，取回来的整块直接丢掉），所以它测的是"白取"而不是"预取抢链路"。
+    现在后台补窗是正常路径，别再拿那条旧结论否它。
+- ⚠️ **"要不要整份留在本地"必须按真被取走的字节算，不能按请求长度算**（2026-09-29 修）：
+  访达对每个文件都发一条"从这个偏移一直到文件尾"的读、实际只要前几百 KB 就收手；按请求长度累计时
+  相册里每张 12 MB 照片都被判定成"值得物化"，于是每张白拉一整份。现在由 `noteServed` 只累计
+  窗口真正交出去的字节，流式路径（客户端本来就在整份读）根本不触发物化。
+- ⚠️ **缓存条目随时可能消失，两条崩溃路径（2026-09-29 修，都是能把主进程带崩的）**：
+  1. `fileCache.read` 原来直接 `createReadStream(path)`，而它是**延后开文件**的：条目正当中被
+     LRU 淘汰或 `invalidatePath` 删掉，就会抛一个没人监听的 ENOENT。现在先 `await open()` 拿到
+     FileHandle 再交流，打不开就返回 null（调用方正好按"本地没有"走设备侧）。
+  2. 任何一路读流报错都不能没人接：`webdav.sendFile` 现在 `stream.on('error', () => res.destroy())`。
+     `pipe` 不转发源头的 error，没监听就是未捕获异常（回归测试：删掉那句就红）。
+- ⚠️ **别拿这台机器的绝对毫秒当结论**：无线 adb 吞吐抖得厉害，同一个"从头读 2 MB"在不同轮次
+  量到 446 / 471 / 723 / 2808 ms。可信的是**同轮内的相对量**（窗内请求 0–1ms vs 窗前 100–350ms、
+  40 次逐条目属性 13ms vs 冷 440ms+）。要判绝对性能得换 USB 或让用户体感定。
+- 命中窗口时响应直接 `res.end(buffer)`，不要走 `stream.pipe(res)`：数据已在内存，走一遍流
+  每次多 ~70ms（实测）。
+- ⚠️ **`storeWindow` 的"别拿小窗盖大窗"必须同时比 `start`**（2026-09-29 修）：写成只比长度时，
+  换偏移量的新窗会被旧窗挡下 —— 越过第一窗之后每个请求都重取一整块又被丢弃，且完全没症状
+  （数据是对的，只是慢）。实测播放式 5MB：修前 **14.5s（0.3 MB/s）**，修后 **1.0s（4.9 MB/s）**。
+  存放规则已拆成 `electron/readWindow.js` 并带回归测试（把守卫改回只比长度，测试立刻红）。
+- **内容缓存 = 抄 Sideport 的物化**（`electron/fileCache.js`，2026-09-29）：第一次读某个文件时
+  除了把要的那段给它，还在背后把整份拉到 `userData/file-cache/`；之后所有读（含拖进度条的随机
+  seek）走本地盘。真机实测（12 MB 的 jpg）：首读 4 MB **560ms** 并触发物化，等它落地后尾段 1 MB
+  **22ms**。键里带 `size + mtime`，所以手机侧改过的文件自动落到新键，不需要"检测变更"。
+  上限：单文件 2 GB（`MATERIALIZE_MAX_BYTES`）、整盘 4 GB（按 atime LRU 淘汰）。
+  - ⚠️ **之前记的那组"2ms / 9ms"不成立**：`fileCache.materialize` 要的 fetch 是**解析成 Buffer**，
+    而 `devfs` 交上去的是 `{ stream, close }`，`sink.write` 收到对象当场抛错被 catch 吞掉 →
+    物化在产品里一次都没成功过，缓存目录永远是空的。契约改动必须两边对齐（现已统一为 Buffer）。
+  - ⚠️ **写入端要按需创建，清理要先等 `'close'` 再 `unlink`**：`createWriteStream` 是**延后开文件**的，
+    一字节没写就 `destroy()` + `unlink()` 会删在 open 之前，实测留下永远清不掉的 `.part`（堆在缓存目录
+    里就是白白占预算）。现在第一轮就在让路的话连文件都不开。
+  - 让路是有代价的：258 MB 的视频按 `2MB 块 + 块间歇 800ms` 物化，实测只跑到 ~1.8 MB/s，
+    整份要几分钟。这是"不和播放抢链路"换来的，不是 bug。
+  物化的让路判据必须是**"这个文件最近没被读"**（`waitForFileIdle`，4 秒），不是"链路当前空闲"：
+  窗内命中是 0ms，播放时链路永远看着是空的，判据写错就会让后台拷贝和播放抢同一条 8 MB/s。
+  另抄两条：**同时在飞的设备操作限 6**（`MAX_CONCURRENT_DEVICE_OPS`，不限会排队堵死自己）；
+  元数据操作改走 **`shell,v2,raw:`**（stdout/stderr 分开 + 真退出码，不再靠"有输出即失败"猜），
+  老设备自动退回 `exec:`。
+- ⚠️ **窗下限那条改完用户仍然说慢**（2026-09-29），真正的量级在下一条的"取一段要几次往返"上：
+  缩略图是整份读，文件又小，固定开销比带宽先到。别只盯着窗大小。
+- **图片夹真正慢的原因（2026-09-29 用挂载点实测，别再按"请求数"猜）**：`mount_webdav` 要缩略图时
+  发的是**整份文件**一条 Range（实测 `bytes=0-<size-1>`，几十 KB 到 12 MB 都整份），所以每个文件
+  都要走完一次传输，代价 = 文件大小 ÷ 链路速率 + **一次设备往返**。于是瓶颈落在"取一段要几次往返"上：
+  - `toybox dd` 要**在设备上 spawn 进程**，100–400 KB 的小文件实测串行 **131ms/个**；同一个文件
+    用 sync RECV（读够 `want` 就取消整条 RECV）只要 **45ms/个**。⚠️ `adb.sync.read(path)` 那个 API
+    是**懒的**（实测 1ms 就 resolve，215MB 的文件也是），别拿它当"读完整份"。
+  - 所以 `fetchBytes` 现在按偏移量分原语：**`start === 0` 一律 sync RECV**，只有从中间偏移取才 `dd`
+    （RECV 不支持偏移）。并发 6 路整份读 12 张小图的 A/B：**dd 平均 26–28ms/张 → RECV 17–19ms/张**。
+  - 经挂载点整份读小图（冷，无内核缓存）：**改前 104–266ms/张 → 改后 32ms/张**。
+- ⚠️ **访达自己造的 `._xxx` / `.DS_Store` / `.Spotlight-V100` 这些名字，读也不要去问设备**
+  （2026-09-29）：它们我们从不真写到手机上（MUTATORS 里早就吞掉写），所以答案必然是 404；
+  690 项的相机夹一次打开能多跑几百次 `sync.stat`。现在 `webdav` 在进设备前直接回 404（有回归测试，
+  断言"只有真文件被问过设备"）。副作用：手机上**真的**叫 `._foo` 的文件在卷里打不开（列表里还在），
+  为了几百次往返换掉这个几乎不存在的形状，判定划算。
+- 天花板记在这里，别去找包：**无线 adb 实测上限 ~8 MB/s**（`dd if=/dev/zero` 32MB 走 adb 4.16s），
+  而手机读自己的文件是 2.4 GB/s。所以首读慢是链路，不是代码；能做的只有"少读几次"（窗口 + 物化）
+  或换 USB。Sideport / AndroMeld 也没有更快，它们靠 FileProvider 让 macOS 替它们做同一件物化。
+  - 写也不再落本机临时文件（sync SEND 全程流式），之前"大文件双写本机磁盘"这条缺点已消。
+- 生命周期：`before-quit` 与设备断开都会先 `umount` 再关服务，否则访达上会留一个点开就报错的死卷。
+  应用崩溃是留死卷的 —— 目前没有开机回收。
+- **卷名能改到哪一步（2026-09-29 逐个试过）**：挂载点目录名、访达窗口标题、桌面磁盘图标都是
+  `Xiaomi 17 Pro Max 相机存储`（卷的显示名改了这里就跟着改，见 `shared/storageVolumes.js` 的 label）；
+  但**侧栏「位置」那一行固定显示 URL 主机名 `127.0.0.1`**，试过
+  PROPFIND 的 `displayname` 与 `mount_webdav -v <name>` 都改不动它（两处仍保留：`-v` 让挂载点撞名
+  带 ` 2` 后缀时卷名依旧干净，displayname 给非 webdavfs 客户端看）。换成可读主机名是唯一能改侧栏的
+  路子，但要么写 `/etc/hosts`（要管理员），要么用一个不存在的 `.local` 名（实测 `mount_webdav`
+  直接挂住不返回）。**要在侧栏也显示 app 名，只能走 B2 的 FileProvider 扩展** —— AndroMeld 侧栏
+  那个 `AndroMeld - 2509FPN0BC` 就是这么来的。
+- ⚠️ **卸载后的挂载点只允许 `rmdir`（空目录才删得掉），绝不能递归删**：`umount` 失败时目录里那些
+  文件其实还在手机上，递归删等于删用户设备数据。三格同时挂载已实测（相机 15 项 / 内部 16 项 / 根 31 项）。
+- **图片夹剩下的那部分开销（已知，未做）**：访达要缩略图时对每个文件都发一条
+  "从这个偏移一直到文件尾"的读，而且**偏移会往回重叠**（实测一张 12 MB 照片要 3–5 条这样的读）。
+  大窗只覆盖 ≤ 8 MB 的请求，所以大于 8 MB 的文件每条都单独起一次设备侧 `dd`，重叠的那截白拉一遍。
+  真正的解法是**按偏移记账的稀疏物化**（把已经流过给客户端的字节顺手落进 `.part`，缺口事后再补），
+  现在不做是因为最狠的那条（2 MB 下限 = 16 倍放大）已经单独改掉了，剩下的重叠只是常数倍。
 
 ### 6.2 需要 helper 变厚（先决策：helper 定位是「零权限、零后台组件的代码容器」）
 

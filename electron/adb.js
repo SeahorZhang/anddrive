@@ -1155,7 +1155,7 @@ async function getInstalledHelperVersion(serial) {
 }
 
 /** 设备上未安装或版本与随包不一致时才安装。 */
-async function ensureLatestHelper(serial) {
+export async function ensureLatestHelper(serial) {
   if ((await getInstalledHelperVersion(serial)) !== helperVersion.versionName) {
     await installHelper(serial);
   }
@@ -1167,7 +1167,7 @@ async function ensureLatestHelper(serial) {
  * classpath: no component starts and no permission is granted to the package.
  * @param {string} serial
  */
-function runHelperList(serial, extraArgs = []) {
+export function runHelperEntry(serial, entryClass, extraArgs = []) {
   return deviceApkPath(serial).then((apkPath) => {
     if (!apkPath) {
       throw new Error(HELPER_SETUP_ERROR_PREFIX + "设备上未找到 Helper");
@@ -1182,7 +1182,7 @@ function runHelperList(serial, extraArgs = []) {
           `CLASSPATH=${apkPath}`,
           "app_process",
           "/system/bin",
-          HELPER_ENTRY_CLASS,
+          entryClass,
           ...extraArgs,
         ],
         { timeout: LIST_TIMEOUT_MS, maxBuffer: LIST_MAX_BUFFER_BYTES, windowsHide: true },
@@ -1193,6 +1193,11 @@ function runHelperList(serial, extraArgs = []) {
       );
     });
   });
+}
+
+/** ListMain 的一次性执行入口，应用列表与图标都走它。 */
+function runHelperList(serial, extraArgs = []) {
+  return runHelperEntry(serial, HELPER_ENTRY_CLASS, extraArgs);
 }
 
 /**
@@ -1618,29 +1623,6 @@ function hostFromSerial(serial) {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) ? host : null;
 }
 
-/** `df -k` 输出解析为字节数；优先 /data，其次最后一行。 */
-function parseStorage(output) {
-  const lines = (output || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const line = lines.find((item) => /\s\/data$/.test(item)) || lines[lines.length - 1];
-  if (!line) return null;
-  const parts = line.split(/\s+/);
-  if (parts.length < 5) return null;
-  const totalKb = Number(parts[1]);
-  const usedKb = Number(parts[2]);
-  const availKb = Number(parts[3]);
-  if (!Number.isFinite(totalKb) || totalKb <= 0) return null;
-  const percent = Number.parseInt(parts[4], 10);
-  return {
-    totalBytes: totalKb * 1024,
-    usedBytes: Number.isFinite(usedKb) ? usedKb * 1024 : null,
-    availableBytes: Number.isFinite(availKb) ? availKb * 1024 : null,
-    percentUsed: Number.isFinite(percent) ? percent : null,
-  };
-}
-
 const BATTERY_STATUS = {
   1: "unknown",
   2: "charging",
@@ -1720,7 +1702,7 @@ function parseNetwork(output, fallbackIp) {
 
 /**
  * 将原始命令输出解析为结构化设备信息（纯函数，便于测试）。
- * @param {{ props?: string, storage?: string, battery?: string, memory?: string, cpu?: string, network?: string }} raw
+ * @param {{ props?: string, battery?: string, memory?: string, cpu?: string, network?: string }} raw
  * @param {string} [serial]
  */
 export function parseDeviceStats(raw, serial) {
@@ -1739,7 +1721,6 @@ export function parseDeviceStats(raw, serial) {
       load1: cpu.load1,
     },
     memory: parseMemory(raw?.memory || ""),
-    storage: parseStorage(raw?.storage || ""),
     battery: parseBattery(raw?.battery || ""),
     network: parseNetwork(raw?.network || "", hostFromSerial(serial)),
   };
@@ -1756,20 +1737,14 @@ async function getDeviceStats(serial, force = false) {
 
   const cpuScript =
     "cat /proc/loadavg; echo ---; nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo; echo ###; grep -m1 -i hardware /proc/cpuinfo";
-  const [propRes, dfRes, batteryRes, memRes, cpuRes, netRes] = await Promise.all([
+  const [propRes, batteryRes, memRes, cpuRes, netRes] = await Promise.all([
     adbExecSafe("-s", serial, "shell", "getprop"),
-    adbExecSafe("-s", serial, "shell", "df", "-k", "/data"),
     adbExecSafe("-s", serial, "shell", "dumpsys", "battery"),
     adbExecSafe("-s", serial, "shell", "cat", "/proc/meminfo"),
     adbExecSafe("-s", serial, "shell", cpuScript),
     adbExecSafe("-s", serial, "shell", "ip -o -4 addr 2>/dev/null"),
   ]);
 
-  let storageRaw = dfRes.stdout;
-  if (!storageRaw) {
-    const rootRes = await adbExecSafe("-s", serial, "shell", "df", "-k", "/");
-    storageRaw = rootRes.stdout;
-  }
   if (propRes.code !== 0 && !propRes.stdout) {
     throw new Error(propRes.stderr || "读取设备信息失败");
   }
@@ -1779,7 +1754,6 @@ async function getDeviceStats(serial, force = false) {
     ...parseDeviceStats(
       {
         props: propRes.stdout,
-        storage: storageRaw,
         battery: batteryRes.stdout,
         memory: memRes.stdout,
         cpu: cpuRes.stdout,
