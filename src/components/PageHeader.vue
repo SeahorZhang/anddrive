@@ -26,6 +26,9 @@ const emit = defineEmits([
 
 const isUsb = computed(() => props.activeDevice?.transport === 'usb')
 
+// 触发器上直接显示当前设备名，没连上时退回「切换设备」
+const deviceName = computed(() => props.activeDevice?.label || props.activeDevice?.name || '切换设备')
+
 watch(menuOpen, (open) => emit('deviceMenuChange', open))
 
 const disconnectMessage = computed(() =>
@@ -100,7 +103,11 @@ watch(
         <!-- 切换设备：首页右上角的下拉，展开期间父级才轮询设备列表 -->
         <PopoverRoot v-if="pageType === 'home'" v-model:open="menuOpen">
           <PopoverTrigger as-child>
-            <BaseButton icon="lucide:chevrons-up-down" icon-only title="切换设备" aria-label="切换设备" />
+            <BaseButton variant="secondary" :title="`切换设备：${deviceName}`" aria-label="切换设备">
+              <span class="max-w-[200px] truncate font-semibold">{{ deviceName }}</span>
+              <Icon icon="lucide:chevron-down" :width="14" :height="14"
+                class="shrink-0 transition-transform duration-150" :class="menuOpen ? 'rotate-180' : ''" />
+            </BaseButton>
           </PopoverTrigger>
           <PopoverPortal>
             <PopoverContent side="bottom" align="end" :side-offset="8"
