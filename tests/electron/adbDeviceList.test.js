@@ -201,12 +201,22 @@ describe('getConnectedDevice 的同设备接法', () => {
     expect(device).toMatchObject({ address: USB, transport: 'usb', transports: ['usb'] })
   })
 
-  it('另一台手机的接法不会混进来', async () => {
+  it('两台不同手机同时在线时不接管任何一台', async () => {
+    // 曾经这里会挑一条回来（无线优先，否则第一台），于是 USB 上正在用的那台
+    // 会被列表里的另一台顶掉。「接管哪台」是用户的决定，主进程不代挑。
     const other = 'c0ffee00'
     const device = await adopt({
       devices: `List of devices attached\n${USB}\tdevice\n${other}\tdevice\n`,
       stableIds: { [USB]: 'af3d7abd', [other]: 'c0ffee00' },
     })
-    expect(device).toMatchObject({ stableId: 'af3d7abd', transports: ['usb'] })
+    expect(device).toBeNull()
+  })
+
+  it('另一台手机走无线也不接管', async () => {
+    const device = await adopt({
+      devices: `List of devices attached\n${USB}\tdevice\n192.168.1.9:5555\tdevice\n`,
+      stableIds: { [USB]: 'af3d7abd', '192.168.1.9:5555': 'c0ffee00' },
+    })
+    expect(device).toBeNull()
   })
 })

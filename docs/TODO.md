@@ -42,7 +42,7 @@
 - **O12 没有 CI**：`.github/` 不存在。本地门已齐（`typecheck` + `lint` + `test` + `format:check` + `verify-resources`），先串成一条 `pnpm verify` 再上 Actions。**S**
 - **O13 渲染层零测试**：`tests/` 只覆盖 electron 与 mirror 纯逻辑。`useFavorites` 回滚、`needsIcon`/`patchIcons` 合并、`sections` 分组、`readableError` 都是纯函数，成本极低。**S–M**
 - ⚠️ **我原先那句「关闭类按钮有 取消/关闭/断开 三种 = 不一致」是错的，撤回**：核对后它们是三种职责 ——「取消」关确认框、「关闭」关信息框（`AppInfoDialog`）、「断开」是确认框里的**肯定动作**（`confirm-label="断开"`）。同屏不会出现两个都表示关掉的词，不该强行统一。
-- **仍待你决定**："多设备不得静默降级"这条原则要不要落地到**启动**（`ARCHITECTURE.md` §4 已把它标成目标而非现状）。手动切换已经显式化（首页右上角「切换设备」下拉 + `adb:releaseDevice`，2026-09-30 真机验证），剩下的口子是 `connect()` 启动时仍静默接管、且 `getConnectedDevice` 优先无线 —— 多台在线时冷启动可能落在另一台上，要不要改成让用户选。
+- 「多设备不得静默降级」已落地到**启动与重连**（2026-09-30）：见 `ARCHITECTURE.md` §4 多设备那段。
 - 文档引用**改用符号锚点**（`waitForMdnsService`、`COVER_*`、`TEARDOWN_TIMEOUT_MS`…）：删代码会让行号集体漂移，2026-09-28 就漂了一次，换算时还发现两处**本来就错**的范围（`options.js` 的 bounds 常量、`mirror/session.js` 的调用入口）。新写条目请沿用符号锚点。
 
 ---
@@ -343,7 +343,7 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 | P1-4 | MRU 跨会话持久化 | 按设备记录最近启动 + 上限淘汰 + 损坏降级为空；数据源可用 H6 |
 | P2-4 | 快捷键与命令面板 | ⌘K 面板、⌘R 刷新、⌘, 设置、Esc 关闭 |
 | P2-5 | 分组、标签与隐藏 | 自定义分组/标签/隐藏/显示名，本地持久化 |
-| P3-1 | 多设备支持 | **部分完成**：显式切换下拉已上线（`PageHeader.vue` + `adb:releaseDevice`，只切活动设备、保留 transport，仍遵守"单设备优先"）。**待决策**的只剩冷启动是否也强制显式选择（`connect()` 目前静默接管，见 `ARCHITECTURE.md` §4）与"多台同时投屏"要不要做；后者动手前先补 §1 那条 **D7 的真机验证**（多台同时广播的命名） |
+| P3-1 | 多设备支持 | **部分完成**：显式切换下拉已上线（`PageHeader.vue` + `adb:releaseDevice`，只切活动设备、保留 transport）；冷启动与自动重连都不再静默挑设备（`pickAdoptableDevice` / `getConnectedDevice` / `watchNewConnectedDevices`，见 `ARCHITECTURE.md` §4）；切换设备不再关掉已开着的镜像（`adb:releaseDevice` 的 `keepMirror`）。**待决策**：「多台同时投屏」要不要正式做；动手前先补 §1 那条 **D7 的真机验证**（多台同时广播的命名） |
 | P3-2 | 记忆设备与启动自动重连 | 启动读上次 serial → mDNS 解析 → connect → 直接进首页。同样卡在 D7 的真机验证；冷启动时别名表还没建立，解析要能容错 |
 | P3-3 | 自动更新与提示 | 自签名 + 非公证，`electron-updater` 需适配；建议先做"更新提示 + 手动安装" |
 | P3-4 | 深色模式与 i18n | 深色已上线（`src/styles/index.css` 双主题 token + `composables/useTheme.js`，设置页「深色模式」开关，2026-09-30）；剩**文案抽离**（i18n） |
@@ -370,7 +370,7 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 - **`wm size` / `wm density` 改物理屏、compat 强制平板那套** —— 已删，别再碰；真横屏走自编 server 的 `setIgnoreActivitySizeRestrictions`。唯一还挂着的一条未验路子：那排抖音 tab 也可能是按**物理屏 density**（恒 480）算而非真写死，若是，临时抬 `wm density` 能两全 —— 但设备有锁屏密码，测不了。
 - **不做老用户兼容（2026-09-28 决定，迁移代码已全删）**：收藏的传输地址桶、`scrcpyConfig` 的 localStorage 旧参数、快照里的内联图标迁移、`stored` 标志 —— 一律不再写"升级一次"的适配，代价见 §1 那条。**默认别再提议加迁移**；真要发布时靠一次性手动清缓存解决。（别名表 `device-aliases.json` 不是兼容代码，是运行时必需，留着。）
 - **非目标**：Windows/Linux、账号与云同步、遥测/崩溃上报（若引入必须 opt-in 且可离线）、删除设备端配对记录（断开只移 transport）、把 helper 改成常驻后台/监听端口的服务。
-- **待决策**：冷启动要不要也强制显式选设备（切换下拉已落地，`connect()` 仍静默接管）、自动更新方案、拼音搜索是否引依赖（建议预生成索引）、录屏是否带音频（建议先做无音频）。
+- **待决策**：自动更新方案、拼音搜索是否引依赖（建议预生成索引）、录屏是否带音频（建议先做无音频）。
 
 ---
 

@@ -10,6 +10,8 @@ const env = vi.hoisted(() => {
   const windows = []
   /** @type {Map<string, Function>} */
   const handlers = new Map()
+  /** adb 层注册进来的设备清理钩子 */
+  const teardownHooks = []
 
   class FakeBrowserWindow {
     constructor(options) {
@@ -45,6 +47,7 @@ const env = vi.hoisted(() => {
   return {
     windows,
     handlers,
+    teardownHooks,
     FakeBrowserWindow,
     ipcMain: {
       handle: (channel, fn) => handlers.set(channel, fn),
@@ -68,7 +71,13 @@ vi.mock('../../electron/adb.js', () => ({
   ensureServer: async () => {},
   scrcpyServerPath: () => '/tmp/scrcpy-server',
   getPhysicalScreenSize: async () => ({ width: 1200, height: 2608 }),
-  onDeviceTeardown: () => {},
+  onDeviceTeardown: (hook) => {
+    env.teardownHooks.push(hook)
+    return () => {
+      const i = env.teardownHooks.indexOf(hook)
+      if (i >= 0) env.teardownHooks.splice(i, 1)
+    }
+  },
   isMiuiDevice: async () => false,
   getDeviceVideoCodecs: async () => ({ h264: true, h265: true, av1: false }),
   setSecureSetting: async () => {},
@@ -117,5 +126,41 @@ describe('mirror session 启动参数', () => {
     const init = initFrom(env.windows.at(-1))
     expect(init.iconUrl).toBeUndefined()
     expect(init.label).toBe('com.example.app')
+  })
+})
+
+// 切换设备不该把已经开着的镜像关掉：主进程的 release 带 keepMirror，
+// 会话的清理钩子见到它就原样返回。
+describe('设备清理与已开镜像', () => {
+  const runTeardown = (serial, options) =>
+    Promise.all(env.teardownHooks.map((hook) => hook(serial, options)));
+
+  it('keepMirror 时不动这台设备的会话，断开时才关', async () => {
+    await startMirrorSession({
+      serial: 'dev-switch',
+      packageName: 'com.example.app',
+      label: '示例',
+    })
+    const win = env.windows.at(-1)
+    const closeSpy = vi.spyOn(win, 'close')
+    expect(env.teardownHooks.length).toBeGreaterThan(0)
+
+    await runTeardown('dev-switch', { keepMirror: true })
+    expect(closeSpy).not.toHaveBeenCalled()
+
+    // 会话还活着：同一台再开一次会拿到新窗口，说明上一条没被清掉
+    await runTeardown('dev-switch')
+    expect(closeSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('清理只动这台设备的会话，别台投着的不接', async () => {
+    await startMirrorSession({ serial: 'dev-a', packageName: 'com.example.app' })
+    const closeA = vi.spyOn(env.windows.at(-1), 'close')
+    await startMirrorSession({ serial: 'dev-b', packageName: 'com.example.app' })
+    const closeB = vi.spyOn(env.windows.at(-1), 'close')
+
+    await runTeardown('dev-a')
+    expect(closeA).toHaveBeenCalledTimes(1)
+    expect(closeB).not.toHaveBeenCalled()
   })
 })

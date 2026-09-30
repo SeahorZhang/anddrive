@@ -13,7 +13,13 @@ import {
   onMirrorExitApi,
 } from "@/api";
 import { readableError } from "@/utils/errors";
-import { transportState } from "@/utils/deviceState";
+import {
+  transportState,
+  sameDevice,
+  markDevicesKnown,
+  watchNewConnectedDevices,
+  pickAdoptableDevice,
+} from "@/utils/deviceState";
 import { notify, notifyError } from "@/composables/useNotifications";
 import { autoReconnect } from "@/composables/useConnectionPreferences";
 import { isDark } from "@/composables/useTheme";
@@ -43,13 +49,6 @@ const disconnectError = ref("");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// 同一台设备：列表里有线/无线已合并成一行，但接管进来的可能是其中任意一条传输，
-// 所以先比稳定标识，再退回 address。
-function sameDevice(a, b) {
-  if (!a || !b) return false;
-  return (!!a.stableId && !!b.stableId && a.stableId === b.stableId) || a.address === b.address;
-}
-
 /**
  * 首页与顶栏显示的当前设备：展示字段（名称、接法标记、状态）跟着设备列表那一行走，
  * 拔了线那枚 USB 就跟着少掉；address 仍钉在会话正在用的那条 transport 上，
@@ -75,6 +74,24 @@ let disposeMirrorExit = null;
 // 连接健康检查
 // ---------------------------------------------------------------------------
 
+// 心跳顺带盯着新设备：插了另一台手机时不动当前这台，只在右上角提醒可以连接。
+/** 已经见过的设备 stableId（按轮次差集用），从列表消失后摘掉，再插回来算新设备 */
+const seenDevices = new Set();
+const NEW_DEVICE_TOAST_PREFIX = "new-device:";
+
+function notifyNewDevices(devices) {
+  for (const fresh of watchNewConnectedDevices(devices, seenDevices, device.value)) {
+    const label = fresh.label || fresh.name || fresh.address;
+    notify({
+      key: NEW_DEVICE_TOAST_PREFIX + fresh.stableId,
+      title: "新设备",
+      message: `发现 ${label}，可以连接`,
+      duration: 0,
+      action: { label: "连接", handler: () => switchDevice(fresh) },
+    });
+  }
+}
+
 let healthRunning = false;
 /** 心跳：设备已连接时轮询其 adb 状态，掉线后进入重连或离线分支 */
 async function healthLoop() {
@@ -84,7 +101,9 @@ async function healthLoop() {
     const current = device.value;
     let state = null;
     try {
-      state = transportState(await refreshDeviceList(), current.address);
+      const devices = await refreshDeviceList();
+      state = transportState(devices, current.address);
+      notifyNewDevices(devices);
     } catch (e) {
       console.error("心跳刷新设备列表失败：", e);
     }
@@ -168,9 +187,10 @@ async function startRecovery(target) {
   for (let attempt = 0; attempt < MAX_RECONNECT_ATTEMPTS && !device.value; attempt += 1) {
     if (!autoReconnect.value) break;
 
-    // 其他工具可能已经连上，直接接管
+    // 其他工具可能已经连上，直接接管 —— 但只接管**丢的那台**。
+    // 曾经这里无条件 adopt，结果 USB 一抖就 adopt 到列表里另一台无线的手机上。
     const existing = await getConnectedDeviceApi().catch(() => null);
-    if (existing) {
+    if (existing && sameDevice(existing, target)) {
       adoptDevice(existing);
       notify.success("已重新连接设备", { key: CONNECTION_TOAST_KEY, title: "连接已恢复" });
       break;
@@ -221,17 +241,21 @@ function adoptDevice(target) {
   deviceDialogVisible.value = false;
   lostDevice = null;
   autoAdopt = true;
+  // 接管这一台之前列表里就有的其他设备不算「新出现」，别在进首页那一秒弹提醒。
+  // 种子必须含这台自己：扫码页只把扫码那条写进列表，USB 那台往往不在里面。
+  markDevicesKnown([...discoveredDevices.value, target], seenDevices);
   pageType.value = "home";
   healthLoop();
 }
 
-// 换台设备前给上一台收摊：只释放镜像 / 存储 / 连接池，transport 留在 adb 里，
+// 换台设备前给上一台收摊：只释放存储 / 连接池 / 缓存，transport 留在 adb 里，
 // 这样设备列表里它还在，随时能切回去（无线那台也不用重新 connect）。
+// 上一台**已经开着的镜像不动**：切设备是换首页在看谁，不是关掉在投的画面。
 async function releasePrevious(target) {
   const previous = device.value;
   if (!previous || sameDevice(previous, target)) return;
   try {
-    await releaseDeviceApi(previous.address);
+    await releaseDeviceApi(previous.address, { keepMirror: true });
   } catch (e) {
     // 收摊失败不该拦住切换：残留资源会在下次断开或退出时再清一次。
     console.error("释放上一台设备失败：", e);
@@ -258,12 +282,11 @@ const switching = ref(false);
 async function switchDevice(target) {
   if (!target?.connected || switching.value) return;
   if (device.value && sameDevice(target, device.value)) return;
-  const label = target.label || target.name || "设备";
   switching.value = true;
   try {
     await releasePrevious(target);
     adoptDevice(target);
-    notify.success(`已切换到 ${label}`, { title: "设备已切换" });
+    // 不弹「已切换」：顶栏那行设备名就是反馈，再多一条 toast 只是挡视线。
   } finally {
     switching.value = false;
   }
@@ -300,9 +323,9 @@ async function discoverLoop() {
       const devices = await refreshDeviceList();
       if (device.value || token !== discoveryToken) break;
       // 扫码弹窗开着时**不接管**：人正盯着弹窗里的「可用设备」，自动进首页会把那份
-      // 列表直接抽走。
+      // 列表直接抽走。多台在线时也不接管，规则在 `pickAdoptableDevice`。
       const connected =
-        autoAdopt && !deviceDialogVisible.value ? devices.find((d) => d.connected) : null;
+        autoAdopt && !deviceDialogVisible.value ? pickAdoptableDevice(devices) : null;
       if (connected) {
         adoptDevice(connected);
         break;

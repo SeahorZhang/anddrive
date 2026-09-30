@@ -522,8 +522,12 @@ function mergeDeviceRecords(a, b) {
 
 /**
  * 返回当前 adb 已连接（状态 device）的设备，供启动时接管其他工具
- * （Android Studio / 终端 adb 等）已建立的连接。优先接管无线那条，
- * address 用 adb 的 serial，可直接用于后续 `adb -s`。
+ * （Android Studio / 终端 adb 等）已建立的连接。同一台手机插着线又开着无线时
+ * 优先无线那条，address 用 adb 的 serial，可直接用于后续 `adb -s`。
+ *
+ * **多台不同手机同时在线时返回 `null`** —— 「接管哪一台」是用户的决定，
+ * 不是这里能替挑的（曾经的 `find(transport === "wifi")` 会把无线那台抢走，
+ * 让正在用的设备被换掉）。调用方拿到 null 就走设备列表让用户点。
  * 行本身与设备列表同出一个 `deviceListRow`，所以 stableId / transports /
  * connections 的含义和列表里那一行完全一致。
  * @returns {Promise<{ stableId: string, name: string, address: string, displayAddress: string, label: string | null, transport: "usb" | "wifi", transports: ("usb" | "wifi")[], connections: { address: string, transport: "usb" | "wifi", state: string, connected: boolean }[] } | null>}
@@ -543,10 +547,16 @@ async function getConnectedDevice() {
   const rows = await Promise.all(
     online.map((serial) => deviceListRow(serial, "device", bySerial.get(serial))),
   );
-  const picked = rows.find((row) => row.transport === "wifi") ?? rows[0];
-  const connections = rows
-    .filter((row) => row.stableId === picked.stableId)
-    .flatMap((row) => row.connections);
+  const groups = new Map();
+  for (const row of rows) {
+    const group = groups.get(row.stableId) ?? [];
+    group.push(row);
+    groups.set(row.stableId, group);
+  }
+  if (groups.size > 1) return null;
+  const [group] = groups.values();
+  const picked = group.find((row) => row.transport === "wifi") ?? group[0];
+  const connections = group.flatMap((row) => row.connections);
   return {
     ...picked,
     connections,
@@ -1947,13 +1957,13 @@ ipcMain.handle(CHANNELS.adbPair, async (_, device, password) => {
 /**
  * 设备级清理钩子：断开连接或退出时执行（自研镜像会话等）。
  * 放在这里是为了让 adb.js 不用反向依赖 mirror 模块。
- * @type {Set<(serial?: string) => unknown>}
+ * @type {Set<(serial?: string, options?: { keepMirror?: boolean }) => unknown>}
  */
 const deviceTeardownHooks = new Set();
 
 /**
  * 注册设备清理钩子，返回取消函数。
- * @param {(serial?: string) => unknown} hook
+ * @param {(serial?: string, options?: { keepMirror?: boolean }) => unknown} hook
  */
 export function onDeviceTeardown(hook) {
   deviceTeardownHooks.add(hook);
@@ -1963,12 +1973,13 @@ export function onDeviceTeardown(hook) {
 /**
  * 执行所有清理钩子；无 serial 表示整体退出。等待异步钩子完成。
  * @param {string} [serial]
+ * @param {{ keepMirror?: boolean }} [options] 传给钩子：`keepMirror` 表示这次不要动镜像会话
  */
-export async function runDeviceTeardown(serial) {
+export async function runDeviceTeardown(serial, options) {
   await Promise.all(
     [...deviceTeardownHooks].map(async (hook) => {
       try {
-        await hook(serial);
+        await hook(serial, options);
       } catch (error) {
         console.warn("AndDrive: 设备清理钩子失败：", error?.message || error);
       }
@@ -1977,12 +1988,14 @@ export async function runDeviceTeardown(serial) {
 }
 
 /**
- * 释放一台设备在本机占用的资源：镜像会话、存储挂载、adb sync 连接池与内存缓存。
+ * 释放一台设备在本机占用的资源：存储挂载、adb sync 连接池与内存缓存；
+ * 镜像会话默认也一起收，`keepMirror` 时留着（切设备不该关掉已经开着的镜像）。
  * 断开与切换设备共用它 —— 区别只在之后要不要动 transport。
  * @param {string} serial
+ * @param {{ keepMirror?: boolean }} [options]
  */
-async function releaseDeviceResources(serial) {
-  await runDeviceTeardown(serial);
+async function releaseDeviceResources(serial, options) {
+  await runDeviceTeardown(serial, options);
   deviceStatsCache.delete(serial);
   videoCodecCapsCache.delete(serial);
 }
@@ -1996,10 +2009,11 @@ ipcMain.handle(CHANNELS.adbDisconnect, async (_, rawSerial) => {
 });
 
 // 切换设备：只释放上一台的资源，transport 留在 adb 里，
-// 这样随时能从设备列表切回去，无线那台也不用重新 connect。
-ipcMain.handle(CHANNELS.adbReleaseDevice, async (_, rawSerial) => {
+// 这样随时能从设备列表切回去，无线那台也不用重新连接。
+// `keepMirror` 让上一台已经开着的镜像继续跑（切设备≠关镜像）。
+ipcMain.handle(CHANNELS.adbReleaseDevice, async (_, rawSerial, options) => {
   const serial = normalizeDisconnectSerial(rawSerial);
-  await releaseDeviceResources(serial);
+  await releaseDeviceResources(serial, { keepMirror: options?.keepMirror === true });
   return true;
 });
 

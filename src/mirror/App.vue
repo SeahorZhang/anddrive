@@ -16,7 +16,9 @@ const canvasHost = ref(null)
 const status = ref('正在连接设备…')
 const meta = shallowRef(null)
 const fps = ref(0)
-const showHud = import.meta.env.DEV
+/** 调试面板只在 dev 存在，默认收起，由右上角 `tools` 按钮开合。 */
+const devTools = import.meta.env.DEV
+const showHud = ref(false)
 /** dev HUD 边栏宽度：`mirror-main` 让出的右侧宽度与 `aside` 宽度都用这一个值。 */
 const HUD_WIDTH = 240
 /** 字节数 → 人类可读（HUD 显示用，保留一位小数）。 */
@@ -411,6 +413,10 @@ onBeforeUnmount(() => {
 
       <div class="pointer-events-auto absolute inset-x-0 top-0 z-10 h-6" style="-webkit-app-region: drag"></div>
 
+      <!-- dev 专用：右上角开合调试面板。压在拖拽条上，所以要 no-drag，否则点击被拖拽区吃掉。 -->
+      <button v-if="devTools" type="button" class="mirror-tools-toggle" :aria-expanded="showHud"
+        title="调试信息" style="-webkit-app-region: no-drag" @click="showHud = !showHud">tools</button>
+
       <!-- 应用被别的显示拿走时，画面中间给一个接回入口（带应用图标）。
            平时不显示：没被抢就不该有多余控件压在画面上。 -->
       <div v-if="stolen" class="mirror-reclaim" style="-webkit-app-region: no-drag">
@@ -489,8 +495,32 @@ onBeforeUnmount(() => {
   border-left: 1px solid rgb(255 255 255 / 8%);
 }
 
+/* 开合按钮：右上角，压在拖拽条与边栏标题之上（两者都要给它让出这一块）。 */
+.mirror-tools-toggle {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 40;
+  padding: 2px 9px;
+  border: none;
+  border-radius: 999px;
+  background: rgb(20 20 22 / 72%);
+  color: rgb(255 255 255 / 62%);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.mirror-tools-toggle:hover {
+  background: rgb(40 40 44 / 88%);
+  color: rgb(255 255 255 / 88%);
+}
+
 .mirror-hud__title {
   overflow: hidden;
+  /* 右上角留给 `tools` 开合按钮，别让标题钻到它底下。 */
+  padding-right: 48px;
   font-size: 11px;
   color: rgb(255 255 255 / 85%);
   text-overflow: ellipsis;

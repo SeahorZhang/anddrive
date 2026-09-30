@@ -294,7 +294,9 @@ ipcMain.on(CHANNELS.mirrorState, (_event, payload) => {
 });
 
 // 断开设备或退出时，结束对应设备的自研镜像会话（直接关窗口）。
-onDeviceTeardown((serial) => {
+// 切换设备带 `keepMirror`：切走的那台不是断开，已经开着的镜像要继续投。
+onDeviceTeardown((serial, options) => {
+  if (options?.keepMirror) return;
   const ids = [...sessions.values()]
     .filter((s) => !serial || s.serial === serial)
     .map((s) => s.id);

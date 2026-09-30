@@ -69,7 +69,7 @@ export const pairApi = (device, password) => pair(device, password);
 export const disconnectApi = (serial) => disconnect(serial);
 
 // 释放设备资源但不断开 transport：切换设备时让上一台收摊，随时可以切回去
-export const releaseDeviceApi = (serial) => releaseDevice(serial);
+export const releaseDeviceApi = (serial, options) => releaseDevice(serial, options);
 
 // 解析设备当前可用的连接地址（配对端口不能用于 adb connect）
 export const resolveConnectAddressApi = (pairingService) => resolveConnectAddress(pairingService);

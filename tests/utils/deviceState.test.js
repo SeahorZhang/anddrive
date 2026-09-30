@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { deviceTransports, transportText, transportState } from '../../src/utils/deviceState.js'
+import {
+  deviceTransports,
+  pickAdoptableDevice,
+  markDevicesKnown,
+  watchNewConnectedDevices,
+  sameDevice,
+  transportText,
+  transportState,
+} from '../../src/utils/deviceState.js'
 
 // 一台手机插着线又开着无线调试时，主进程会把它并成列表里的一行：
 // 界面只读这一份，不再自己数接法、也不再单独问一遍 adb 状态。
@@ -53,5 +61,99 @@ describe('transportState', () => {
 
   it('列表里没有这台设备时算 absent', () => {
     expect(transportState([], USB)).toBe('absent')
+  })
+})
+
+// 当前展示的设备不许自己变：别的手机插上来只提醒一次，而且「新」是按轮次差集算的。
+describe('watchNewConnectedDevices', () => {
+  const live = (row) => ({ ...row, connected: true })
+  const currentRow = () => live(bothRow())
+  const otherRow = () => ({
+    stableId: 'c0ffee00',
+    address: '192.168.1.9:5555',
+    connected: true,
+    connections: [conn('192.168.1.9:5555', 'wifi')],
+  })
+
+  it('接管时已经认识的设备不算新出现（从扫码页连上一台，不该立刻提醒另一台）', () => {
+    const seen = new Set()
+    const list = [currentRow(), otherRow()]
+    // adoptDevice 的播种：先记下列表现有的这些
+    markDevicesKnown(list, seen)
+    expect(watchNewConnectedDevices(list, seen, list[0])).toEqual([])
+  })
+
+  it('下一轮才冒出来的可连接设备报一次，再刷不重复报', () => {
+    const seen = new Set()
+    const current = currentRow()
+    watchNewConnectedDevices([current], seen, current)
+    const other = otherRow()
+    const round2 = watchNewConnectedDevices([current, other], seen, current)
+    expect(round2.map((d) => d.stableId)).toEqual(['c0ffee00'])
+    expect(watchNewConnectedDevices([current, other], seen, current)).toEqual([])
+  })
+
+  it('拔掉再插回来算新出现', () => {
+    const seen = new Set()
+    const current = currentRow()
+    const other = otherRow()
+    watchNewConnectedDevices([current, other], seen, current)
+    watchNewConnectedDevices([current], seen, current)
+    expect(watchNewConnectedDevices([current, other], seen, current).map((d) => d.stableId)).toEqual([
+      'c0ffee00',
+    ])
+  })
+
+  it('当前在用的那台永远不报，哪怕刚出现', () => {
+    const seen = new Set()
+    const current = currentRow()
+    expect(watchNewConnectedDevices([current], seen, current)).toEqual([])
+  })
+
+  it('待授权的不算「可以连接」', () => {
+    const seen = new Set()
+    const current = currentRow()
+    const pending = { ...otherRow(), connected: false, state: 'unauthorized' }
+    expect(watchNewConnectedDevices([current, pending], seen, current)).toEqual([])
+  })
+})
+
+describe('sameDevice', () => {
+  it('接管记录带着 stableId 时，address 是另一条接法也算同一台', () => {
+    expect(sameDevice(bothRow(), { stableId: USB, address: WIFI })).toBe(true)
+    expect(sameDevice(bothRow(), { stableId: USB, address: USB })).toBe(true)
+  })
+
+  it('没有 stableId 时退回 address 相比', () => {
+    expect(sameDevice({ address: USB }, { address: USB })).toBe(true)
+  })
+
+  it('不同手机不算', () => {
+    expect(sameDevice(bothRow(), { stableId: 'c0ffee00', address: 'c0ffee00' })).toBe(false)
+    expect(sameDevice(null, bothRow())).toBe(false)
+  })
+})
+
+// 没连着设备时的静默接管：只有一台才接管，多台留给用户点。
+describe('pickAdoptableDevice', () => {
+  const live = (row) => ({ ...row, connected: true })
+  const currentRow = () => live(bothRow())
+  const otherRow = () => ({ stableId: 'c0ffee00', address: 'c0ffee00', connected: true })
+
+  it('只有一台可连接时接管它', () => {
+    expect(pickAdoptableDevice([currentRow()])?.stableId).toBe(USB)
+  })
+
+  it('两台不同手机同时在线时谁都不接管', () => {
+    expect(pickAdoptableDevice([currentRow(), otherRow()])).toBeNull()
+  })
+
+  it('可连接的只有一台、另一台待授权时接管那台', () => {
+    const pending = { ...otherRow(), connected: false }
+    expect(pickAdoptableDevice([currentRow(), pending])?.stableId).toBe(USB)
+  })
+
+  it('一台都没有时空', () => {
+    expect(pickAdoptableDevice([{ stableId: 'x', connected: false }])).toBeNull()
   })
 })
