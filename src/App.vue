@@ -388,6 +388,34 @@ async function disconnect() {
   }
 }
 
+/**
+ * 下拉里断开一台不在用的设备：它名下的每条 transport 都摘掉，
+ * 只摘代表那条会留下另一条，看起来就像「断开没生效」。
+ */
+async function disconnectListedDevice(target) {
+  if (!target) return;
+  // 列表是按秒刷的，理论上会点到已经变成当前设备的那行 —— 那就走带收摊的正式断开。
+  if (device.value && sameDevice(target, device.value)) {
+    await disconnect();
+    return;
+  }
+  const addresses = target.connections?.length
+    ? target.connections.map((c) => c.address)
+    : [target.address];
+  for (const address of addresses) {
+    try {
+      await disconnectApi(address);
+    } catch (e) {
+      console.error("断开设备失败：", e);
+    }
+  }
+  try {
+    await refreshDeviceList();
+  } catch (e) {
+    console.error("刷新设备列表失败：", e);
+  }
+}
+
 function openSettings() {
   settingsReturn.value = pageType.value;
   pageType.value = "settings";
@@ -400,7 +428,8 @@ function closeSettings() {
 
 <template>
   <PageHeader :pageType="pageType" :disconnecting="disconnecting" :disconnect-error="disconnectError"
-    :devices="discoveredDevices" :active-device="activeDevice" @disconnect="disconnect" @open-settings="openSettings"
+    :devices="discoveredDevices" :active-device="activeDevice"
+    @disconnect="disconnect" @disconnect-device="disconnectListedDevice" @open-settings="openSettings"
     @close-settings="closeSettings" @switch-device="switchDevice"
     @device-menu-change="onDeviceMenuChange" @add-device="openPairDialog" />
 

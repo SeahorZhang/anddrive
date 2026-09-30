@@ -24,6 +24,7 @@ const showConfirm = ref(false)
 const menuOpen = ref(false)
 const emit = defineEmits([
   'disconnect',
+  'disconnectDevice',
   'openSettings',
   'closeSettings',
   'switchDevice',
@@ -126,36 +127,45 @@ watch(
               class="z-50 w-[300px] rounded-[12px] border border-line bg-surface p-1.5 shadow-pop outline-none backdrop-blur-xl">
               <div class="px-2 pt-1 pb-1.5 text-[11px] font-medium text-ink-3">切换设备</div>
 
-              <button v-for="item in devices" :key="deviceKey(item)" type="button"
-                class="flex w-full items-center gap-2.5 rounded-[9px] px-2 py-1.5 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45"
-                :class="isCurrent(item) ? 'bg-accent/[0.08]' : 'hover:bg-fill disabled:hover:bg-transparent'"
-                :disabled="!item.connected" @click="pickDevice(item)">
-                <div
-                  class="flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-gradient-to-b from-[#5ac8fa] to-accent text-white shadow-[0_1px_2px_rgba(0,122,255,0.3)]">
-                  <Icon icon="lucide:smartphone" :width="14" :height="14" />
-                </div>
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-1.5">
-                    <span class="truncate text-[12.5px] font-medium text-ink">
-                      {{ item.label || item.name || '未知设备' }}
-                    </span>
-                    <span v-for="transport in deviceTransports(item)" :key="transport"
-                      class="shrink-0 rounded-[4px] bg-fill px-1 py-0.5 text-[10px] leading-none font-medium text-ink-3">
-                      {{ transportText(transport) }}
-                    </span>
+              <div v-for="item in devices" :key="deviceKey(item)"
+                class="flex items-center gap-1 rounded-[9px] pr-1 pl-2 transition-colors duration-150"
+                :class="isCurrent(item) ? 'bg-accent/[0.08]' : 'hover:bg-fill'">
+                <button type="button"
+                  class="flex min-w-0 flex-1 items-center gap-2.5 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45"
+                  :disabled="!item.connected" @click="pickDevice(item)">
+                  <div
+                    class="flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-gradient-to-b from-[#5ac8fa] to-accent text-white shadow-[0_1px_2px_rgba(0,122,255,0.3)]">
+                    <Icon icon="lucide:smartphone" :width="14" :height="14" />
                   </div>
-                  <div class="mt-0.5 truncate text-[11px] text-ink-3">
-                    {{ deviceHint(item) }}
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-1.5">
+                      <span class="truncate text-[12.5px] font-medium text-ink">
+                        {{ item.label || item.name || '未知设备' }}
+                      </span>
+                      <span v-for="transport in deviceTransports(item)" :key="transport"
+                        class="shrink-0 rounded-[4px] bg-fill px-1 py-0.5 text-[10px] leading-none font-medium text-ink-3">
+                        {{ transportText(transport) }}
+                      </span>
+                    </div>
+                    <div class="mt-0.5 truncate text-[11px] text-ink-3">
+                      {{ deviceHint(item) }}
+                    </div>
                   </div>
-                </div>
+                </button>
+
                 <Icon v-if="isCurrent(item)" icon="lucide:check" :width="15" :height="15"
                   class="shrink-0 text-accent" />
+                <!-- 列表里能出现的连接态设备都是「可连接」的，那枚状态标记没有信息量，换成断开。 -->
+                <button v-else-if="item.connected" type="button" class="shrink-0 rounded-[6px] px-1.5 py-1 text-[11px] font-medium text-ink-3 outline-none transition-colors duration-150 hover:bg-fill-strong hover:text-[#ff3b30] focus-visible:ring-2 focus-visible:ring-accent/40"
+                  @click="emit('disconnectDevice', item)">
+                  断开
+                </button>
                 <span v-else class="flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none"
                   :class="stateClass(item)">
                   <span class="size-1.5 rounded-full" :class="stateDotClass(item)" />
                   {{ stateText(item) }}
                 </span>
-              </button>
+              </div>
 
               <div v-if="!devices.length" class="px-2 py-2 text-[12px] text-ink-3">正在查找设备…</div>
 
