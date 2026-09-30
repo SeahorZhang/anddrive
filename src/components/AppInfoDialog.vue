@@ -51,12 +51,12 @@ const apkPaths = computed(() => props.info?.apkPaths || [])
       :animate="{ opacity: 1, scale: 1, y: 0 }"
       :exit="{ opacity: 0, scale: 0.96 }"
       :transition="{ type: 'spring', stiffness: 420, damping: 32 }"
-      class="fixed top-1/2 left-1/2 z-51 w-[420px] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[18px] border border-white/60 bg-white/90 shadow-[0_20px_60px_rgba(0,0,0,0.25)] backdrop-blur-2xl"
+      class="fixed top-1/2 left-1/2 z-51 w-[420px] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[18px] border border-line bg-surface shadow-pop backdrop-blur-2xl"
     >
       <div class="flex items-center justify-between px-5 pt-4 pb-2">
-        <h2 class="text-[14px] font-semibold text-[#1d1d1f]">应用信息</h2>
+        <h2 class="text-[14px] font-semibold text-ink">应用信息</h2>
         <button
-          class="flex size-6 cursor-pointer items-center justify-center rounded-full text-black/35 transition-colors hover:bg-black/[0.06] hover:text-black/60"
+          class="flex size-6 cursor-pointer items-center justify-center rounded-full text-ink-3 transition-colors hover:bg-fill hover:text-ink-2"
           @click="modelValue = false"
         >
           <Icon icon="lucide:x" :width="14" :height="14" />
@@ -64,23 +64,23 @@ const apkPaths = computed(() => props.info?.apkPaths || [])
       </div>
 
       <div class="max-h-[60vh] overflow-y-auto px-5 pb-3">
-        <div class="divide-y divide-black/[0.06] overflow-hidden rounded-[12px] border border-black/[0.06]">
+        <div class="divide-y divide-line overflow-hidden rounded-[12px] border border-line">
           <div v-for="row in rows" :key="row.label" class="flex items-start gap-3 px-3.5 py-2.5">
-            <Icon :icon="row.icon" :width="14" :height="14" class="mt-0.5 shrink-0 text-black/35" />
-            <span class="w-16 shrink-0 text-[12px] text-black/45">{{ row.label }}</span>
-            <span class="min-w-0 flex-1 text-right text-[12px] break-all text-black/75">
+            <Icon :icon="row.icon" :width="14" :height="14" class="mt-0.5 shrink-0 text-ink-3" />
+            <span class="w-16 shrink-0 text-[12px] text-ink-3">{{ row.label }}</span>
+            <span class="min-w-0 flex-1 text-right text-[12px] break-all text-ink">
               {{ row.value }}
             </span>
           </div>
         </div>
 
         <div v-if="apkPaths.length" class="mt-3">
-          <div class="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] font-medium text-black/40">
+          <div class="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] font-medium text-ink-3">
             <Icon icon="lucide:hard-drive" :width="11" :height="11" />
             APK 路径
           </div>
-          <div class="flex flex-col gap-1 rounded-[12px] bg-black/[0.04] p-2.5">
-            <span v-for="apk in apkPaths" :key="apk" class="text-[11px] break-all text-black/55">
+          <div class="flex flex-col gap-1 rounded-[12px] bg-fill p-2.5">
+            <span v-for="apk in apkPaths" :key="apk" class="text-[11px] break-all text-ink-2">
               {{ apk }}
             </span>
           </div>

@@ -22,7 +22,7 @@ const props = defineProps({
 const emit = defineEmits(['change'])
 
 const SELECT_CLASS =
-  'h-7 max-w-[190px] cursor-pointer rounded-[7px] border border-black/10 bg-white px-2 text-[12px] text-black/70 outline-none disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-[#007aff]/40'
+  'h-7 max-w-[190px] cursor-pointer rounded-[7px] border border-line bg-surface-2 px-2 text-[12px] text-ink-2 outline-none disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-2 focus-visible:ring-accent/40'
 
 const FPS_OPTIONS = [30, 60, 90, 120]
 /** 某一头明确说「不行」才标记；null（没探测到）不标，免得凭猜测拦用户。 */
@@ -86,11 +86,11 @@ function updateQuality(tier) {
 
 <template>
   <div
-    class="divide-y divide-black/[0.06] overflow-hidden rounded-[12px] border border-black/[0.06] bg-white/70 shadow-[0_1px_2px_rgba(0,0,0,0.04)] backdrop-blur">
+    class="divide-y divide-line overflow-hidden rounded-[12px] border border-line bg-surface-2/70 shadow-[0_1px_2px_rgba(0,0,0,0.04)] backdrop-blur">
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
-        <div class="text-[13px] text-black/70">画质档位</div>
-        <div class="mt-0.5 text-[11px] text-black/40">
+        <div class="text-[13px] text-ink-2">画质档位</div>
+        <div class="mt-0.5 text-[11px] text-ink-3">
           一档 = 像素倍率 + 码率上限，会话建立时读取（改动不影响进行中的镜像）。
           实测只影响清晰度与带宽、不影响帧率：排版异常的应用用兼容，Wi-Fi 不稳时降档
         </div>
@@ -105,8 +105,8 @@ function updateQuality(tier) {
 
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
-        <div class="text-[13px] text-black/70">帧率上限</div>
-        <div class="mt-0.5 text-[11px] text-black/40">限制镜像的最大帧率</div>
+        <div class="text-[13px] text-ink-2">帧率上限</div>
+        <div class="mt-0.5 text-[11px] text-ink-3">限制镜像的最大帧率</div>
       </div>
       <select :class="SELECT_CLASS" :value="props.config.maxFps" :disabled="disabled"
         @change="update({ maxFps: Number($event.target.value) })">
@@ -116,8 +116,8 @@ function updateQuality(tier) {
 
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
-        <div class="text-[13px] text-black/70">视频编码</div>
-        <div class="mt-0.5 text-[11px] text-black/40">投屏协议</div>
+        <div class="text-[13px] text-ink-2">视频编码</div>
+        <div class="mt-0.5 text-[11px] text-ink-3">投屏协议</div>
       </div>
       <select :class="SELECT_CLASS" :value="props.config.videoCodec" :disabled="disabled"
         @change="update({ videoCodec: $event.target.value })">
@@ -129,8 +129,8 @@ function updateQuality(tier) {
 
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
-        <div class="text-[13px] text-black/70">音频转发</div>
-        <div class="mt-0.5 text-[11px] text-black/40">把设备声音转发到电脑播放</div>
+        <div class="text-[13px] text-ink-2">音频转发</div>
+        <div class="mt-0.5 text-[11px] text-ink-3">把设备声音转发到电脑播放</div>
       </div>
       <SwitchToggle :model-value="props.config.audio" :disabled="disabled"
         @update:model-value="(value) => update({ audio: value })" />
@@ -138,8 +138,8 @@ function updateQuality(tier) {
 
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
-        <div class="text-[13px] text-black/70">窗口置顶</div>
-        <div class="mt-0.5 text-[11px] text-black/40">镜像窗口始终显示在其他窗口之上</div>
+        <div class="text-[13px] text-ink-2">窗口置顶</div>
+        <div class="mt-0.5 text-[11px] text-ink-3">镜像窗口始终显示在其他窗口之上</div>
       </div>
       <SwitchToggle :model-value="props.config.alwaysOnTop" :disabled="disabled"
         @update:model-value="(value) => update({ alwaysOnTop: value })" />
@@ -147,8 +147,8 @@ function updateQuality(tier) {
 
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
-        <div class="text-[13px] text-black/70">全屏启动</div>
-        <div class="mt-0.5 text-[11px] text-black/40">镜像窗口以全屏模式打开</div>
+        <div class="text-[13px] text-ink-2">全屏启动</div>
+        <div class="mt-0.5 text-[11px] text-ink-3">镜像窗口以全屏模式打开</div>
       </div>
       <SwitchToggle :model-value="props.config.fullscreen" :disabled="disabled"
         @update:model-value="(value) => update({ fullscreen: value })" />

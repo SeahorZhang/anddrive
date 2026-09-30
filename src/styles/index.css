@@ -1,11 +1,63 @@
 @import 'tailwindcss';
 
+/* 深色靠 <html class="dark"> 切换（useTheme 负责写这个类），不是媒体查询。 */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/**
+ * 双主题语义色：:root 是浅色（JS 没跑也好看），.dark 覆盖成深色。
+ * Tailwind 的透明度修饰符会生成 color-mix(var(--color-*) …)，变量在用到它的
+ * 元素上求值，所以换主题只需要改这一段，组件不写死黑白。
+ */
 @theme {
   --font-sans:
     -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'PingFang SC',
     'Microsoft YaHei', sans-serif;
-  --color-mac-accent: #007aff;
-  --color-mac-label: #1d1d1f;
+
+  /* 窗口底 */
+  --color-canvas: rgb(245 245 247 / 82%);
+  /* 弹窗 / 浮层：带透明度才吃得到 backdrop-blur 的毛玻璃 */
+  --color-surface: rgb(255 255 255 / 92%);
+  /* 卡片 / 输入框：实心，压在 surface 上要有层次 */
+  --color-surface-2: #ffffff;
+  /* 文字四级：主 / 次 / 弱 / 分隔。边界按原浅色的 black/70、/55、/40、/25 划。 */
+  --color-ink: #1d1d1f;
+  --color-ink-2: rgb(0 0 0 / 58%);
+  --color-ink-3: rgb(0 0 0 / 44%);
+  --color-ink-4: rgb(0 0 0 / 26%);
+  /* 描边：常规 / 加重（输入框、hover 态） */
+  --color-line: rgb(0 0 0 / 8%);
+  --color-line-strong: rgb(0 0 0 / 15%);
+  /* 填充：默认 / hover·pressed。原浅色的 black/[0.03~0.07] */
+  --color-fill: rgb(0 0 0 / 5%);
+  --color-fill-strong: rgb(0 0 0 / 9%);
+  /* 主题色：深色下要提亮一档，否则蓝字贴在 #1c1c1e 上只有 3.3:1 */
+  --color-accent: #007aff;
+  --color-accent-press: #0064d2;
+  /* 弹层投影：深色底上要更重才分得出前后 */
+  --shadow-pop: 0 10px 34px rgb(0 0 0 / 18%);
+}
+
+/* 原生控件（select 下拉、滚动条、表单）跟着主题走，否则深色下弹出白条。 */
+:root {
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
+  --color-canvas: rgb(22 22 24 / 86%);
+  --color-surface: rgb(28 28 30 / 92%);
+  --color-surface-2: #2c2c2e;
+  --color-ink: #f2f2f7;
+  --color-ink-2: rgb(235 235 245 / 66%);
+  --color-ink-3: rgb(235 235 245 / 48%);
+  --color-ink-4: rgb(235 235 245 / 30%);
+  --color-line: rgb(255 255 255 / 10%);
+  --color-line-strong: rgb(255 255 255 / 16%);
+  --color-fill: rgb(255 255 255 / 6%);
+  --color-fill-strong: rgb(255 255 255 / 11%);
+  --color-accent: #0a84ff;
+  --color-accent-press: #0a70dc;
+  --shadow-pop: 0 10px 34px rgb(0 0 0 / 50%);
 }
 
 html,
@@ -19,12 +71,12 @@ body {
 }
 
 #app {
-  @apply flex h-full flex-col font-sans text-[13px] text-[#1d1d1f] antialiased;
-  background-color: rgb(245 245 247 / 82%);
+  @apply flex h-full flex-col font-sans text-[13px] text-ink antialiased;
+  background-color: var(--color-canvas);
 }
 
 ::selection {
-  background-color: rgb(0 122 255 / 25%);
+  background-color: rgb(0 122 255 / 30%);
 }
 
 /* 窗口较窄时禁用 vue-sonner 的移动端全宽样式，保持固定宽度的右上角提醒。 */

@@ -35,7 +35,7 @@ const iconSize = computed(() => (size === 'md' ? 16 : 14))
     :class="[
       'relative inline-flex shrink-0 cursor-pointer items-center justify-center whitespace-nowrap select-none',
       'transition-[background-color,color,box-shadow] duration-150 outline-none',
-      'focus-visible:ring-2 focus-visible:ring-[#007aff]/40',
+      'focus-visible:ring-2 focus-visible:ring-accent/40',
       'disabled:cursor-not-allowed disabled:opacity-40',
       iconOnly
         ? size === 'md'
@@ -46,13 +46,12 @@ const iconSize = computed(() => (size === 'md' ? 16 : 14))
           : 'h-7 gap-1 rounded-[7px] px-2.5 text-[12px]',
       !iconOnly && 'font-medium',
       variant === 'primary' &&
-        'bg-[#007aff] text-white shadow-[0_1px_2px_rgba(0,0,0,0.18)] hover:bg-[#0071e3] active:bg-[#0064d2]',
+        'bg-accent text-white shadow-[0_1px_2px_rgba(0,0,0,0.18)] hover:bg-accent-press active:brightness-90',
       variant === 'secondary' &&
-        'border border-black/10 bg-white text-black/70 shadow-[0_1px_1px_rgba(0,0,0,0.05)] hover:bg-black/[0.03] active:bg-black/[0.07]',
+        'border border-line bg-surface-2 text-ink-2 shadow-[0_1px_1px_rgba(0,0,0,0.05)] hover:bg-fill active:bg-fill-strong',
       variant === 'danger' &&
-        'bg-[#ff3b30] text-white shadow-[0_1px_2px_rgba(0,0,0,0.18)] hover:bg-[#f0332a] active:bg-[#e02d24]',
-      variant === 'default' &&
-        'text-black/50 hover:bg-black/[0.06] hover:text-black/80 active:bg-black/[0.1]',
+        'bg-[#ff3b30] text-white shadow-[0_1px_2px_rgba(0,0,0,0.18)] hover:bg-[#f0332a] active:bg-[#e02d24] dark:bg-[#ff453a] dark:hover:bg-[#ff5c52] dark:active:bg-[#ff6961]',
+      variant === 'default' && 'text-ink-3 hover:bg-fill hover:text-ink active:bg-fill-strong',
     ]"
     @click="$emit('click')"
   >

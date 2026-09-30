@@ -41,8 +41,8 @@ const ICON_REFRESH_MS = 7 * 24 * 60 * 60 * 1000
 // 禁用项要有样子：reka-ui 在 disabled 时打 `data-disabled`，这里靠它换光标并压暗，
 // 否则「系统应用」那两项看着照样能点。
 const MENU_ITEM_CLASS =
-  'flex cursor-pointer items-center gap-2 rounded-[7px] px-2 py-1.5 text-[12px] text-black/75 outline-none select-none data-[highlighted]:bg-black/[0.06] data-[disabled]:cursor-default data-[disabled]:opacity-45 data-[disabled]:text-black/45'
-const MENU_ITEM_DANGER_CLASS = 'text-[#ff3b30]'
+  'flex cursor-pointer items-center gap-2 rounded-[7px] px-2 py-1.5 text-[12px] text-ink outline-none select-none data-[highlighted]:bg-fill data-[disabled]:cursor-default data-[disabled]:opacity-45 data-[disabled]:text-ink-3'
+const MENU_ITEM_DANGER_CLASS = 'text-[#ff3b30] dark:text-[#ff6961]'
 
 /** 图标缺失或已过期才需要重新获取 */
 function needsIcon(app) {
@@ -373,18 +373,18 @@ function confirmUninstall(app) {
     <div class="mb-3 flex items-center gap-2">
       <div class="relative flex h-8 min-w-0 flex-1 items-center">
         <Icon icon="lucide:search" :width="14" :height="14"
-          class="pointer-events-none absolute left-2.5 text-black/35" />
+          class="pointer-events-none absolute left-2.5 text-ink-3" />
         <input v-model="searchText" type="text" placeholder="搜索应用 · 名字 / 拼音 / 包名"
-          class="h-full w-full rounded-[8px] bg-black/[0.05] pr-8 pl-8 text-[12px] text-black/80 transition-colors outline-none placeholder:text-black/30 focus:bg-black/[0.07] focus:ring-2 focus:ring-[#007aff]/35" />
+          class="h-full w-full rounded-[8px] bg-fill pr-8 pl-8 text-[12px] text-ink transition-colors outline-none placeholder:text-ink-4 focus:bg-fill-strong focus:ring-2 focus:ring-accent/35" />
         <button v-if="searchText"
-          class="absolute right-2 flex size-4 cursor-pointer items-center justify-center rounded-full bg-black/20 text-white transition-colors hover:bg-black/35"
+          class="absolute right-2 flex size-4 cursor-pointer items-center justify-center rounded-full bg-black/25 text-white transition-colors hover:bg-black/40 dark:bg-white/25 dark:text-ink dark:hover:bg-white/35"
           @click="searchText = ''">
           <Icon icon="lucide:x" :width="10" :height="10" />
         </button>
       </div>
 
       <TooltipProvider :delay-duration="300">
-        <div class="flex items-center gap-0.5 rounded-[9px] bg-black/[0.05] p-0.5">
+        <div class="flex items-center gap-0.5 rounded-[9px] bg-fill p-0.5">
           <TooltipRoot>
             <TooltipTrigger as-child>
               <BaseButton icon="lucide:download" icon-only :disabled="loading" @click="installHelper" />
@@ -424,94 +424,94 @@ function confirmUninstall(app) {
 
     <ScrollAreaRoot class="min-h-0 flex-1">
       <ScrollAreaViewport
-        class="h-full w-full rounded-[14px] border border-white/70 bg-white/55 shadow-[0_1px_3px_rgba(0,0,0,0.05)]">
+        class="h-full w-full rounded-[14px] border border-line bg-surface-2/60 shadow-[0_1px_3px_rgba(0,0,0,0.05)]">
         <div class="p-2.5">
           <div v-if="loading && apps.length === 0"
-            class="flex flex-col items-center justify-center gap-3 py-16 text-black/35">
-            <span class="size-5 animate-spin rounded-full border-2 border-black/15 border-t-black/45" />
+            class="flex flex-col items-center justify-center gap-3 py-16 text-ink-3">
+            <span class="size-5 animate-spin rounded-full border-2 border-line-strong border-t-ink-2" />
             <span class="text-[12px]">正在读取应用列表…</span>
           </div>
 
           <div v-else-if="filteredApps.length > 0" class="flex flex-col gap-3">
             <section v-for="(section, index) in sections" :key="section.key">
-              <div v-if="index > 0" class="mb-3 h-px bg-black/[0.08]" aria-hidden="true" />
+              <div v-if="index > 0" class="mb-3 h-px bg-line" aria-hidden="true" />
               <div class="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-1">
                 <ContextMenuRoot v-for="app in section.apps" :key="app.packageName">
                   <ContextMenuTrigger as-child>
                     <div role="button" tabindex="0" :title="`启动 ${app.label}`"
-                      class="relative flex cursor-pointer flex-col items-center gap-1.5 rounded-[12px] p-2 transition-colors outline-none hover:bg-black/[0.05] focus-visible:bg-black/[0.05] active:bg-black/[0.09]"
+                      class="relative flex cursor-pointer flex-col items-center gap-1.5 rounded-[12px] p-2 transition-colors outline-none hover:bg-fill focus-visible:bg-fill active:bg-fill-strong"
                       @click="launchApp(app)" @keydown.enter="launchApp(app)" @keydown.space.prevent="launchApp(app)">
                       <img v-if="app.iconUrl" :src="app.iconUrl"
                         class="pointer-events-none size-11 rounded-[11px] shadow-[0_1px_3px_rgba(0,0,0,0.14)]" />
                       <div v-else
-                        class="pointer-events-none flex size-11 items-center justify-center rounded-[11px] bg-black/[0.06] text-black/25">
+                        class="pointer-events-none flex size-11 items-center justify-center rounded-[11px] bg-fill text-ink-4">
                         <Icon icon="lucide:package" :width="20" :height="20" />
                       </div>
                       <span
-                        class="pointer-events-none w-full truncate text-center text-[11px] leading-tight text-black/70">
+                        class="pointer-events-none w-full truncate text-center text-[11px] leading-tight text-ink">
                         {{ app.label }}
                       </span>
                       <span v-if="isBusy(app)"
-                        class="absolute inset-0 z-20 flex items-center justify-center rounded-[12px] bg-white/65">
-                        <span class="size-4 animate-spin rounded-full border-2 border-black/15 border-t-black/45" />
+                        class="absolute inset-0 z-20 flex items-center justify-center rounded-[12px] bg-surface-2/75">
+                        <span class="size-4 animate-spin rounded-full border-2 border-line-strong border-t-ink-2" />
                       </span>
                     </div>
                   </ContextMenuTrigger>
                   <ContextMenuPortal>
                     <ContextMenuContent
-                      class="z-[100] min-w-44 rounded-[10px] border border-black/[0.08] bg-white/95 p-1 shadow-[0_8px_30px_rgba(0,0,0,0.18)] backdrop-blur-xl">
+                      class="z-[100] min-w-44 rounded-[10px] border border-line bg-surface p-1 shadow-pop backdrop-blur-xl">
                       <ContextMenuItem :class="MENU_ITEM_CLASS" @select="launchApp(app)">
-                        <Icon icon="lucide:play" :width="13" :height="13" class="shrink-0 text-black/40" />
+                        <Icon icon="lucide:play" :width="13" :height="13" class="shrink-0 text-ink-3" />
                         启动
                       </ContextMenuItem>
                       <ContextMenuItem :class="MENU_ITEM_CLASS" @select="openLaunchDialog(app)">
-                        <Icon icon="lucide:settings-2" :width="13" :height="13" class="shrink-0 text-black/40" />
+                        <Icon icon="lucide:settings-2" :width="13" :height="13" class="shrink-0 text-ink-3" />
                         启动（自定义参数）
                       </ContextMenuItem>
                       <ContextMenuItem :class="MENU_ITEM_CLASS" @select="toggleFavorite(app.packageName)">
                         <Icon icon="lucide:star" :width="13" :height="13"
-                          :class="['shrink-0', isFavorite(app.packageName) ? 'fill-[#f5a623] text-[#f5a623]' : 'text-black/40']" />
+                          :class="['shrink-0', isFavorite(app.packageName) ? 'fill-[#f5a623] text-[#f5a623]' : 'text-ink-3']" />
                         {{ isFavorite(app.packageName) ? '取消置顶' : '置顶' }}
                       </ContextMenuItem>
                       <ContextMenuItem :class="MENU_ITEM_CLASS" @select="sendToDesktop(app)">
-                        <Icon icon="lucide:monitor-down" :width="13" :height="13" class="shrink-0 text-black/40" />
+                        <Icon icon="lucide:monitor-down" :width="13" :height="13" class="shrink-0 text-ink-3" />
                         发送到桌面
                       </ContextMenuItem>
-                      <ContextMenuSeparator class="my-1 h-px bg-black/[0.06]" />
+                      <ContextMenuSeparator class="my-1 h-px bg-line" />
                       <ContextMenuSub>
                         <ContextMenuSubTrigger :class="MENU_ITEM_CLASS">
-                          <Icon icon="lucide:ellipsis" :width="13" :height="13" class="shrink-0 text-black/40" />
+                          <Icon icon="lucide:ellipsis" :width="13" :height="13" class="shrink-0 text-ink-3" />
                           应用操作
                           <Icon icon="lucide:chevron-right" :width="13" :height="13"
-                            class="ml-auto shrink-0 text-black/30" />
+                            class="ml-auto shrink-0 text-ink-4" />
                         </ContextMenuSubTrigger>
                         <ContextMenuSubContent
-                          class="z-[101] min-w-40 rounded-[10px] border border-black/[0.08] bg-white/95 p-1 shadow-[0_8px_30px_rgba(0,0,0,0.18)] backdrop-blur-xl">
+                          class="z-[101] min-w-40 rounded-[10px] border border-line bg-surface p-1 shadow-pop backdrop-blur-xl">
                           <ContextMenuItem :class="MENU_ITEM_CLASS" @select="showAppInfo(app)">
-                            <Icon icon="lucide:info" :width="13" :height="13" class="shrink-0 text-black/40" />
+                            <Icon icon="lucide:info" :width="13" :height="13" class="shrink-0 text-ink-3" />
                             应用信息
                           </ContextMenuItem>
                           <ContextMenuItem :class="MENU_ITEM_CLASS" @select="copyPackageName(app)">
-                            <Icon icon="lucide:copy" :width="13" :height="13" class="shrink-0 text-black/40" />
+                            <Icon icon="lucide:copy" :width="13" :height="13" class="shrink-0 text-ink-3" />
                             复制包名
                           </ContextMenuItem>
                           <ContextMenuItem :class="MENU_ITEM_CLASS" @select="exportAppApk(app)">
-                            <Icon icon="lucide:download" :width="13" :height="13" class="shrink-0 text-black/40" />
+                            <Icon icon="lucide:download" :width="13" :height="13" class="shrink-0 text-ink-3" />
                             导出 APK
                           </ContextMenuItem>
-                          <ContextMenuSeparator class="my-1 h-px bg-black/[0.06]" />
+                          <ContextMenuSeparator class="my-1 h-px bg-line" />
                           <!-- 系统应用点了也只会失败（未 root 卸不掉），直接禁掉并说明原因 -->
                           <ContextMenuItem :class="[MENU_ITEM_CLASS, MENU_ITEM_DANGER_CLASS]"
                             :disabled="app.system" @select="confirmClearData(app)">
                             <Icon icon="lucide:eraser" :width="13" :height="13" class="shrink-0" />
                             清除数据
-                            <span v-if="app.system" class="ml-auto text-[10px] text-black/30">系统应用</span>
+                            <span v-if="app.system" class="ml-auto text-[10px] text-ink-4">系统应用</span>
                           </ContextMenuItem>
                           <ContextMenuItem :class="[MENU_ITEM_CLASS, MENU_ITEM_DANGER_CLASS]"
                             :disabled="app.system" @select="confirmUninstall(app)">
                             <Icon icon="lucide:trash-2" :width="13" :height="13" class="shrink-0" />
                             卸载
-                            <span v-if="app.system" class="ml-auto text-[10px] text-black/30">系统应用</span>
+                            <span v-if="app.system" class="ml-auto text-[10px] text-ink-4">系统应用</span>
                           </ContextMenuItem>
                         </ContextMenuSubContent>
                       </ContextMenuSub>
@@ -522,9 +522,9 @@ function confirmUninstall(app) {
             </section>
           </div>
 
-          <div v-else class="flex flex-col items-center justify-center gap-3 py-16 text-black/35">
+          <div v-else class="flex flex-col items-center justify-center gap-3 py-16 text-ink-3">
             <Icon :icon="apps.length === 0 ? 'lucide:package' : 'lucide:search'" :width="28" :height="28"
-              class="text-black/20" />
+              class="text-ink-4" />
             <span class="text-[12px]">
               {{ apps.length === 0 ? '手机中暂无应用' : '没有找到匹配的应用' }}
             </span>
@@ -532,7 +532,7 @@ function confirmUninstall(app) {
         </div>
       </ScrollAreaViewport>
       <ScrollAreaScrollbar orientation="vertical" class="flex w-2 touch-none p-0.5 select-none">
-        <ScrollAreaThumb class="relative flex-1 rounded-full bg-black/20 hover:bg-black/30" />
+        <ScrollAreaThumb class="relative flex-1 rounded-full bg-ink-4 hover:bg-ink-3" />
       </ScrollAreaScrollbar>
     </ScrollAreaRoot>
 

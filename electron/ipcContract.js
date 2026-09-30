@@ -20,6 +20,8 @@ export const CHANNELS = {
   adbGetAppIcons: 'adb:getAppIcons',
   adbPair: 'adb:pair',
   adbDisconnect: 'adb:disconnect',
+  /** 只释放设备资源（镜像 / 存储 / 连接池），保留 ADB transport，供切换设备用。 */
+  adbReleaseDevice: 'adb:releaseDevice',
   adbDeleteAppCache: 'adb:deleteAppCache',
   adbGetCachedApps: 'adb:getCachedApps',
 

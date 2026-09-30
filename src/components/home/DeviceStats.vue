@@ -66,57 +66,57 @@ function cpuText() {
 <template>
   <!-- 外壳（圆角/描边/阴影）由 PopoverContent 给，这里只管内容 -->
   <div class="text-[12px]">
-      <div v-if="loading && !stats" class="flex items-center justify-center gap-2 py-6 text-[12px] text-black/45">
-        <span class="size-3.5 animate-spin rounded-full border-2 border-black/15 border-t-black/45" />
+      <div v-if="loading && !stats" class="flex items-center justify-center gap-2 py-6 text-[12px] text-ink-3">
+        <span class="size-3.5 animate-spin rounded-full border-2 border-line-strong border-t-ink-2" />
         正在读取设备信息…
       </div>
 
       <div v-else-if="error && !stats" class="flex flex-col items-center gap-2 py-5">
-        <span class="text-[12px] text-red-600">{{ error }}</span>
+        <span class="text-[12px] text-[#d70015] dark:text-[#ff6961]">{{ error }}</span>
         <BaseButton variant="secondary" @click="load(true)">重试</BaseButton>
       </div>
 
       <template v-else-if="stats">
         <div class="grid grid-cols-2 gap-x-5 gap-y-2.5">
           <div>
-            <div class="text-[11px] text-black/40">型号</div>
-            <div class="truncate text-[12px] text-black/75" :title="stats.model || ''">{{ stats.model || '—' }}</div>
+            <div class="text-[11px] text-ink-3">型号</div>
+            <div class="truncate text-[12px] text-ink" :title="stats.model || ''">{{ stats.model || '—' }}</div>
           </div>
           <div>
-            <div class="text-[11px] text-black/40">品牌</div>
-            <div class="truncate text-[12px] text-black/75">
+            <div class="text-[11px] text-ink-3">品牌</div>
+            <div class="truncate text-[12px] text-ink">
               {{ stats.brand || stats.manufacturer || '—' }}
             </div>
           </div>
           <div>
-            <div class="text-[11px] text-black/40">Android 版本</div>
-            <div class="text-[12px] text-black/75">
+            <div class="text-[11px] text-ink-3">Android 版本</div>
+            <div class="text-[12px] text-ink">
               {{ stats.androidVersion || '—' }}
-              <span v-if="stats.sdk" class="text-black/40">（API {{ stats.sdk }}）</span>
+              <span v-if="stats.sdk" class="text-ink-3">（API {{ stats.sdk }}）</span>
             </div>
           </div>
           <div>
-            <div class="text-[11px] text-black/40">电量</div>
-            <div class="text-[12px] text-black/75">{{ batteryText(stats.battery) }}</div>
+            <div class="text-[11px] text-ink-3">电量</div>
+            <div class="text-[12px] text-ink">{{ batteryText(stats.battery) }}</div>
           </div>
           <div>
-            <div class="text-[11px] text-black/40">网络</div>
-            <div class="truncate text-[12px] text-black/75" :title="stats.network?.ip || ''">
+            <div class="text-[11px] text-ink-3">网络</div>
+            <div class="truncate text-[12px] text-ink" :title="stats.network?.ip || ''">
               {{ stats.network?.ip || '—' }}
-              <span v-if="stats.network?.interface" class="text-black/40">（{{ stats.network.interface }}）</span>
+              <span v-if="stats.network?.interface" class="text-ink-3">（{{ stats.network.interface }}）</span>
             </div>
           </div>
           <div>
-            <div class="text-[11px] text-black/40">内存</div>
-            <div class="text-[12px] text-black/75">
+            <div class="text-[11px] text-ink-3">内存</div>
+            <div class="text-[12px] text-ink">
               {{ formatBytes(stats.memory?.usedBytes) }} / {{ formatBytes(stats.memory?.totalBytes) }}
             </div>
           </div>
           <div class="col-span-2">
-            <div class="text-[11px] text-black/40">处理器</div>
-            <div class="truncate text-[12px] text-black/75" :title="stats.cpu?.model || ''">
+            <div class="text-[11px] text-ink-3">处理器</div>
+            <div class="truncate text-[12px] text-ink" :title="stats.cpu?.model || ''">
               {{ stats.cpu?.model || '—' }}
-              <span v-if="cpuText() !== '—'" class="text-black/40">（{{ cpuText() }}）</span>
+              <span v-if="cpuText() !== '—'" class="text-ink-3">（{{ cpuText() }}）</span>
             </div>
           </div>
         </div>

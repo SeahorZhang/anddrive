@@ -1895,14 +1895,31 @@ export async function runDeviceTeardown(serial) {
   );
 }
 
-// 断开设备：先停掉该设备的镜像会话，再断开 ADB 传输（USB 只停用、不摘传输，
-// 详见 disconnectTransport）
-ipcMain.handle(CHANNELS.adbDisconnect, async (_, rawSerial) => {
-  const serial = normalizeDisconnectSerial(rawSerial);
+/**
+ * 释放一台设备在本机占用的资源：镜像会话、存储挂载、adb sync 连接池与内存缓存。
+ * 断开与切换设备共用它 —— 区别只在之后要不要动 transport。
+ * @param {string} serial
+ */
+async function releaseDeviceResources(serial) {
   await runDeviceTeardown(serial);
   deviceStatsCache.delete(serial);
   videoCodecCapsCache.delete(serial);
+}
+
+// 断开设备：先释放该设备的资源，再断开 ADB 传输（USB 只停用、不摘传输，
+// 详见 disconnectTransport）
+ipcMain.handle(CHANNELS.adbDisconnect, async (_, rawSerial) => {
+  const serial = normalizeDisconnectSerial(rawSerial);
+  await releaseDeviceResources(serial);
   return disconnectTransport(serial);
+});
+
+// 切换设备：只释放上一台的资源，transport 留在 adb 里，
+// 这样随时能从设备列表切回去，无线那台也不用重新 connect。
+ipcMain.handle(CHANNELS.adbReleaseDevice, async (_, rawSerial) => {
+  const serial = normalizeDisconnectSerial(rawSerial);
+  await releaseDeviceResources(serial);
+  return true;
 });
 
 // 安装 Helper

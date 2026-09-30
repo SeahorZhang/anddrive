@@ -19,16 +19,16 @@ const deviceTitle = computed(() => {
 // 不复用组件是因为它 `defineEmits(['click'])`：Reka 的 Trigger 在 as-child 下把 onClick
 // 当普通属性传下来，被 emits 声明吃掉后就落不到真正的 <button> 上 —— 点击挂不上，弹层打不开。
 const TRIGGER_CLASS =
-  'relative inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-[7px] whitespace-nowrap select-none text-black/50 transition-[background-color,color,box-shadow] duration-150 outline-none hover:bg-black/[0.06] hover:text-black/80 active:bg-black/[0.1] focus-visible:ring-2 focus-visible:ring-[#007aff]/40'
+  'relative inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-[7px] whitespace-nowrap select-none text-ink-3 transition-[background-color,color,box-shadow] duration-150 outline-none hover:bg-fill hover:text-ink-2 active:bg-fill-strong focus-visible:ring-2 focus-visible:ring-accent/40'
 const POPOVER_CLASS =
-  'z-50 w-[346px] rounded-[12px] border border-black/[0.08] bg-white/95 p-3.5 shadow-[0_10px_34px_rgba(0,0,0,0.18)] outline-none backdrop-blur-xl'
+  'z-50 w-[346px] rounded-[12px] border border-line bg-surface/95 p-3.5 shadow-pop outline-none backdrop-blur-xl'
 </script>
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pb-5">
     <div class="mb-3.5 gap-3 px-0.5">
       <div class="flex min-w-0 items-center gap-1.5">
-        <div class="truncate text-[15px] leading-tight font-semibold text-[#1d1d1f]">
+        <div class="truncate text-[15px] leading-tight font-semibold text-ink">
           {{ deviceTitle }}
         </div>
         <!-- 设备信息收在这里：它不是每次都看的，摊在列表上方会把应用挤下去。
@@ -60,14 +60,14 @@ const POPOVER_CLASS =
           </PopoverPortal>
         </PopoverRoot>
       </div>
-      <div class="mt-0.5 flex items-center gap-1.5 text-[11px] text-black/45">
+      <div class="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-3">
         <span class="size-1.5 rounded-full bg-[#34c759] shadow-[0_0_0_2px_rgba(52,199,89,0.18)]" />
         <span>已连接</span>
         <template v-if="device.transport === 'usb'">
-          <span class="text-black/20">·</span>
+          <span class="text-ink-4">·</span>
           <span>USB</span>
         </template>
-        <span class="text-black/20">·</span>
+        <span class="text-ink-4">·</span>
         <span class="truncate">{{ device.displayAddress || device.address }}</span>
       </div>
     </div>

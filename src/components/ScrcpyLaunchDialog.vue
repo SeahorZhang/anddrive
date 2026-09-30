@@ -78,13 +78,13 @@ async function launch() {
       <DialogOverlay
         class="data-[state=open]:animate-in data-[state=open]:fade-in fixed inset-0 z-50 bg-black/25 backdrop-blur-[2px]" />
       <DialogContent
-        class="data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95 fixed top-1/2 left-1/2 z-50 flex max-h-[80vh] w-[420px] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[16px] border border-white/60 bg-white/90 shadow-[0_16px_48px_rgba(0,0,0,0.22)] outline-none backdrop-blur-2xl">
+        class="data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95 fixed top-1/2 left-1/2 z-50 flex max-h-[80vh] w-[420px] max-w-[calc(100vw-48px)] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-[16px] border border-line bg-surface shadow-pop outline-none backdrop-blur-2xl">
         <div class="flex items-center justify-between px-5 pt-4 pb-2">
-          <DialogTitle class="text-[14px] font-semibold text-[#1d1d1f]">
+          <DialogTitle class="text-[14px] font-semibold text-ink">
             启动镜像 · {{ label }}
           </DialogTitle>
           <button
-            class="flex size-6 cursor-pointer items-center justify-center rounded-full text-black/35 transition-colors hover:bg-black/[0.06] hover:text-black/60"
+            class="flex size-6 cursor-pointer items-center justify-center rounded-full text-ink-3 transition-colors hover:bg-fill hover:text-ink-2"
             @click="modelValue = false">
             <Icon icon="lucide:x" :width="14" :height="14" />
           </button>
@@ -95,13 +95,13 @@ async function launch() {
         </div>
 
         <!-- 整行可点，开关本身不吃点击（否则会翻两下）。 -->
-        <div class="mx-5 mb-2 flex items-center gap-3 rounded-[10px] border px-3 py-2.5 transition-colors" :class="[saveAsDefault ? 'border-[#007aff]/35 bg-[#007aff]/[0.07]' : 'border-black/10 bg-black/[0.03]',
+        <div class="mx-5 mb-2 flex items-center gap-3 rounded-[10px] border px-3 py-2.5 transition-colors" :class="[saveAsDefault ? 'border-accent/35 bg-accent/[0.07]' : 'border-line bg-fill',
         launching ? 'cursor-default opacity-50' : 'cursor-pointer']"
           @click="saveAsDefault = launching ? saveAsDefault : !saveAsDefault">
           <SwitchToggle :model-value="saveAsDefault" :disabled="launching" class="pointer-events-none" />
           <span class="min-w-0 flex-1">
-            <span class="block text-[12.5px] font-medium text-[#1d1d1f]">同时保存为默认参数</span>
-            <span class="mt-0.5 block text-[11px] text-black/45">下次启动镜像沿用这套参数</span>
+            <span class="block text-[12.5px] font-medium text-ink">同时保存为默认参数</span>
+            <span class="mt-0.5 block text-[11px] text-ink-3">下次启动镜像沿用这套参数</span>
           </span>
         </div>
 
@@ -112,7 +112,7 @@ async function launch() {
             <BaseButton variant="primary" :loading="launching" @click="launch">启动</BaseButton>
           </div>
         </div>
-        <p v-if="error" class="px-5 pb-3 text-[11px] text-red-600">{{ error }}</p>
+        <p v-if="error" class="px-5 pb-3 text-[11px] text-[#d70015] dark:text-[#ff6961]">{{ error }}</p>
       </DialogContent>
     </DialogPortal>
   </DialogRoot>

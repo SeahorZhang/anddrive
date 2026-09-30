@@ -2,19 +2,31 @@
 import { Icon } from '@iconify/vue'
 import ConfirmDialog from './ConfirmDialog.vue'
 import BaseButton from './BaseButton.vue'
+import { stateText, stateClass, stateDotClass, deviceHint } from '@/utils/deviceState'
 
 const props = defineProps({
   pageType: String,
   disconnecting: Boolean,
   disconnectError: { type: String, default: '' },
   devices: { type: Array, default: () => [] },
-  // 当前设备的传输类型：有线 / 无线的断开语义不一样（USB 不摘 ADB 传输）
-  deviceTransport: { type: String, default: '' },
+  // 当前活动设备：断开文案要按它的传输类型走（USB 不摘 ADB 传输），列表里要标出「当前」
+  activeDevice: { type: Object, default: null },
 })
 const showConfirm = ref(false)
-const emit = defineEmits(['disconnect', 'openSettings', 'closeSettings', 'connectDevice'])
+// 设备下拉的开合状态：交给父级决定什么时候拉设备列表（只在展开时轮询）
+const menuOpen = ref(false)
+const emit = defineEmits([
+  'disconnect',
+  'openSettings',
+  'closeSettings',
+  'switchDevice',
+  'deviceMenuChange',
+  'addDevice',
+])
 
-const isUsb = computed(() => props.deviceTransport === 'usb')
+const isUsb = computed(() => props.activeDevice?.transport === 'usb')
+
+watch(menuOpen, (open) => emit('deviceMenuChange', open))
 
 const disconnectMessage = computed(() =>
   isUsb.value
@@ -22,30 +34,22 @@ const disconnectMessage = computed(() =>
     : '将断开当前无线 ADB 连接。手机端的配对记录仍会保留，之后可以再次连接。若设备已经离线，断开操作仍会视为成功。',
 )
 
-/** 列表里每台设备的状态文案：未授权要点手机，USB 插着没调试授权时最常见。 */
-function stateText(device) {
-  if (device.connected) return '可连接'
-  if (device.state === 'unauthorized' || device.state === 'authorizing') return '待授权'
-  return '离线'
+/** 下拉里这行是不是正在用的那台。 */
+function isCurrent(device) {
+  return !!props.activeDevice && device.address === props.activeDevice.address
 }
 
-function stateClass(device) {
-  if (device.connected) return 'bg-[#34c759]/12 text-[#248a3d]'
-  if (stateText(device) === '待授权') return 'bg-[#ff9500]/14 text-[#b25f00]'
-  return 'bg-black/[0.06] text-black/40'
+/** 选中另一台设备：关掉下拉，把切换交给父级（它负责给上一台收摊）。 */
+function pickDevice(device) {
+  if (isCurrent(device) || !device.connected) return
+  menuOpen.value = false
+  emit('switchDevice', device)
 }
 
-function stateDotClass(device) {
-  if (device.connected) return 'bg-[#34c759]'
-  return stateText(device) === '待授权' ? 'bg-[#ff9500]' : 'bg-black/25'
-}
-
-/** 待授权时地址那一行改成操作提示，否则用户只看到一串序列号不知道要点什么。 */
-function deviceHint(device) {
-  if (stateText(device) === '待授权') {
-    return device.transport === 'usb' ? '请在手机上点「允许 USB 调试」' : '请在手机上允许此电脑调试'
-  }
-  return device.displayAddress || device.address
+/** 从下拉去配对新设备（二维码弹窗在 App.vue，始终挂着）。 */
+function openPairDialog() {
+  menuOpen.value = false
+  emit('addDevice')
 }
 
 const actions = computed(() => {
@@ -75,7 +79,11 @@ function handleCancel() {
 watch(
   () => props.pageType,
   (pageType) => {
-    if (pageType !== 'home') showConfirm.value = false
+    // 离开首页：确认框和设备下拉一起收掉，否则下拉关着但父级还在为它轮询。
+    if (pageType !== 'home') {
+      showConfirm.value = false
+      menuOpen.value = false
+    }
   },
 )
 </script>
@@ -88,6 +96,62 @@ watch(
       <div v-if="pageType !== 'loading'" style="-webkit-app-region: no-drag"
         class="absolute top-1/2 right-4 z-10 flex -translate-y-1/2 items-center gap-1">
         <ScrcpySessions />
+
+        <!-- 切换设备：首页右上角的下拉，展开期间父级才轮询设备列表 -->
+        <PopoverRoot v-if="pageType === 'home'" v-model:open="menuOpen">
+          <PopoverTrigger as-child>
+            <BaseButton icon="lucide:chevrons-up-down" icon-only title="切换设备" aria-label="切换设备" />
+          </PopoverTrigger>
+          <PopoverPortal>
+            <PopoverContent side="bottom" align="end" :side-offset="8"
+              class="z-50 w-[300px] rounded-[12px] border border-line bg-surface p-1.5 shadow-pop outline-none backdrop-blur-xl">
+              <div class="px-2 pt-1 pb-1.5 text-[11px] font-medium text-ink-3">切换设备</div>
+
+              <button v-for="item in devices" :key="item.address" type="button"
+                class="flex w-full items-center gap-2.5 rounded-[9px] px-2 py-1.5 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45"
+                :class="isCurrent(item) ? 'bg-accent/[0.08]' : 'hover:bg-fill disabled:hover:bg-transparent'"
+                :disabled="!item.connected" @click="pickDevice(item)">
+                <div
+                  class="flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-gradient-to-b from-[#5ac8fa] to-accent text-white shadow-[0_1px_2px_rgba(0,122,255,0.3)]">
+                  <Icon icon="lucide:smartphone" :width="14" :height="14" />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-1.5">
+                    <span class="truncate text-[12.5px] font-medium text-ink">
+                      {{ item.label || item.name || '未知设备' }}
+                    </span>
+                    <span v-if="item.transport === 'usb'"
+                      class="shrink-0 rounded-[4px] bg-fill px-1 py-0.5 text-[10px] leading-none font-medium text-ink-3">
+                      USB
+                    </span>
+                  </div>
+                  <div class="mt-0.5 truncate text-[11px] text-ink-3">
+                    {{ deviceHint(item) }}
+                  </div>
+                </div>
+                <Icon v-if="isCurrent(item)" icon="lucide:check" :width="15" :height="15"
+                  class="shrink-0 text-accent" />
+                <span v-else class="flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none"
+                  :class="stateClass(item)">
+                  <span class="size-1.5 rounded-full" :class="stateDotClass(item)" />
+                  {{ stateText(item) }}
+                </span>
+              </button>
+
+              <div v-if="!devices.length" class="px-2 py-2 text-[12px] text-ink-3">正在查找设备…</div>
+
+              <div class="mx-1.5 my-1 h-px bg-line" />
+
+              <button type="button"
+                class="flex w-full items-center gap-2 rounded-[9px] px-2 py-1.5 text-left text-[12.5px] font-medium text-ink-2 outline-none transition-colors duration-150 hover:bg-fill hover:text-ink focus-visible:ring-2 focus-visible:ring-accent/40"
+                @click="openPairDialog">
+                <Icon icon="lucide:qr-code" :width="15" :height="15" class="shrink-0" />
+                扫码配对新设备
+              </button>
+            </PopoverContent>
+          </PopoverPortal>
+        </PopoverRoot>
+
         <TooltipRoot v-for="action in actions" :key="action.event">
           <TooltipTrigger as-child>
             <BaseButton :icon="action.icon" icon-only :disabled="action.event === 'disconnect' && disconnecting"
@@ -105,39 +169,6 @@ watch(
       <ConfirmDialog v-model="showConfirm" title="断开连接" :message="disconnectMessage" confirm-label="断开"
         :loading="disconnecting" :error="disconnectError" @confirm="handleConfirm" @cancel="handleCancel"
         @close="handleCancel" />
-
-      <div v-if="devices.length && pageType === 'addDevice'" style="-webkit-app-region: no-drag"
-        class="absolute top-12 right-4 z-60 flex w-72 flex-col gap-2">
-        <div v-for="device in devices" :key="device.address"
-          class="flex items-center gap-3 rounded-[14px] border border-white/70 bg-white/85 p-3 text-left shadow-[0_8px_30px_rgba(0,0,0,0.12)] ring-1 ring-black/5 backdrop-blur-xl">
-          <div
-            class="flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-gradient-to-b from-[#5ac8fa] to-[#007aff] text-white shadow-[0_1px_3px_rgba(0,122,255,0.35)]">
-            <Icon icon="lucide:smartphone" :width="18" :height="18" />
-          </div>
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-1.5">
-              <span class="truncate text-[13px] font-semibold text-[#1d1d1f]">
-                {{ device.label || device.name || '未知设备' }}
-              </span>
-              <span v-if="device.transport === 'usb'"
-                class="shrink-0 rounded-[4px] bg-black/[0.06] px-1 py-0.5 text-[10px] leading-none font-medium text-black/50">
-                USB
-              </span>
-              <span class="flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none"
-                :class="stateClass(device)">
-                <span class="size-1.5 rounded-full" :class="stateDotClass(device)" />
-                {{ stateText(device) }}
-              </span>
-            </div>
-            <div class="mt-0.5 truncate text-[11px] text-black/45">
-              {{ deviceHint(device) }}
-            </div>
-          </div>
-          <BaseButton variant="primary" size="sm" :disabled="!device.connected" @click="emit('connectDevice', device)">
-            连接
-          </BaseButton>
-        </div>
-      </div>
     </div>
   </TooltipProvider>
 </template>

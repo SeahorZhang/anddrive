@@ -35,15 +35,14 @@
 - **O1 拆 `electron/adb.js`（8 职责挤在一个文件，全仓最大）**：adb 执行与错误归一 / 输出解析 / mDNS 发现与设备名 / 健康与重连 / 应用缓存与图标 / 稳定标识别名 / 应用操作 / 设备信息 / IPC 注册（这文件自己就注册二十多个 handler）。`tests/electron/` 已按这些主题分文件，主进程按同一刀切最自然；拆的时候要把测试里的 `await import("../../electron/adb.js")` 一起改指向。**L**
 - **O5 应用列表 300+ 应用时的成本**：没虚拟化（每格一套 ContextMenu/Portal，`AppList.vue:460-537`）、`patchIcons` 整数组替换（`:81-89`）→ 每 20 个图标全表重排、`sections` 过滤两遍（`:68-78`）、搜索无 debounce（`:58-62`）。顺序：debounce + `sections` 合成一遍 → 真要扛 1000 个再上虚拟化。**M**
 - ⚠️ **图标有效期有两个主人**（2026-09-28 我把图标拆成文件时**自己造的**债）：主进程 `electron/adb.js` 的 `ICON_TTL_MS`（决定文件还给不给）与渲染层 `src/components/home/AppList.vue` 的 `ICON_REFRESH_MS`（决定要不要再要一批），两者都是 7 天但**没有共同来源**，改一个忘一个的后果是"每次都重拉"或"过期了还不重拉"。收成一个（渲染层只信主进程：它不给就是缺）。**S**
-- **O9 对话框是手搓的 Motion div**（`AppInfoDialog.vue:37-95`、`AddDeviceDialog.vue`）：无焦点陷阱、无 Esc、无 dialog 角色；reka-ui 已在依赖里且已用其 Dialog/ContextMenu，换过去白拿可达性。**S–M**
+- **O9 对话框是手搓的 Motion div**（`AppInfoDialog.vue`）：无焦点陷阱、无 Esc、无 dialog 角色；reka-ui 已在依赖里且已用其 Dialog/ContextMenu，换过去白拿可达性（`AddDeviceDialog` 2026-09-30 已换，照它抄）。**S**
 - **O11 设备信息面板无数据时是空白**（`DeviceStats.vue:116` 只有 `v-else-if="stats"`，无空态/错误态）；写着「更新于」但不会自动刷新。**S**
 - **O8 可达性细节**：几处 `outline-none` 没补焦点环（`Settings.vue:146,156`、`DeviceStats.vue:93,175`、`ScrcpySessions.vue:72,96,101`）；纯图标按钮无可访问名称（`PageHeader.vue:57`、`AppList.vue:405-427`）；`<html lang="">` 是空的（`index.html:2`、`mirror.html:2`）；`prefers-reduced-motion` 只在镜像页处理（`src/mirror/App.vue` 样式里的 `@media (prefers-reduced-motion)`）。**S–M**
 - **O3 两套 IPC 访问方式并存**：主窗口走 `src/api/index.js` + preload，镜像窗口裸 `window.__anddriveIpc` + `CHANNELS`（`src/mirror/session.js` 开头）。镜像页 `nodeIntegration` 有意为之，已在 `ARCHITECTURE.md` §1 写明边界；改 IPC 时两边都要看。**记录，不改**
-- **O7 没有深色模式**：全仓零 `dark:`，`src/App.vue` 的 `<Toaster>` 写死 `theme="light"`。主要成本是把 `src/styles/index.css` 的底色 token 化，不是逐组件改写。**M**（对应 P3-4）
 - **O12 没有 CI**：`.github/` 不存在。本地门已齐（`typecheck` + `lint` + `test` + `format:check` + `verify-resources`），先串成一条 `pnpm verify` 再上 Actions。**S**
 - **O13 渲染层零测试**：`tests/` 只覆盖 electron 与 mirror 纯逻辑。`useFavorites` 回滚、`needsIcon`/`patchIcons` 合并、`sections` 分组、`readableError` 都是纯函数，成本极低。**S–M**
 - ⚠️ **我原先那句「关闭类按钮有 取消/关闭/断开 三种 = 不一致」是错的，撤回**：核对后它们是三种职责 ——「取消」关确认框、「关闭」关信息框（`AppInfoDialog`）、「断开」是确认框里的**肯定动作**（`confirm-label="断开"`）。同屏不会出现两个都表示关掉的词，不该强行统一。
-- **仍待你决定**："多设备不得静默降级"这条原则要不要落地（`ARCHITECTURE.md` §4 已把它标成目标而非现状）。
+- **仍待你决定**："多设备不得静默降级"这条原则要不要落地到**启动**（`ARCHITECTURE.md` §4 已把它标成目标而非现状）。手动切换已经显式化（首页右上角「切换设备」下拉 + `adb:releaseDevice`，2026-09-30 真机验证），剩下的口子是 `connect()` 启动时仍静默接管、且 `getConnectedDevice` 优先无线 —— 多台在线时冷启动可能落在另一台上，要不要改成让用户选。
 - 文档引用**改用符号锚点**（`waitForMdnsService`、`COVER_*`、`TEARDOWN_TIMEOUT_MS`…）：删代码会让行号集体漂移，2026-09-28 就漂了一次，换算时还发现两处**本来就错**的范围（`options.js` 的 bounds 常量、`mirror/session.js` 的调用入口）。新写条目请沿用符号锚点。
 
 ---
@@ -344,10 +343,10 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 | P1-4 | MRU 跨会话持久化 | 按设备记录最近启动 + 上限淘汰 + 损坏降级为空；数据源可用 H6 |
 | P2-4 | 快捷键与命令面板 | ⌘K 面板、⌘R 刷新、⌘, 设置、Esc 关闭 |
 | P2-5 | 分组、标签与隐藏 | 自定义分组/标签/隐藏/显示名，本地持久化 |
-| P3-1 | 多设备支持 | **待决策**，与"单设备优先"冲突；建议默认单设备 + 显式进入多设备模式。动手前先补 §1 那条 **D7 的真机验证**（多台同时广播的命名） |
+| P3-1 | 多设备支持 | **部分完成**：显式切换下拉已上线（`PageHeader.vue` + `adb:releaseDevice`，只切活动设备、保留 transport，仍遵守"单设备优先"）。**待决策**的只剩冷启动是否也强制显式选择（`connect()` 目前静默接管，见 `ARCHITECTURE.md` §4）与"多台同时投屏"要不要做；后者动手前先补 §1 那条 **D7 的真机验证**（多台同时广播的命名） |
 | P3-2 | 记忆设备与启动自动重连 | 启动读上次 serial → mDNS 解析 → connect → 直接进首页。同样卡在 D7 的真机验证；冷启动时别名表还没建立，解析要能容错 |
 | P3-3 | 自动更新与提示 | 自签名 + 非公证，`electron-updater` 需适配；建议先做"更新提示 + 手动安装" |
-| P3-4 | 深色模式与 i18n | = O7 + 文案抽离 |
+| P3-4 | 深色模式与 i18n | 深色已上线（`src/styles/index.css` 双主题 token + `composables/useTheme.js`，设置页「深色模式」开关，2026-09-30）；剩**文案抽离**（i18n） |
 | P3-5 | 新手引导与帮助 | 首次启动分步引导（开无线调试 → 扫码 → 浏览/启动）；F7 是它的廉价前半 |
 | 镜像 P1 | 指针习惯 | 右键→返回、中键→主屏（操作栏已删，鼠标侧手势是主要入口）；多指/捏合（`pointerId` 现在固定 0） |
 | 镜像 P2 | 截图保存、会话列表增强（重开/置顶）、窗口尺寸记忆、断线自动重连（复用 `adb.js` 重连逻辑） | |
@@ -371,7 +370,7 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 - **`wm size` / `wm density` 改物理屏、compat 强制平板那套** —— 已删，别再碰；真横屏走自编 server 的 `setIgnoreActivitySizeRestrictions`。唯一还挂着的一条未验路子：那排抖音 tab 也可能是按**物理屏 density**（恒 480）算而非真写死，若是，临时抬 `wm density` 能两全 —— 但设备有锁屏密码，测不了。
 - **不做老用户兼容（2026-09-28 决定，迁移代码已全删）**：收藏的传输地址桶、`scrcpyConfig` 的 localStorage 旧参数、快照里的内联图标迁移、`stored` 标志 —— 一律不再写"升级一次"的适配，代价见 §1 那条。**默认别再提议加迁移**；真要发布时靠一次性手动清缓存解决。（别名表 `device-aliases.json` 不是兼容代码，是运行时必需，留着。）
 - **非目标**：Windows/Linux、账号与云同步、遥测/崩溃上报（若引入必须 opt-in 且可离线）、删除设备端配对记录（断开只移 transport）、把 helper 改成常驻后台/监听端口的服务。
-- **待决策**：多设备模式（建议显式入口默认关）、自动更新方案、拼音搜索是否引依赖（建议预生成索引）、录屏是否带音频（建议先做无音频）。
+- **待决策**：冷启动要不要也强制显式选设备（切换下拉已落地，`connect()` 仍静默接管）、自动更新方案、拼音搜索是否引依赖（建议预生成索引）、录屏是否带音频（建议先做无音频）。
 
 ---
 

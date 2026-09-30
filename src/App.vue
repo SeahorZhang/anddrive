@@ -5,6 +5,7 @@ import { Toaster } from "vue-sonner";
 import {
   connectApi,
   disconnectApi,
+  releaseDeviceApi,
   listConnectDevicesApi,
   getConnectedDeviceApi,
   getDeviceStateApi,
@@ -15,6 +16,7 @@ import {
 import { readableError } from "@/utils/errors";
 import { notify, notifyError } from "@/composables/useNotifications";
 import { autoReconnect } from "@/composables/useConnectionPreferences";
+import { isDark } from "@/composables/useTheme";
 import {
   startScrcpySessionPolling,
   stopScrcpySessionPolling,
@@ -189,10 +191,24 @@ function adoptDevice(target) {
   healthLoop();
 }
 
+// 换台设备前给上一台收摊：只释放镜像 / 存储 / 连接池，transport 留在 adb 里，
+// 这样设备列表里它还在，随时能切回去（无线那台也不用重新 connect）。
+async function releasePrevious(target) {
+  const previous = device.value;
+  if (!previous || previous.address === target.address) return;
+  try {
+    await releaseDeviceApi(previous.address);
+  } catch (e) {
+    // 收摊失败不该拦住切换：残留资源会在下次断开或退出时再清一次。
+    console.error("释放上一台设备失败：", e);
+  }
+}
+
 // 先 adb connect 再进入首页
 async function connectTo(target) {
   try {
     await connectApi(target.address);
+    await releasePrevious(target);
     adoptDevice(target);
   } catch (e) {
     notifyError(e, {
@@ -200,6 +216,28 @@ async function connectTo(target) {
       action: { label: "重试", handler: () => connectTo(target) },
     });
   }
+}
+
+// 从首页右上角的下拉切到另一台：上一台收摊 → 接管新的这台。
+// 首页各面板按 `:key="device.address"` 重挂，切过去会重新拉数据。
+const switching = ref(false);
+async function switchDevice(target) {
+  if (!target?.connected || switching.value) return;
+  if (device.value && target.address === device.value.address) return;
+  const label = target.label || target.name || "设备";
+  switching.value = true;
+  try {
+    await releasePrevious(target);
+    adoptDevice(target);
+    notify.success(`已切换到 ${label}`, { title: "设备已切换" });
+  } finally {
+    switching.value = false;
+  }
+}
+
+/** 下拉里的「扫码配对新设备」：二维码弹窗始终挂着，直接打开即可。 */
+function openPairDialog() {
+  deviceDialogVisible.value = true;
 }
 
 const connect = async () => {
@@ -227,8 +265,8 @@ async function discoverLoop() {
     try {
       const devices = await listConnectDevicesApi();
       if (device.value || token !== discoveryToken) break;
-      // 扫码弹窗开着时**不接管**：人正在等着看有哪些手机能连，直接抢进首页就把
-      // 右上角那份列表清空了（`discoveredDevices` 在接管分支里根本不会被赋值）。
+      // 扫码弹窗开着时**不接管**：人正盯着弹窗里的「可用设备」，自动进首页会把那份
+      // 列表直接抽走（`discoveredDevices` 在接管分支里根本不会被赋值）。
       const connected =
         autoAdopt && !deviceDialogVisible.value ? devices.find((d) => d.connected) : null;
       if (connected) {
@@ -241,6 +279,32 @@ async function discoverLoop() {
     }
     await sleep(DISCOVERY_INTERVAL_MS);
   }
+}
+
+// 首页的设备下拉只在展开期间轮询：连着设备时 discoverLoop 已经停了，
+// 不额外给 adb 加一条常驻的每秒请求；收起立刻用令牌停掉在途的循环。
+let menuDevicesToken = 0;
+async function startMenuDevicesPolling() {
+  const token = ++menuDevicesToken;
+  while (token === menuDevicesToken) {
+    try {
+      const devices = await listConnectDevicesApi();
+      if (token !== menuDevicesToken) break;
+      discoveredDevices.value = devices;
+    } catch (e) {
+      console.error("刷新设备列表失败：", e);
+    }
+    await sleep(DISCOVERY_INTERVAL_MS);
+  }
+}
+
+function stopMenuDevicesPolling() {
+  menuDevicesToken += 1;
+}
+
+function onDeviceMenuChange(open) {
+  if (open) startMenuDevicesPolling();
+  else stopMenuDevicesPolling();
 }
 
 onMounted(() => {
@@ -304,11 +368,12 @@ function closeSettings() {
 
 <template>
   <PageHeader :pageType="pageType" :disconnecting="disconnecting" :disconnect-error="disconnectError"
-    :devices="discoveredDevices" :device-transport="device?.transport" @disconnect="disconnect"
-    @open-settings="openSettings" @close-settings="closeSettings" @connect-device="connectDevice" />
+    :devices="discoveredDevices" :active-device="device" @disconnect="disconnect" @open-settings="openSettings"
+    @close-settings="closeSettings" @switch-device="switchDevice"
+    @device-menu-change="onDeviceMenuChange" @add-device="openPairDialog" />
 
   <div v-if="pageType === 'loading'" class="flex flex-1 items-center justify-center">
-    <span class="size-5 animate-spin rounded-full border-2 border-black/10 border-t-[#007aff]" aria-label="加载中" />
+    <span class="size-5 animate-spin rounded-full border-2 border-line border-t-accent" aria-label="加载中" />
   </div>
 
   <!-- 按设备地址重挂：AppList / DeviceStats 只在挂载时拉一次数据，不换 key 的话
@@ -319,7 +384,8 @@ function closeSettings() {
   <PageSettings v-else-if="pageType === 'settings'" :key="device.address" :serial="device.address" />
 
   <AddDevice v-else-if="pageType === 'addDevice'" v-model="deviceDialogVisible" />
-  <AddDeviceDialog v-model="deviceDialogVisible" @paired="connectTo" />
+  <AddDeviceDialog v-model="deviceDialogVisible" :devices="discoveredDevices" @paired="connectTo"
+    @connect="connectDevice" />
 
-  <Toaster position="top-right" theme="light" :offset="12" :visible-toasts="4" />
+  <Toaster position="top-right" :theme="isDark ? 'dark' : 'light'" :offset="12" :visible-toasts="4" />
 </template>

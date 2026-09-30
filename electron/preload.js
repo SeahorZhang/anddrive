@@ -43,6 +43,7 @@ expose("electronAPI", {
     getCachedApps: (address) => invoke(CHANNELS.adbGetCachedApps, address),
     getAppIcons: (serial, packages) => invoke(CHANNELS.adbGetAppIcons, serial, packages),
     disconnect: (serial) => invoke(CHANNELS.adbDisconnect, serial),
+    releaseDevice: (serial) => invoke(CHANNELS.adbReleaseDevice, serial),
     deleteAppCache: (serial) => invoke(CHANNELS.adbDeleteAppCache, serial),
     uninstallHelper: (serial) => invoke(CHANNELS.adbUninstallHelper, serial),
     forceStopApp: (serial, packageName) => invoke(CHANNELS.adbForceStop, serial, packageName),

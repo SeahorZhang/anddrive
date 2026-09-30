@@ -38,7 +38,7 @@ Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的 Android 
 
 | 链路 | 入口 | 事实 |
 | --- | --- | --- |
-| 扫码配对 | `src/components/AddDeviceDialog.vue:38-95` | 就在组件里，**没有 `usePairing` composable**。随机 SSID+密码 → `uqr` 出 `WIFI:T:ADB;…` SVG → `findDeviceApi()` 等 `_adb-tls-pairing._tcp` → `pairApi` → `resolveConnectAddressApi(name)` → `emit('paired')` 交给父层。状态只有 `idle|waiting|error`，成功分支直接交给外面 |
+| 扫码配对 | `src/components/AddDeviceDialog.vue` 的 `start` | 就在组件里，**没有 `usePairing` composable**。随机 SSID+密码 → `uqr` 出 `WIFI:T:ADB;…` SVG → `findDeviceApi()` 等 `_adb-tls-pairing._tcp` → `pairApi` → `resolveConnectAddressApi(name)` → `emit('paired')` 交给父层。状态只有 `idle|waiting|error`，成功分支直接交给外面。外壳是 reka-ui `DialogRoot`（Esc / 焦点陷阱 / 角色白拿），`devices` 由 `App.vue` 的 `discoveredDevices` 灌进来当「可用设备」，点「连接」`emit('connect')` 走 `connectDevice` |
 | 发现与接管 | `src/App.vue:217-237` `discoverLoop` | 1s 轮询 `adb mdns services` + `adb devices`；连上即停；令牌递增让后一次调用取代前一次。**扫码弹窗开着时不接管**（`:223-226`，否则右上角列表被清空） |
 | 心跳与重连 | `src/App.vue:59-73` / `:122-145` | 5s 查 `getDeviceState`，3s 退避重连 ×10。超时被 `adb.js` 归为 `offline`，所以心跳真能发现掉线 |
 | 设备标识 | `electron/deviceIdentity.js` | 收藏、应用缓存、快捷方式都按 `ro.serialno` **稳定标识**存，落盘别名表 `device-aliases.json` 反查当前传输地址（无线重连一次地址就换，早期按地址存会裂成多个桶） |
@@ -61,7 +61,7 @@ Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的 Android 
 - **`.catch` 吞掉的分寸**：设备侧探测类失败（读第三个 prop、卸载已卸载的 helper）允许吞；**用户操作的结果不许吞**（收藏写盘失败必须抛，渲染层据此回滚星标）。
 - **虚拟显示尺寸只有一个主人**：显示像素只在 `src/mirror/direct-session.js` 的 `displayFor(css)` 一处算（建显示与后续 `resizeDisplay` 同源），`src/mirror/connect.js` 的 `startScrcpy` 只**接收**算好的 `display`；建显示用的 CSS 优先取主进程传来的 `pendingInit.initialCss`（窗口内容区），读不到才回落 DOM —— 深链冷启动时页面还没排版完，读 DOM 会拿到 Electron 默认的 512x512。相应地 `buildMirrorOptions` 的 `newDisplay` 是**必填**（缺了就抛），拼串走 `formatNewDisplay`：**别再加兜底默认尺寸**，任何写死的 `WxH/dpi` 都与画质档位的 dpi 不符，会静默开出一块错密度的显示。
 - **镜像页不碰设备缓存**：接回横幅要的那个图标随启动参数走（`startMirrorSession` 的 `request.iconUrl` → `sanitizeIcon` → `pendingInit.iconUrl`），不是去 `adb:getCachedApps` 读全量再 find —— 为一格图标花一整轮 IO，且 `.adr` 冷启动时缓存根本还没建。
-- **多设备**：`src/App.vue` 的自动接管分支（`devices.find((d) => d.connected)`）当前**静默取第一台已连接设备**。历史上那个承诺 `conflict` 状态的 `shared/deviceSession.js` 已删除。"多设备必须显式选择、不得静默降级"仍是**目标原则**，不是现状 —— 改动前先确认这条还要不要落地。
+- **多设备**：**单设备优先** —— 同一时刻只有一台活动设备。切换必须显式：首页右上角「切换设备」下拉（`PageHeader.vue`，展开期间才轮询 `adb devices`，收起用令牌停轮询）列出其他已连接设备，点选走 `App.vue` 的 `switchDevice` → `releasePrevious` → IPC `adb:releaseDevice`：只 teardown 上一台的镜像/存储/连接池并清 stats、codec 缓存，**不碰 transport**，所以上一台留在 `adb devices` 里随时可切回（无线那台也不用重连）；完全断开仍走「断开连接」的 `adb:disconnect`。切换后首页各面板按 `:key="device.address"` 重挂重新拉数据。**启动时仍是静默接管**：`connect()` 取 `getConnectedDevice()`，而它有意**优先无线设备**（`address` 含 `:` 或 `._adb-tls-connect._tcp`）再回落第一台 —— 也就是多台同时在线时冷启动可能落在你以为的"另一台"上。历史上那个承诺 `conflict` 状态的 `shared/deviceSession.js` 已删除。"启动也必须显式选择、不得静默降级"仍是**目标原则**，不是现状 —— 改动前先确认这条还要不要落地。
 
 ## 5. 构建与验证
 
@@ -105,6 +105,8 @@ src/mirror/
   main.js 镜像页入口 · connect.js Tango 唯一接入口 · direct-session.js 会话建立/流泵/退出处理
   session.js App 访问层(bootstrap/sendControl/dispose) · displayFollow.js 跟随去重(有单测)
   App.vue 解码/渲染/HUD/遮罩 · audio.js Opus→WebCodecs→AudioContext · useMirrorInput.js 输入
-src/  App.vue 连接状态机与页面调度 · components/home/ 列表与设备面板 · composables/ 收藏/通知/参数/会话
+src/  App.vue 连接状态机与页面调度 · components/home/ 列表与设备面板 · composables/ 收藏/通知/参数/会话/主题
+src/styles/index.css 双主题语义色（`:root` 浅 / `.dark` 深）与 `@custom-variant dark`；组件只写 token，换主题只动这一段
+src/composables/useTheme.js 明暗开关（`<html class="dark">` + localStorage），设置页的「深色模式」写这里
 shared/  scrcpyConfig.js 参数归一化+档位 · keys.js Android 键值别名 · types.js JSDoc 类型
 ```
