@@ -8,12 +8,12 @@ import {
   releaseDeviceApi,
   listConnectDevicesApi,
   getConnectedDeviceApi,
-  getDeviceStateApi,
   reconnectApi,
   onMirrorResultApi,
   onMirrorExitApi,
 } from "@/api";
 import { readableError } from "@/utils/errors";
+import { transportState } from "@/utils/deviceState";
 import { notify, notifyError } from "@/composables/useNotifications";
 import { autoReconnect } from "@/composables/useConnectionPreferences";
 import { isDark } from "@/composables/useTheme";
@@ -43,6 +43,25 @@ const disconnectError = ref("");
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// 同一台设备：列表里有线/无线已合并成一行，但接管进来的可能是其中任意一条传输，
+// 所以先比稳定标识，再退回 address。
+function sameDevice(a, b) {
+  if (!a || !b) return false;
+  return (!!a.stableId && !!b.stableId && a.stableId === b.stableId) || a.address === b.address;
+}
+
+/**
+ * 首页与顶栏显示的当前设备：展示字段（名称、接法标记、状态）跟着设备列表那一行走，
+ * 拔了线那枚 USB 就跟着少掉；address 仍钉在会话正在用的那条 transport 上，
+ * 免得列表刷新把镜像和面板挪到另一条连接去。
+ */
+const activeDevice = computed(() => {
+  const current = device.value;
+  if (!current) return null;
+  const row = discoveredDevices.value.find((d) => sameDevice(d, current));
+  return row ? { ...row, address: current.address, transport: current.transport } : current;
+});
+
 /** 断线后记住的设备，供自动重连使用 */
 let lostDevice = null;
 /** 启动后若发现已有连接则自动接管；用户主动断开后不再自动接管 */
@@ -63,7 +82,12 @@ async function healthLoop() {
   healthRunning = true;
   while (device.value) {
     const current = device.value;
-    const state = await getDeviceStateApi(current.address).catch(() => null);
+    let state = null;
+    try {
+      state = transportState(await refreshDeviceList(), current.address);
+    } catch (e) {
+      console.error("心跳刷新设备列表失败：", e);
+    }
     if (device.value !== current) continue;
     if (state && state !== "device") {
       handleConnectionLost(current, state);
@@ -72,6 +96,16 @@ async function healthLoop() {
     await sleep(HEARTBEAT_INTERVAL_MS);
   }
   healthRunning = false;
+}
+
+/**
+ * 设备列表的唯一一份数据：下拉、首页上方的接法标记和心跳都读它，
+ * 免得同一个「这台现在怎么连着」的问题在几处各问一遍 adb。
+ */
+async function refreshDeviceList() {
+  const devices = await listConnectDevicesApi();
+  discoveredDevices.value = devices;
+  return devices;
 }
 
 /**
@@ -195,7 +229,7 @@ function adoptDevice(target) {
 // 这样设备列表里它还在，随时能切回去（无线那台也不用重新 connect）。
 async function releasePrevious(target) {
   const previous = device.value;
-  if (!previous || previous.address === target.address) return;
+  if (!previous || sameDevice(previous, target)) return;
   try {
     await releaseDeviceApi(previous.address);
   } catch (e) {
@@ -223,7 +257,7 @@ async function connectTo(target) {
 const switching = ref(false);
 async function switchDevice(target) {
   if (!target?.connected || switching.value) return;
-  if (device.value && target.address === device.value.address) return;
+  if (device.value && sameDevice(target, device.value)) return;
   const label = target.label || target.name || "设备";
   switching.value = true;
   try {
@@ -263,17 +297,16 @@ async function discoverLoop() {
   const token = ++discoveryToken;
   while (!device.value && token === discoveryToken) {
     try {
-      const devices = await listConnectDevicesApi();
+      const devices = await refreshDeviceList();
       if (device.value || token !== discoveryToken) break;
       // 扫码弹窗开着时**不接管**：人正盯着弹窗里的「可用设备」，自动进首页会把那份
-      // 列表直接抽走（`discoveredDevices` 在接管分支里根本不会被赋值）。
+      // 列表直接抽走。
       const connected =
         autoAdopt && !deviceDialogVisible.value ? devices.find((d) => d.connected) : null;
       if (connected) {
         adoptDevice(connected);
         break;
       }
-      discoveredDevices.value = devices;
     } catch (e) {
       console.error("发现设备失败：", e);
     }
@@ -281,16 +314,15 @@ async function discoverLoop() {
   }
 }
 
-// 首页的设备下拉只在展开期间轮询：连着设备时 discoverLoop 已经停了，
+// 首页的设备下拉只在展开期间轮询：连着设备时靠心跳那一轮就够，
 // 不额外给 adb 加一条常驻的每秒请求；收起立刻用令牌停掉在途的循环。
 let menuDevicesToken = 0;
 async function startMenuDevicesPolling() {
   const token = ++menuDevicesToken;
   while (token === menuDevicesToken) {
     try {
-      const devices = await listConnectDevicesApi();
+      await refreshDeviceList();
       if (token !== menuDevicesToken) break;
-      discoveredDevices.value = devices;
     } catch (e) {
       console.error("刷新设备列表失败：", e);
     }
@@ -368,7 +400,7 @@ function closeSettings() {
 
 <template>
   <PageHeader :pageType="pageType" :disconnecting="disconnecting" :disconnect-error="disconnectError"
-    :devices="discoveredDevices" :active-device="device" @disconnect="disconnect" @open-settings="openSettings"
+    :devices="discoveredDevices" :active-device="activeDevice" @disconnect="disconnect" @open-settings="openSettings"
     @close-settings="closeSettings" @switch-device="switchDevice"
     @device-menu-change="onDeviceMenuChange" @add-device="openPairDialog" />
 
@@ -378,7 +410,7 @@ function closeSettings() {
 
   <!-- 按设备地址重挂：AppList / DeviceStats 只在挂载时拉一次数据，不换 key 的话
        在首页直接连另一台设备会留着上一台的列表。 -->
-  <PageHome v-else-if="pageType === 'home'" :key="device.address" :device="device" />
+  <PageHome v-else-if="pageType === 'home'" :key="device.address" :device="activeDevice" />
 
   <!-- 编码列表要按「这台设备能不能编」筛，所以把当前设备地址带进设置页，与右键启动对话框同一套判据。 -->
   <PageSettings v-else-if="pageType === 'settings'" :key="device.address" :serial="device.address" />

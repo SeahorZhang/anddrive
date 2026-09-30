@@ -1,6 +1,5 @@
 <script setup>
 import { Icon } from '@iconify/vue'
-import BaseButton from '../BaseButton.vue'
 import ConfirmDialog from '../ConfirmDialog.vue'
 import AppInfoDialog from '../AppInfoDialog.vue'
 import ScrcpyLaunchDialog from '../ScrcpyLaunchDialog.vue'
@@ -44,6 +43,12 @@ const MENU_ITEM_CLASS =
   'flex cursor-pointer items-center gap-2 rounded-[7px] px-2 py-1.5 text-[12px] text-ink outline-none select-none data-[highlighted]:bg-fill data-[disabled]:cursor-default data-[disabled]:opacity-45 data-[disabled]:text-ink-3'
 const MENU_ITEM_DANGER_CLASS = 'text-[#ff3b30] dark:text-[#ff6961]'
 
+// Helper 的装 / 卸 / 清缓存是一次性维护动作，摊在搜索框边上只占地方没人点，
+// 收进「更多」里：常驻首屏的主动作只剩搜索。
+const TOOL_ITEM_CLASS =
+  'flex w-full cursor-pointer items-center gap-2 rounded-[8px] px-2 py-1.5 text-left text-[12.5px] text-ink outline-none transition-colors select-none hover:bg-fill focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-default disabled:opacity-45 disabled:hover:bg-transparent'
+const toolsMenuOpen = ref(false)
+
 /** 图标缺失或已过期才需要重新获取 */
 function needsIcon(app) {
   return !app.iconUrl || Date.now() - (app.iconUpdatedAt || 0) >= ICON_REFRESH_MS
@@ -52,6 +57,16 @@ function needsIcon(app) {
 const apps = ref([])
 const loading = ref(false)
 const searchText = ref('')
+const searchInput = ref(null)
+
+/** ⌘F / Ctrl-F 聚焦搜索框：窗口没有原生「查找」菜单项，快捷键全靠这里。 */
+function focusSearch(event) {
+  if (event.altKey || event.shiftKey) return
+  if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'f') return
+  event.preventDefault()
+  searchInput.value?.focus()
+  searchInput.value?.select()
+}
 
 /** 正在进行危险操作的应用包名，用于禁用重复触发与显示忙碌态 */
 const busyPackage = ref('')
@@ -62,7 +77,7 @@ const filteredApps = useAppSearch(() => apps.value, searchText)
 /** 收藏（置顶）状态，按设备隔离并跨重启保留 */
 const { isFavorite, toggleFavorite } = useFavorites(() => props.address)
 
-/** 收藏的排在前面，两组之间只画一条横线，不写标题 */
+/** 收藏的排在前面，两组之间用一条细线区分 */
 const sections = computed(() => {
   const list = filteredApps.value
   const favoriteApps = list.filter((app) => isFavorite(app.packageName))
@@ -195,6 +210,9 @@ async function loadIcons() {
 }
 
 getAppList()
+
+onMounted(() => window.addEventListener('keydown', focusSearch))
+onUnmounted(() => window.removeEventListener('keydown', focusSearch))
 
 // ---------------------------------------------------------------------------
 // 应用操作
@@ -374,58 +392,51 @@ function confirmUninstall(app) {
       <div class="relative flex h-8 min-w-0 flex-1 items-center">
         <Icon icon="lucide:search" :width="14" :height="14"
           class="pointer-events-none absolute left-2.5 text-ink-3" />
-        <input v-model="searchText" type="text" placeholder="搜索应用 · 名字 / 拼音 / 包名"
-          class="h-full w-full rounded-[8px] bg-fill pr-8 pl-8 text-[12px] text-ink transition-colors outline-none placeholder:text-ink-4 focus:bg-fill-strong focus:ring-2 focus:ring-accent/35" />
+        <input ref="searchInput" v-model="searchText" type="text" placeholder="搜索应用 · 名字 / 拼音 / 包名"
+          class="h-full w-full rounded-[8px] bg-fill pr-10 pl-8 text-[12px] text-ink transition-colors outline-none placeholder:text-ink-4 focus:bg-fill-strong focus:ring-2 focus:ring-accent/35" />
         <button v-if="searchText"
-          class="absolute right-2 flex size-4 cursor-pointer items-center justify-center rounded-full bg-black/25 text-white transition-colors hover:bg-black/40 dark:bg-white/25 dark:text-ink dark:hover:bg-white/35"
+          class="absolute right-2.5 flex size-4 cursor-pointer items-center justify-center rounded-full bg-black/25 text-white transition-colors hover:bg-black/40 dark:bg-white/25 dark:text-ink dark:hover:bg-white/35"
           @click="searchText = ''">
           <Icon icon="lucide:x" :width="10" :height="10" />
         </button>
+        <span v-else aria-hidden="true"
+          class="pointer-events-none absolute right-2.5 text-[10px] tracking-wide text-ink-4">⌘F</span>
       </div>
 
-      <TooltipProvider :delay-duration="300">
-        <div class="flex items-center gap-0.5 rounded-[9px] bg-fill p-0.5">
-          <TooltipRoot>
-            <TooltipTrigger as-child>
-              <BaseButton icon="lucide:download" icon-only :disabled="loading" @click="installHelper" />
-            </TooltipTrigger>
-            <TooltipPortal>
-              <TooltipContent :side-offset="8" side="bottom"
-                class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg">
-                安装 Helper 到手机
-              </TooltipContent>
-            </TooltipPortal>
-          </TooltipRoot>
-          <TooltipRoot>
-            <TooltipTrigger as-child>
-              <BaseButton icon="lucide:trash-2" icon-only :disabled="loading" @click="uninstallHelper" />
-            </TooltipTrigger>
-            <TooltipPortal>
-              <TooltipContent :side-offset="8" side="bottom"
-                class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg">
-                从手机卸载 Helper
-              </TooltipContent>
-            </TooltipPortal>
-          </TooltipRoot>
-          <TooltipRoot>
-            <TooltipTrigger as-child>
-              <BaseButton icon="lucide:eraser" icon-only :disabled="loading" @click="clearCache" />
-            </TooltipTrigger>
-            <TooltipPortal>
-              <TooltipContent :side-offset="8" side="bottom"
-                class="z-50 rounded-md bg-black/80 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg">
-                清除缓存并重新加载
-              </TooltipContent>
-            </TooltipPortal>
-          </TooltipRoot>
-        </div>
-      </TooltipProvider>
+      <PopoverRoot v-model:open="toolsMenuOpen">
+        <PopoverTrigger as-child>
+          <button type="button" aria-label="更多操作" title="更多操作"
+            class="inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-[8px] bg-fill text-ink-3 transition-colors outline-none hover:bg-fill-strong hover:text-ink-2 focus-visible:ring-2 focus-visible:ring-accent/40">
+            <Icon icon="lucide:ellipsis" :width="16" :height="16" />
+          </button>
+        </PopoverTrigger>
+        <PopoverPortal>
+          <PopoverContent side="bottom" align="end" :side-offset="6"
+            class="z-50 w-[218px] rounded-[12px] border border-line bg-surface p-1.5 shadow-pop outline-none backdrop-blur-xl">
+            <button type="button" :class="TOOL_ITEM_CLASS" :disabled="loading"
+              @click="(toolsMenuOpen = false), installHelper()">
+              <Icon icon="lucide:download" :width="14" :height="14" class="shrink-0 text-ink-3" />
+              安装 Helper 到手机
+            </button>
+            <button type="button" :class="TOOL_ITEM_CLASS" :disabled="loading"
+              @click="(toolsMenuOpen = false), uninstallHelper()">
+              <Icon icon="lucide:trash-2" :width="14" :height="14" class="shrink-0 text-ink-3" />
+              从手机卸载 Helper
+            </button>
+            <button type="button" :class="TOOL_ITEM_CLASS" :disabled="loading"
+              @click="(toolsMenuOpen = false), clearCache()">
+              <Icon icon="lucide:eraser" :width="14" :height="14" class="shrink-0 text-ink-3" />
+              清除缓存并重新加载
+            </button>
+          </PopoverContent>
+        </PopoverPortal>
+      </PopoverRoot>
     </div>
 
     <ScrollAreaRoot class="min-h-0 flex-1">
       <ScrollAreaViewport
         class="h-full w-full rounded-[14px] border border-line bg-surface-2/60 shadow-[0_1px_3px_rgba(0,0,0,0.05)]">
-        <div class="p-2.5">
+        <div class="p-3">
           <div v-if="loading && apps.length === 0"
             class="flex flex-col items-center justify-center gap-3 py-16 text-ink-3">
             <span class="size-5 animate-spin rounded-full border-2 border-line-strong border-t-ink-2" />
@@ -435,16 +446,16 @@ function confirmUninstall(app) {
           <div v-else-if="filteredApps.length > 0" class="flex flex-col gap-3">
             <section v-for="(section, index) in sections" :key="section.key">
               <div v-if="index > 0" class="mb-3 h-px bg-line" aria-hidden="true" />
-              <div class="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-1">
+              <div class="grid grid-cols-[repeat(auto-fill,minmax(74px,1fr))] gap-x-1.5 gap-y-0.5">
                 <ContextMenuRoot v-for="app in section.apps" :key="app.packageName">
                   <ContextMenuTrigger as-child>
                     <div role="button" tabindex="0" :title="`启动 ${app.label}`"
-                      class="relative flex cursor-pointer flex-col items-center gap-1.5 rounded-[12px] p-2 transition-colors outline-none hover:bg-fill focus-visible:bg-fill active:bg-fill-strong"
+                      class="group relative flex cursor-pointer flex-col items-center gap-1.5 rounded-[12px] p-2 transition-colors outline-none hover:bg-fill focus-visible:bg-fill active:bg-fill-strong"
                       @click="launchApp(app)" @keydown.enter="launchApp(app)" @keydown.space.prevent="launchApp(app)">
                       <img v-if="app.iconUrl" :src="app.iconUrl"
-                        class="pointer-events-none size-11 rounded-[11px] shadow-[0_1px_3px_rgba(0,0,0,0.14)]" />
+                        class="pointer-events-none size-11 rounded-[11px] shadow-[0_1px_3px_rgba(0,0,0,0.14)] transition-[transform,box-shadow] duration-200 ease-out group-hover:-translate-y-0.5 group-hover:scale-[1.04] group-hover:shadow-[0_6px_16px_rgba(0,0,0,0.32)]" />
                       <div v-else
-                        class="pointer-events-none flex size-11 items-center justify-center rounded-[11px] bg-fill text-ink-4">
+                        class="pointer-events-none flex size-11 items-center justify-center rounded-[11px] bg-fill text-ink-4 transition-transform duration-200 ease-out group-hover:-translate-y-0.5 group-hover:scale-[1.04]">
                         <Icon icon="lucide:package" :width="20" :height="20" />
                       </div>
                       <span
@@ -470,7 +481,7 @@ function confirmUninstall(app) {
                       </ContextMenuItem>
                       <ContextMenuItem :class="MENU_ITEM_CLASS" @select="toggleFavorite(app.packageName)">
                         <Icon icon="lucide:star" :width="13" :height="13"
-                          :class="['shrink-0', isFavorite(app.packageName) ? 'fill-[#f5a623] text-[#f5a623]' : 'text-ink-3']" />
+                          :class="['shrink-0', isFavorite(app.packageName) ? 'text-[#f5a623] [&_path]:fill-[#f5a623]' : 'text-ink-3']" />
                         {{ isFavorite(app.packageName) ? '取消置顶' : '置顶' }}
                       </ContextMenuItem>
                       <ContextMenuItem :class="MENU_ITEM_CLASS" @select="sendToDesktop(app)">

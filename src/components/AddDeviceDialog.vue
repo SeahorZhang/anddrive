@@ -3,7 +3,14 @@ import { Icon } from '@iconify/vue'
 import { renderSVG } from 'uqr'
 import BaseButton from './BaseButton.vue'
 import { findDeviceApi, pairApi, resolveConnectAddressApi } from '@/api'
-import { stateText, stateClass, stateDotClass, deviceHint } from '@/utils/deviceState'
+import {
+  stateText,
+  stateClass,
+  stateDotClass,
+  deviceHint,
+  deviceTransports,
+  transportText,
+} from '@/utils/deviceState'
 
 const randCode = () => String(Date.now() % 1000000).padStart(6, '0')
 
@@ -186,7 +193,7 @@ onUnmounted(stopWaiting)
           <div class="mt-2 flex max-h-[184px] flex-col gap-1.5 overflow-y-auto">
             <div
               v-for="device in props.devices"
-              :key="device.address"
+              :key="device.stableId || device.address"
               class="flex items-center gap-2.5 rounded-[12px] bg-surface-2/70 px-3 py-2.5 ring-1 ring-line"
             >
               <div
@@ -200,10 +207,11 @@ onUnmounted(stopWaiting)
                     {{ device.label || device.name || '未知设备' }}
                   </span>
                   <span
-                    v-if="device.transport === 'usb'"
+                    v-for="transport in deviceTransports(device)"
+                    :key="transport"
                     class="shrink-0 rounded-[4px] bg-fill px-1 py-0.5 text-[10px] leading-none font-medium text-ink-3"
                   >
-                    USB
+                    {{ transportText(transport) }}
                   </span>
                   <span
                     class="flex shrink-0 items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] leading-none"

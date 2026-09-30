@@ -392,89 +392,166 @@ async function deviceDisplayName(serial) {
  * `address` 一律取 adb 的 serial（可直接用于 `adb -s`），展示用 displayAddress。
  * `transport` 区分有线 / 无线：USB 直插的设备没有 mDNS 条目，展示与断开逻辑都按它分支。
  * 未授权（unauthorized）也返回，`connected: false` 供界面提示「在手机上点允许」。
- * @returns {Promise<{ name: string, type: string, address: string, displayAddress: string, label: string | null, connected: boolean, state: string, transport: "usb" | "wifi" }[]>}
+ *
+ * **同一台手机插着线又开着无线调试时只出一行**：adb 里那是两条 transport
+ * （`af3d7abd` 和 `192.168.1.5:37000` / `adb-af3d7abd-XXXX._adb-tls-connect._tcp`），
+ * 这里按稳定标识归成一组，`stableId` 就是组键，`address` 取组里可用的那条传输，
+ * `transports` 是这一组里出现过的接法（有线 + 无线同时连着时界面要两个都标），
+ * `connections` 是这一组每条 transport 的实时状态。
+ * @returns {Promise<{ stableId: string, name: string, type: string, address: string, displayAddress: string, label: string | null, connected: boolean, state: string, transport: "usb" | "wifi", transports: ("usb" | "wifi")[], connections: { address: string, transport: "usb" | "wifi", state: string, connected: boolean }[] }[]>}
  */
 async function listConnectDevices() {
   ensureConnectBrowser();
   await ensureServer();
-  const [mdnsOutput, devicesOutput] = await Promise.all([
-    adbExec("mdns", "services"),
+  const [bySerial, devicesOutput] = await Promise.all([
+    connectServicesBySerial(),
     adbExec("devices"),
   ]);
-
-  const mdns = parseMdnsServices(mdnsOutput).filter((s) => s.type === "_adb-tls-connect._tcp");
-  /** @type {Map<string, { name: string, type: string, address: string }>} serial → mDNS 服务 */
-  const bySerial = new Map();
-  for (const s of mdns) {
-    bySerial.set(`${s.name}._adb-tls-connect._tcp`, s);
-    if (!bySerial.has(s.address)) bySerial.set(s.address, s);
-  }
 
   const entries = [...parseAdbDevices(devicesOutput)].filter(
     ([serial]) => !serial.startsWith("emulator-"),
   );
 
-  return Promise.all(
-    entries.map(async ([serial, state]) => {
-      const svc = bySerial.get(serial);
-      if (state === "device") warmDeviceStableId(serial);
-      // 没授权的设备 shell 读什么都失败，直接不读，别让标签和名字一起卡住。
-      const label =
-        state === "device"
-          ? (svc && connectNames.get(svc.name)) || (await deviceDisplayName(serial)) || null
-          : null;
-      return {
-        name: svc?.name || serial,
-        // USB 直插没有 mDNS 服务条目，不硬塞一个无线服务类型骗界面。
-        type: svc?.type || "",
-        address: serial,
-        displayAddress: svc?.address || serial,
-        label,
-        connected: state === "device",
-        state,
-        transport: deviceTransport(serial),
-      };
-    }),
+  const rows = await Promise.all(
+    entries.map(([serial, state]) => deviceListRow(serial, state, bySerial.get(serial))),
   );
+
+  const merged = new Map();
+  for (const row of rows) {
+    const existing = merged.get(row.stableId);
+    merged.set(row.stableId, existing ? mergeDeviceRecords(existing, row) : row);
+  }
+  return [...merged.values()];
+}
+
+/** serial → 它对应的 `_adb-tls-connect` 服务；实例名和 `host:port` 两种键都登记。 */
+async function connectServicesBySerial() {
+  const services = parseMdnsServices(await adbExec("mdns", "services")).filter(
+    (s) => s.type === "_adb-tls-connect._tcp",
+  );
+  /** @type {Map<string, { name: string, type: string, address: string }>} */
+  const bySerial = new Map();
+  for (const s of services) {
+    bySerial.set(`${s.name}._adb-tls-connect._tcp`, s);
+    if (!bySerial.has(s.address)) bySerial.set(s.address, s);
+  }
+  return bySerial;
+}
+
+/**
+ * adb 的一条 transport 长成设备列表里的一行。设备展示名、组键、接法都在这里算，
+ * 启动接管（`getConnectedDevice`）走的也是这一份，免得两处各读一遍设备各认一次身份。
+ * @param {string} serial
+ * @param {string} state `adb devices` 里这条 transport 的状态
+ * @param {{ name: string, type: string, address: string } | undefined} svc 它对应的 mDNS 服务
+ */
+async function deviceListRow(serial, state, svc) {
+  // 没授权的设备 shell 读什么都失败，直接不读，别让标签和名字一起卡住。
+  const connected = state === "device";
+  const label = connected
+    ? (svc && connectNames.get(svc.name)) || (await deviceDisplayName(serial)) || null
+    : null;
+  const transport = deviceTransport(serial);
+  return {
+    stableId: await deviceListStableId(serial, state),
+    name: svc?.name || serial,
+    // USB 直插没有 mDNS 服务条目，不硬塞一个无线服务类型骗界面。
+    type: svc?.type || "",
+    address: serial,
+    displayAddress: svc?.address || serial,
+    label,
+    connected,
+    state,
+    transport,
+    transports: [transport],
+    connections: [{ address: serial, transport, state, connected }],
+  };
+}
+
+/**
+ * 一行设备的归组键：同一台手机的三条传输形态（USB serial / `host:port` /
+ * mDNS 实例名）必须落到同一个键上，否则插线 + 开无线调试就显示成两台。
+ *
+ * 先查别名表（同步、已落盘）；在线设备再向它问一次 `ro.serialno`
+ * （进程内有缓存，每台每次会话只问一回）；问不到（未授权 / 离线）才用同步兜底
+ * ——mDNS 实例名 `adb-af3d7abd-XXXX._adb-tls-connect._tcp` 里嵌的就是 USB serial。
+ * @param {string} serial
+ * @param {string} state
+ * @returns {Promise<string>}
+ */
+async function deviceListStableId(serial, state) {
+  const known = stableIdOf(serial);
+  if (known !== serial) return known;
+  if (state !== "device") return serviceDeviceToken(serial) || serial;
+  const stable = await resolveDeviceStableId(serial);
+  if (stable && stable !== serial) return stable;
+  // 问不到设备（掉线 / 超时）时的兜底：mDNS 实例名 `adb-af3d7abd-XXXX…` 里的
+  // `af3d7abd` 正是这台机器的 USB serial，照样能和有线那条并成一行。
+  return serviceDeviceToken(serial) || stable || serial;
+}
+
+/** 同一台设备的多条传输里挑代表行：在线优先，其次有线（serial 稳定，心跳与断开都按它走）。 */
+function preferDeviceRecord(a, b) {
+  if (a.connected !== b.connected) return a.connected ? a : b;
+  if (a.transport !== b.transport) return a.transport === "usb" ? a : b;
+  return a;
+}
+
+/** 接法去重并固定成「有线在前」，界面上的两枚标记才不会来回跳。 */
+function orderedTransports(transports) {
+  const seen = new Set(transports);
+  return ["usb", "wifi"].filter((transport) => seen.has(transport));
+}
+
+/** 把同一台设备的两条传输并成一行：代表行定 address / transport，名字标签取两边更好的那个。 */
+function mergeDeviceRecords(a, b) {
+  const main = preferDeviceRecord(a, b);
+  const other = main === a ? b : a;
+  // 名字优先用 mDNS 的 given_name（它一定不等于 serial），没有就退回代表行的。
+  const name = [main, other].find((r) => r.name && r.name !== r.address)?.name ?? main.name;
+  // 成员按代表行在前排列，界面读到的顺序才不会随轮询抖动。
+  const connections = [...main.connections, ...other.connections];
+  return {
+    ...main,
+    name,
+    label: main.label || other.label || null,
+    connections,
+    transports: orderedTransports(connections.map((c) => c.transport)),
+  };
 }
 
 /**
  * 返回当前 adb 已连接（状态 device）的设备，供启动时接管其他工具
- * （Android Studio / 终端 adb 等）已建立的连接。优先无线设备，
+ * （Android Studio / 终端 adb 等）已建立的连接。优先接管无线那条，
  * address 用 adb 的 serial，可直接用于后续 `adb -s`。
- * @returns {Promise<{ name: string, address: string, displayAddress: string, label: string | null, transport: "usb" | "wifi" } | null>}
+ * 行本身与设备列表同出一个 `deviceListRow`，所以 stableId / transports /
+ * connections 的含义和列表里那一行完全一致。
+ * @returns {Promise<{ stableId: string, name: string, address: string, displayAddress: string, label: string | null, transport: "usb" | "wifi", transports: ("usb" | "wifi")[], connections: { address: string, transport: "usb" | "wifi", state: string, connected: boolean }[] } | null>}
  */
 async function getConnectedDevice() {
+  ensureConnectBrowser();
   await ensureServer();
-  const devices = parseAdbDevices(await adbExec("devices"));
-  const online = [...devices]
+  const [devicesOutput, bySerial] = await Promise.all([
+    adbExec("devices"),
+    connectServicesBySerial().catch(() => new Map()),
+  ]);
+  const online = [...parseAdbDevices(devicesOutput)]
     .filter(([serial, state]) => state === "device" && !serial.startsWith("emulator-"))
     .map(([serial]) => serial);
   if (!online.length) return null;
 
-  const address =
-    online.find((s) => s.includes(":") || s.endsWith("._adb-tls-connect._tcp")) ?? online[0];
-
-  let name = address;
-  let label = await deviceDisplayName(address);
-  let displayAddress = address;
-  try {
-    ensureConnectBrowser();
-    const services = parseMdnsServices(await adbExec("mdns", "services"));
-    const matched = services.find(
-      (s) =>
-        s.type === "_adb-tls-connect._tcp" &&
-        (`${s.name}._adb-tls-connect._tcp` === address || s.address === address),
-    );
-    if (matched) {
-      name = matched.name;
-      label = connectNames.get(matched.name) || label;
-      displayAddress = matched.address;
-    }
-  } catch {
-    // ignore
-  }
-  return { name, address, displayAddress, label, transport: deviceTransport(address) };
+  const rows = await Promise.all(
+    online.map((serial) => deviceListRow(serial, "device", bySerial.get(serial))),
+  );
+  const picked = rows.find((row) => row.transport === "wifi") ?? rows[0];
+  const connections = rows
+    .filter((row) => row.stableId === picked.stableId)
+    .flatMap((row) => row.connections);
+  return {
+    ...picked,
+    connections,
+    transports: orderedTransports(connections.map((c) => c.transport)),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -864,6 +941,10 @@ export function stableIdOf(transport) {
   return stableAliases.get(transport) || transport;
 }
 
+/** 本次进程内问到的标识：别名表只为「标识 ≠ 传输地址」的地址落盘，USB 这种相同的
+ * 每次都重问会把 1s 一轮的设备列表变成一串 shell，所以进程内也记一份。 */
+const sessionStableIds = new Map();
+
 /**
  * 向设备问一次稳定标识：`ro.serialno` → `ro.boot.serialno` → `settings secure android_id`。
  * 问不到（掉线、没这台设备）就回传输地址，并且**不写别名表**，下次连上还会再解析。
@@ -873,19 +954,24 @@ export function stableIdOf(transport) {
 export async function resolveDeviceStableId(serial) {
   if (typeof serial !== "string" || !serial) return "";
   loadAliases();
-  const known = stableAliases.get(serial);
+  const known = stableAliases.get(serial) || sessionStableIds.get(serial);
   if (known) return known;
   const pending = resolving.get(serial);
   if (pending) return pending;
   const task = (async () => {
-    const { stdout, stderr } = await adbExecSafe(
+    const { stdout } = await adbExecSafe(
       "-s",
       serial,
       "shell",
       "getprop ro.serialno; getprop ro.boot.serialno; settings get secure android_id",
     );
-    const lines = `${stdout}\n${stderr}`.split("\n").map((line) => line.trim());
+    // 只认 stdout：命令失败时 stderr 是给人看的说明（如「设备无响应（命令超时）…」），
+    // 混进候选会被 pickStableId 当成序列号写进别名表，之后按标识的查找全对不上。
+    const lines = String(stdout ?? "")
+      .split("\n")
+      .map((line) => line.trim());
     const stable = pickStableId(lines.slice(0, 3), serial);
+    sessionStableIds.set(serial, stable);
     rememberAlias(serial, stable);
     return stable;
   })().finally(() => resolving.delete(serial));
@@ -895,11 +981,6 @@ export async function resolveDeviceStableId(serial) {
   } catch {
     return serial;
   }
-}
-
-/** 设备列表里顺手预热别名（不阻塞返回）。 */
-function warmDeviceStableId(serial) {
-  void resolveDeviceStableId(serial).catch(() => {});
 }
 
 /**

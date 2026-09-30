@@ -2,7 +2,14 @@
 import { Icon } from '@iconify/vue'
 import ConfirmDialog from './ConfirmDialog.vue'
 import BaseButton from './BaseButton.vue'
-import { stateText, stateClass, stateDotClass, deviceHint } from '@/utils/deviceState'
+import {
+  stateText,
+  stateClass,
+  stateDotClass,
+  deviceHint,
+  deviceTransports,
+  transportText,
+} from '@/utils/deviceState'
 
 const props = defineProps({
   pageType: String,
@@ -37,9 +44,14 @@ const disconnectMessage = computed(() =>
     : '将断开当前无线 ADB 连接。手机端的配对记录仍会保留，之后可以再次连接。若设备已经离线，断开操作仍会视为成功。',
 )
 
+/** 列表行的身份：同一台设备的有线/无线两条传输合并后 address 会不同，优先按稳定标识。 */
+function deviceKey(device) {
+  return device?.stableId || device?.address || ''
+}
+
 /** 下拉里这行是不是正在用的那台。 */
 function isCurrent(device) {
-  return !!props.activeDevice && device.address === props.activeDevice.address
+  return !!props.activeDevice && !!deviceKey(device) && deviceKey(device) === deviceKey(props.activeDevice)
 }
 
 /** 选中另一台设备：关掉下拉，把切换交给父级（它负责给上一台收摊）。 */
@@ -114,7 +126,7 @@ watch(
               class="z-50 w-[300px] rounded-[12px] border border-line bg-surface p-1.5 shadow-pop outline-none backdrop-blur-xl">
               <div class="px-2 pt-1 pb-1.5 text-[11px] font-medium text-ink-3">切换设备</div>
 
-              <button v-for="item in devices" :key="item.address" type="button"
+              <button v-for="item in devices" :key="deviceKey(item)" type="button"
                 class="flex w-full items-center gap-2.5 rounded-[9px] px-2 py-1.5 text-left outline-none transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-45"
                 :class="isCurrent(item) ? 'bg-accent/[0.08]' : 'hover:bg-fill disabled:hover:bg-transparent'"
                 :disabled="!item.connected" @click="pickDevice(item)">
@@ -127,9 +139,9 @@ watch(
                     <span class="truncate text-[12.5px] font-medium text-ink">
                       {{ item.label || item.name || '未知设备' }}
                     </span>
-                    <span v-if="item.transport === 'usb'"
+                    <span v-for="transport in deviceTransports(item)" :key="transport"
                       class="shrink-0 rounded-[4px] bg-fill px-1 py-0.5 text-[10px] leading-none font-medium text-ink-3">
-                      USB
+                      {{ transportText(transport) }}
                     </span>
                   </div>
                   <div class="mt-0.5 truncate text-[11px] text-ink-3">

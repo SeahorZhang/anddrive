@@ -3,6 +3,8 @@ import { Icon } from '@iconify/vue'
 import AppList from './AppList.vue'
 import DeviceStats from './DeviceStats.vue'
 import StoragePanel from './StoragePanel.vue'
+import { getDeviceStatsApi, getStorageVolumesApi } from '@/api'
+import { deviceTransports, transportText } from '@/utils/deviceState'
 
 const props = defineProps({
   device: {
@@ -15,62 +17,132 @@ const deviceTitle = computed(() => {
   return props.device.label || props.device.name || '未知设备'
 })
 
+// 同一台手机插着线又开着无线调试时两个接法都标出来，只标代表行那种会少信息。
+const transportLabel = computed(() =>
+  deviceTransports(props.device).map((transport) => transportText(transport)).join(' + '),
+)
+
 // 外观照 BaseButton 的 icon-only + default 变体（size-7 / rounded-[7px] / 图标 14）。
 // 不复用组件是因为它 `defineEmits(['click'])`：Reka 的 Trigger 在 as-child 下把 onClick
 // 当普通属性传下来，被 emits 声明吃掉后就落不到真正的 <button> 上 —— 点击挂不上，弹层打不开。
-const TRIGGER_CLASS =
-  'relative inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-[7px] whitespace-nowrap select-none text-ink-3 transition-[background-color,color,box-shadow] duration-150 outline-none hover:bg-fill hover:text-ink-2 active:bg-fill-strong focus-visible:ring-2 focus-visible:ring-accent/40'
+const CHIP_CLASS =
+  'inline-flex h-6 cursor-pointer items-center gap-1 rounded-[7px] px-1.5 whitespace-nowrap select-none text-[11px] text-ink-2 transition-colors duration-150 outline-none hover:bg-fill hover:text-ink active:bg-fill-strong focus-visible:ring-2 focus-visible:ring-accent/40'
 const POPOVER_CLASS =
   'z-50 w-[346px] rounded-[12px] border border-line bg-surface/95 p-3.5 shadow-pop outline-none backdrop-blur-xl'
+
+// 摘要行只放「每次都想瞟一眼」的三件事：连没连上、系统版本、电还剩多少、还剩多少空间。
+// 完整的型号 / 网络 / 内存 / CPU 留在弹层里，点开才拉（各 30s / 15s 缓存），
+// 首页常驻的只有这一次汇总读数。
+const stats = ref(null)
+const storage = ref(null)
+const summaryReady = ref(false)
+
+async function loadSummary() {
+  const [statsResult, storageResult] = await Promise.allSettled([
+    getDeviceStatsApi(props.device.address),
+    getStorageVolumesApi(props.device.address),
+  ])
+  if (statsResult.status === 'fulfilled') stats.value = statsResult.value
+  if (storageResult.status === 'fulfilled') storage.value = storageResult.value
+  summaryReady.value = true
+}
+
+onMounted(loadSummary)
+
+const BATTERY_STATUS_TEXT = {
+  charging: '充电中',
+  discharging: '放电中',
+  notCharging: '未充电',
+  full: '已充满',
+  unknown: '未知',
+}
+
+const batteryText = computed(() => {
+  const battery = stats.value?.battery
+  if (!battery || battery.level == null) return ''
+  const status = BATTERY_STATUS_TEXT[battery.status]
+  const temperature = battery.temperatureC != null ? ` · ${battery.temperatureC.toFixed(1)}°C` : ''
+  return `${battery.level}%${status ? ` · ${status}` : ''}${temperature}`
+})
+
+// 图标跟着电量走，比固定一颗电池更像系统状态栏
+const batteryIcon = computed(() => {
+  const battery = stats.value?.battery
+  if (!battery || battery.level == null) return 'lucide:battery'
+  if (battery.status === 'charging') return 'lucide:battery-charging'
+  if (battery.level <= 20) return 'lucide:battery-low'
+  if (battery.level <= 50) return 'lucide:battery-medium'
+  return 'lucide:battery-full'
+})
+
+const storagePercent = computed(() => {
+  const value = storage.value?.summary?.percentUsed
+  return value == null ? null : Math.round(value)
+})
 </script>
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pb-5">
-    <div class="mb-3.5 gap-3 px-0.5">
-      <div class="flex min-w-0 items-center gap-1.5">
-        <div class="truncate text-[15px] leading-tight font-semibold text-ink">
-          {{ deviceTitle }}
-        </div>
-        <!-- 设备信息收在这里：它不是每次都看的，摊在列表上方会把应用挤下去。
-             弹层打开时才挂载 DeviceStats，所以「点开即拉一次」，不占首页的加载。 -->
-        <PopoverRoot>
-          <PopoverTrigger as-child>
-            <button type="button" aria-label="设备信息" title="设备信息" :class="TRIGGER_CLASS">
-              <Icon icon="lucide:info" :width="14" :height="14" class="shrink-0" />
-            </button>
-          </PopoverTrigger>
-          <PopoverPortal>
-            <PopoverContent side="bottom" align="start" :side-offset="6" :class="POPOVER_CLASS">
-              <DeviceStats :serial="device.address" />
-            </PopoverContent>
-          </PopoverPortal>
-        </PopoverRoot>
-        <!-- 存储单独一个入口：容量、卷列表要占的地方比设备信息里的两行多，
-             塞进那个弹层会把身份信息挤到折叠线以下。 -->
-        <PopoverRoot>
-          <PopoverTrigger as-child>
-            <button type="button" aria-label="存储" title="存储" :class="TRIGGER_CLASS">
-              <Icon icon="lucide:hard-drive" :width="14" :height="14" class="shrink-0" />
-            </button>
-          </PopoverTrigger>
-          <PopoverPortal>
-            <PopoverContent side="bottom" align="start" :side-offset="6" :class="POPOVER_CLASS">
-              <StoragePanel :serial="device.address" :device-label="deviceTitle" />
-            </PopoverContent>
-          </PopoverPortal>
-        </PopoverRoot>
-      </div>
-      <div class="mt-0.5 flex items-center gap-1.5 text-[11px] text-ink-3">
-        <span class="size-1.5 rounded-full bg-[#34c759] shadow-[0_0_0_2px_rgba(52,199,89,0.18)]" />
-        <span>已连接</span>
-        <template v-if="device.transport === 'usb'">
-          <span class="text-ink-4">·</span>
-          <span>USB</span>
+    <!-- 设备摘要：设备名与切换在顶栏，这里只回答「这台机器现在什么状态」。
+         电量 / 存储两个 chip 本身就是弹层入口，比两个看不出含义的图标按钮好找。 -->
+    <div class="mb-3.5 flex items-center gap-2 px-0.5">
+      <span :title="`${deviceTitle} · ${device.displayAddress || device.address}`"
+        class="inline-flex h-6 items-center gap-1.5 rounded-full bg-[#34c759]/12 pr-2 pl-2.5 text-[11px] font-medium text-[#248a3d] dark:bg-[#34c759]/14 dark:text-[#30d158]">
+        <span class="size-1.5 -ml-1 rounded-full bg-[#34c759] shadow-[0_0_0_2px_rgba(52,199,89,0.16)]" />
+        已连接
+        <span class="text-current opacity-60">·</span>
+        {{ transportLabel }}
+      </span>
+
+      <span v-if="stats?.androidVersion" class="text-[11px] text-ink-3">
+        Android {{ stats.androidVersion }}
+      </span>
+
+      <div class="ml-auto flex items-center gap-1">
+        <template v-if="!summaryReady">
+          <span class="h-6 w-[52px] animate-pulse rounded-[7px] bg-fill" aria-hidden="true" />
+          <span class="h-6 w-[52px] animate-pulse rounded-[7px] bg-fill" aria-hidden="true" />
         </template>
-        <span class="text-ink-4">·</span>
-        <span class="truncate">{{ device.displayAddress || device.address }}</span>
+
+        <template v-else>
+          <PopoverRoot v-if="batteryText">
+            <PopoverTrigger as-child>
+              <button type="button" aria-label="设备信息" :title="`查看设备信息 · ${batteryText}`"
+                :class="CHIP_CLASS">
+                <Icon :icon="batteryIcon" :width="13" :height="13" class="shrink-0 text-ink-4" />
+                <span class="tabular-nums">{{ stats.battery.level }}%</span>
+              </button>
+            </PopoverTrigger>
+            <PopoverPortal>
+              <PopoverContent side="bottom" align="end" :side-offset="6" :class="POPOVER_CLASS">
+                <DeviceStats :serial="device.address" />
+              </PopoverContent>
+            </PopoverPortal>
+          </PopoverRoot>
+
+          <PopoverRoot v-if="storagePercent !== null">
+            <PopoverTrigger as-child>
+              <button type="button" aria-label="存储" title="查看存储 · 容量与卷"
+                :class="CHIP_CLASS">
+                <Icon icon="lucide:hard-drive" :width="13" :height="13" class="shrink-0 text-ink-4" />
+                <span class="tabular-nums">{{ storagePercent }}%</span>
+              </button>
+            </PopoverTrigger>
+            <PopoverPortal>
+              <PopoverContent side="bottom" align="end" :side-offset="6" :class="POPOVER_CLASS">
+                <StoragePanel :serial="device.address" :device-label="deviceTitle" />
+              </PopoverContent>
+            </PopoverPortal>
+          </PopoverRoot>
+
+          <button v-if="!batteryText && storagePercent === null" type="button" aria-label="设备信息"
+            title="查看设备信息" :class="CHIP_CLASS">
+            <Icon icon="lucide:info" :width="13" :height="13" class="shrink-0 text-ink-4" />
+          </button>
+        </template>
       </div>
     </div>
+
     <AppList :address="device.address" />
   </div>
 </template>

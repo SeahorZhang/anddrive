@@ -28,3 +28,30 @@ export function deviceHint(device) {
   }
   return device.displayAddress || device.address
 }
+
+/**
+ * 这一行设备包含的接法。列表行和接管记录都由主进程的 `deviceListRow` 生成，
+ * 所以「这台现在几种接法」只在主进程算一次，界面只读不算。
+ */
+export function deviceTransports(device) {
+  return device.transports
+}
+
+/** 接法文案：两种同时连着就两个都标，不挑一个代表。 */
+export function transportText(transport) {
+  return transport === 'usb' ? 'USB' : '无线'
+}
+
+/**
+ * 会话正在用的那条 transport 的实时状态。不是整台手机的状态：拔了数据线但无线
+ * 还连着时，这台机器仍然在列表里，只有 USB 那一条变成 absent。
+ * @param {{ connections: { address: string, state: string }[] }[]} devices 设备列表（已按手机归并）
+ * @param {string} address 会话用的 adb serial
+ */
+export function transportState(devices, address) {
+  for (const row of devices) {
+    const connection = row.connections.find((c) => c.address === address)
+    if (connection) return connection.state
+  }
+  return 'absent'
+}
