@@ -12,6 +12,7 @@ import {
   onDeviceTeardown,
   runHelperEntry,
 } from "./adb.js";
+import { isValidSerial } from "./validators.js";
 import { parseHelperReport } from "../shared/storageVolumes.js";
 import { createDeviceAdapter } from "./devfs.js";
 import { createDeviceDavServer } from "./webdav.js";
@@ -27,7 +28,6 @@ import { createDeviceDavServer } from "./webdav.js";
 
 const execFileAsync = promisify(execFile);
 
-const MAX_SERIAL_LENGTH = 1024;
 const CACHE_TTL_MS = 15_000;
 const STORAGE_ENTRY_CLASS = "com.anddrive.helper.StorageMain";
 const MOUNT_TIMEOUT_MS = 30_000;
@@ -42,9 +42,7 @@ let davServer = null;
 
 /** @param {unknown} serial */
 function assertSerial(serial) {
-  if (typeof serial !== "string" || !serial.trim() || serial.length > MAX_SERIAL_LENGTH) {
-    throw new Error("设备序列号无效");
-  }
+  if (!isValidSerial(serial)) throw new Error("设备序列号无效");
   return serial;
 }
 

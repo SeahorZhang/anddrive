@@ -1,179 +1,97 @@
-const {
-  connect,
-  findDevice,
-  pair,
-  disconnect,
-  releaseDevice,
-  resolveConnectAddress,
-  listConnectDevices,
-  getConnectedDevice,
-  getDeviceState,
-  reconnect,
-  installHelper,
-  loadInstalledApps,
-  getCachedApps,
-  getAppIcons,
-  uninstallHelper,
-  deleteAppCache,
-  forceStopApp,
-  clearAppData,
-  uninstallApp,
-  getAppInfo,
-  exportApk,
-  getDeviceStats,
-  getStorageVolumes,
-  mountStorage,
-  unmountStorage,
-  revealStorage,
-  getVideoCodecs,
-} = window.electronAPI.adb;
-
-const { platform } = window.electronAPI;
-
-const {
-  start: startMirror,
-  list: listMirror,
-  stop: stopMirror,
-  stopAll: stopAllMirror,
-  focus: focusMirror,
-  onExit: onMirrorExit,
-} = window.electronAPI.mirror;
-
-const {
-  getStatus: getPermissionStatus,
-  request: requestPermission,
-  openSettings: openPermissionSettings,
-} = window.electronAPI.permissions;
-
-const { get: getFavorites, toggle: toggleFavorite } = window.electronAPI.favorites;
-
-const { get: getScrcpyConfig, set: setScrcpyConfig } = window.electronAPI.scrcpyConfig;
-
-const {
-  create: createShortcut,
-  reveal: revealShortcut,
-  onMirrorResult,
-} = window.electronAPI.shortcuts;
+// 主进程 API 的名字登记表：调用点用的都是 `xxxApi` 名字，这里直接绑 preload
+// 暴露的函数本身，不再包一层箭头壳。改 IPC 通道先看 electron/preload.js。
+const { platform, adb, mirror, permissions, favorites, scrcpyConfig, shortcuts } =
+  window.electronAPI;
 
 export const isMac = platform === 'darwin';
 
-export const connectApi = (address) => connect(address);
+export const connectApi = adb.connect;
 
-// 开始发现设备
-export const findDeviceApi = () => findDevice();
+export const findDeviceApi = adb.findDevice;
 
-// 开始配对设备
-export const pairApi = (device, password) => pair(device, password);
+export const pairApi = adb.pair;
 
-// 断开设备
-export const disconnectApi = (serial) => disconnect(serial);
+export const disconnectApi = adb.disconnect;
 
 // 释放设备资源但不断开 transport：切换设备时让上一台收摊，随时可以切回去
-export const releaseDeviceApi = (serial, options) => releaseDevice(serial, options);
+export const releaseDeviceApi = adb.releaseDevice;
 
-// 解析设备当前可用的连接地址（配对端口不能用于 adb connect）
-export const resolveConnectAddressApi = (pairingService) => resolveConnectAddress(pairingService);
+// 配对端口不能用于 adb connect，要解析设备当前可用的连接地址
+export const resolveConnectAddressApi = adb.resolveConnectAddress;
 
-// 一次性列出当前可连接的设备（供持续发现轮询）
-export const listConnectDevicesApi = () => listConnectDevices();
+export const listConnectDevicesApi = adb.listConnectDevices;
 
-// 当前已连接（其他工具建立）的设备，供启动时接管
-export const getConnectedDeviceApi = () => getConnectedDevice();
+// 已被其他工具连接的设备，供启动时接管
+export const getConnectedDeviceApi = adb.getConnectedDevice;
 
-// 读取单台设备的实时状态：device / offline / unauthorized / absent
-export const getDeviceStateApi = (serial) => getDeviceState(serial);
+export const getDeviceStateApi = adb.getDeviceState;
 
-// 断线重连：设备在线幂等返回，否则解析 mDNS 地址后重新连接
-export const reconnectApi = (serial) => reconnect(serial);
+// 设备在线时幂等返回，否则解析 mDNS 地址后重连
+export const reconnectApi = adb.reconnect;
 
-// 安装app
-export const installHelperApi = (address) => installHelper(address);
+export const installHelperApi = adb.installHelper;
 
-// 获取手机app列表，无图标
-export const loadInstalledAppsApi = (address) => loadInstalledApps(address);
+export const loadInstalledAppsApi = adb.loadInstalledApps;
 
-// 读取应用列表缓存，用于秒开
-export const getCachedAppsApi = (address) => getCachedApps(address);
+export const getCachedAppsApi = adb.getCachedApps;
 
 // 批量获取应用图标（每批最多 20 个包名）
-export const getAppIconsApi = (address, packages) => getAppIcons(address, packages);
+export const getAppIconsApi = adb.getAppIcons;
 
-// 卸载 Helper
-export const uninstallHelperApi = (address) => uninstallHelper(address);
+export const uninstallHelperApi = adb.uninstallHelper;
 
-// 清除应用列表缓存
-export const deleteAppCacheApi = (address) => deleteAppCache(address);
+export const deleteAppCacheApi = adb.deleteAppCache;
 
-// 应用操作：强制停止 / 清除数据 / 卸载
-export const forceStopAppApi = (serial, packageName) => forceStopApp(serial, packageName);
-export const clearAppDataApi = (serial, packageName) => clearAppData(serial, packageName);
-export const uninstallAppApi = (serial, packageName) => uninstallApp(serial, packageName);
+export const forceStopAppApi = adb.forceStopApp;
+export const clearAppDataApi = adb.clearAppData;
+export const uninstallAppApi = adb.uninstallApp;
 
-// 读取应用信息（版本 / SDK / 安装时间 / APK 路径）
-export const getAppInfoApi = (serial, packageName) => getAppInfo(serial, packageName);
+export const getAppInfoApi = adb.getAppInfo;
 
-// 导出应用 APK 到用户选择的目录
-export const exportApkApi = (serial, packageName) => exportApk(serial, packageName);
+export const exportApkApi = adb.exportApk;
 
-// 读取设备信息（型号 / 系统 / 电量 / 网络 / CPU / 内存），force 跳过缓存
-export const getDeviceStatsApi = (serial, force = false) => getDeviceStats(serial, force);
+export const getDeviceStatsApi = adb.getDeviceStats;
 
-/** 设备存储按卷列表（内部存储 / 可移动卡 / 根目录），force 跳过 15s 缓存。 */
-export const getStorageVolumesApi = (serial, force = false) => getStorageVolumes(serial, force);
+export const getStorageVolumesApi = adb.getStorageVolumes;
 
-/** 把某个卷挂到 ~/Volumes 下（只读）；返回挂载点路径。 */
-export const mountStorageApi = (payload) => mountStorage(payload);
-export const unmountStorageApi = (volumeId) => unmountStorage(volumeId);
-/** 在访达里打开已挂载的卷。 */
-export const revealStorageApi = (volumeId) => revealStorage(volumeId);
+export const mountStorageApi = adb.mountStorage;
+export const unmountStorageApi = adb.unmountStorage;
+export const revealStorageApi = adb.revealStorage;
 
-/** 设备侧能编码哪些视频（h264/h265/av1）。设置页标记与 `auto` 落地都用它。 */
-export const getVideoCodecsApi = (serial) => getVideoCodecs(serial);
+// 设备侧能编码哪些（h264/h265/av1），设置页标记与 `auto` 落地都用它
+export const getVideoCodecsApi = adb.getVideoCodecs;
 
-// 通过自研客户端启动原生镜像窗口（实验）
-export const startMirrorApi = (options) => startMirror(options);
+export const startMirrorApi = mirror.start;
 
-// 运行中的原生镜像会话
-export const listMirrorApi = () => listMirror();
+export const listMirrorApi = mirror.list;
 
-// 关闭指定原生镜像窗口
-export const stopMirrorApi = (id) => stopMirror(id);
+export const stopMirrorApi = mirror.stop;
 
-// 关闭全部原生镜像窗口
-export const stopAllMirrorApi = () => stopAllMirror();
+export const stopAllMirrorApi = mirror.stopAll;
 
-// 聚焦指定原生镜像窗口
-export const focusMirrorApi = (id) => focusMirror(id);
+export const focusMirrorApi = mirror.focus;
 
-// 订阅原生镜像意外结束事件，返回取消订阅函数
-export const onMirrorExitApi = (callback) => onMirrorExit(callback);
+// 订阅镜像意外结束事件，返回取消订阅函数
+export const onMirrorExitApi = mirror.onExit;
 
-// 读取 macOS 系统权限状态
-export const getPermissionStatusApi = () => getPermissionStatus();
+export const getPermissionStatusApi = permissions.getStatus;
 
-// 触发 macOS 系统授权流程
-export const requestPermissionApi = (id) => requestPermission(id);
+export const requestPermissionApi = permissions.request;
 
-// 打开系统设置中对应的隐私面板
-export const openPermissionSettingsApi = (id) => openPermissionSettings(id);
+export const openPermissionSettingsApi = permissions.openSettings;
 
-// 读取某台设备的收藏包名列表（跨重启保留）
-export const getFavoritesApi = (serial) => getFavorites(serial);
+export const getFavoritesApi = favorites.get;
 
-// 切换收藏状态，返回更新后的收藏列表
-export const toggleFavoriteApi = (serial, packageName) => toggleFavorite(serial, packageName);
+export const toggleFavoriteApi = favorites.toggle;
+
+export const getScrcpyConfigApi = scrcpyConfig.get;
+
+export const setScrcpyConfigApi = scrcpyConfig.set;
 
 // 在桌面创建 `.adr` 投屏快捷方式
-export const createAppShortcutApi = (payload) => createShortcut(payload);
+export const createAppShortcutApi = shortcuts.create;
 
-// 在访达中定位快捷方式
-export const revealShortcutApi = (filePath) => revealShortcut(filePath);
+export const revealShortcutApi = shortcuts.reveal;
 
 // 订阅快捷方式唤起投屏的结果，返回取消订阅函数
-export const onMirrorResultApi = (callback) => onMirrorResult(callback);
-
-// 读取 scrcpy 全局默认参数（主进程持久化），返回 { config }
-export const getScrcpyConfigApi = () => getScrcpyConfig();
-
-// 保存 scrcpy 全局默认参数，返回归一化后的结果
-export const setScrcpyConfigApi = (config) => setScrcpyConfig(config);
+export const onMirrorResultApi = shortcuts.onMirrorResult;

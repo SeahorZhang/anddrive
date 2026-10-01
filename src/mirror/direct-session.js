@@ -3,6 +3,8 @@ import { getServerClient, acquireDeviceAdb, startScrcpy, codecName } from "./con
 import { computeDisplayMetrics } from "../../shared/scrcpyConfig.js";
 import { createDisplayFollower } from "./displayFollow.js";
 import { probeLocalCodecs } from "../utils/codecCaps.js";
+import { createOpusPlayer } from "./audio.js";
+import { applyControl } from "../../electron/mirror/control.js";
 
 // ---------------------------------------------------------------------------
 // 直连会话（每窗口一个 scrcpy client）：adb/scrcpy 全用 Tango 官方库建立
@@ -213,17 +215,19 @@ export async function startSession(
 
 function report(kind, payload = {}) {
   const id = current.info?.id ?? "";
-  ipcRendererSend(CHANNELS.mirrorState, { id, kind, ...payload });
+  ipc().send(CHANNELS.mirrorState, { id, kind, ...payload });
 }
 
-/** 镜像窗口（非隔离 + nodeIntegration）由 preload 注入的 ipcRenderer。 */
-function ipcRendererSend(channel, payload) {
-  window.__anddriveIpc?.send(channel, payload);
+/** 镜像窗口（非隔离 + nodeIntegration）由 preload 注入的 ipcRenderer 句柄。 */
+function ipc() {
+  return window.__anddriveIpc ?? window.require?.("electron")?.ipcRenderer;
 }
 
-/** 同上，但要等主进程回话（查应用所在显示、搬移任务）。 */
+/** 要等主进程回话的调用（查应用所在显示、搬移任务、拉启动参数）。 */
 function ipcInvoke(channel, ...args) {
-  return window.__anddriveIpc?.invoke?.(channel, ...args) ?? Promise.reject(new Error("ipc 不可用"));
+  const renderer = ipc();
+  if (!renderer) return Promise.reject(new Error("ipc 不可用"));
+  return renderer.invoke(channel, ...args);
 }
 
 /** 通用流泵（Tango 官方流 API）；send 失败只告警。 */
@@ -343,4 +347,81 @@ export function stopSession() {
   // 下一块显示的 id 跟这块无关，留着会让「接回」把自己跟旧显示比。
   current.displayId = null;
   return closing;
+}
+
+// ---------------------------------------------------------------------------
+// 镜像页接入层：
+// - 启动参数通过 invoke 拉取（避免 did-finish-load 时序竞态）
+// - 视频包直接写 WebCodecs 解码器，音频包直接送 Opus 播放器
+// - 输入控制直接写本进程的 control socket（不经过主进程）
+// ---------------------------------------------------------------------------
+
+let player = null;
+
+// 关窗时收摊。注册一次就够：`bootstrap()` 可以重复调用（「接回画面」），
+// 挂在它里面会让接管路径每接一次多一份监听。`stopSession()` 自身幂等。
+window.addEventListener("beforeunload", () => stopSession());
+
+/**
+ * App.vue 启动入口：拉取启动参数 → 认领应用归属 → 建立直连会话 → 帧数据送解码管线。
+ * 可以重复调用（被顶掉后点「接回」就是再来一次，这次换成我们顶掉别人）。
+ * @param {{
+ *   video: (packet) => Promise<void> | void,
+ *   audio: (packet) => void,
+ *   audioStats: (stats: Record<string, number>) => void,
+ *   hooks: { onMeta?: (meta) => void, onAudioError?: (message: string) => void,
+ *            onReflowStart?: (size) => void, onReflowAbort?: () => void,
+ *            onReflowSent?: () => void,
+ *            onStolen?: (stolen) => void },
+ * }} apply App 侧管线接线
+ */
+export async function bootstrap(apply) {
+  const info = await ipcInvoke(CHANNELS.mirrorInitGet);
+  if (!info) throw new Error("镜像启动参数缺失");
+  window.__anddriveMirrorId = info.id;
+
+  player = createOpusPlayer({
+    onStats: (stats) => apply.audioStats?.(stats),
+    onError: (message) => apply.hooks.onAudioError?.(String(message)),
+  });
+
+  return startSession(info, {
+    onVideoPacket: apply.video,
+    onAudioPacket: (packet) => {
+      apply.audio?.(packet);
+      player.push(packet);
+    },
+    onMeta: (meta) => apply.hooks.onMeta?.(meta),
+    onReflowStart: (size) => apply.hooks.onReflowStart?.(size),
+    onReflowAbort: () => apply.hooks.onReflowAbort?.(),
+    onReflowSent: () => apply.hooks.onReflowSent?.(),
+    onStolen: (stolen) => apply.hooks.onStolen?.(stolen),
+    onEnded: (detail) => {
+      // server 端自发退出（设备断开 / server 异常）。
+      if (!window.__anddriveMirrorId) return;
+      ipc().send(CHANNELS.mirrorState, {
+        id: info.id,
+        kind: "exit",
+        message: `scrcpy 服务意外退出，镜像已结束${detail ? `：${detail}` : ""}`,
+      });
+      window.close();
+    },
+  });
+}
+
+/** 触控 / 键盘 → 直接写本进程内的 control socket。 */
+export function sendControl(message) {
+  const controller = getController();
+  if (!controller) return;
+  void applyControl(controller, message).catch((error) => {
+    console.warn(`[mirror] 控制消息失败（${message?.kind}）：`, error?.message || error);
+  });
+}
+
+/** 卸载/关窗：释放播放器与 scrcpy client。 */
+export function dispose() {
+  player?.dispose();
+  player = null;
+  window.__anddriveMirrorId = null;
+  return stopSession();
 }

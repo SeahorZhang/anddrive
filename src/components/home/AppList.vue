@@ -549,7 +549,7 @@ function confirmUninstall(app) {
 
     <ConfirmDialog v-model="confirmOpen" :title="confirmTitle" :message="confirmMessage"
       :confirm-label="confirmLabelText" :loading="confirmBusy" :error="confirmError" @confirm="handleConfirm"
-      @cancel="cancelConfirm" @close="cancelConfirm" />
+      @cancel="cancelConfirm" />
 
     <AppInfoDialog v-model="infoVisible" :info="appInfo" />
 

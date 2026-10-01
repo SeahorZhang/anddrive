@@ -38,7 +38,7 @@
 - **O9 对话框是手搓的 Motion div**（`AppInfoDialog.vue`）：无焦点陷阱、无 Esc、无 dialog 角色；reka-ui 已在依赖里且已用其 Dialog/ContextMenu，换过去白拿可达性（`AddDeviceDialog` 2026-09-30 已换，照它抄）。**S**
 - **O11 设备信息面板无数据时是空白**（`DeviceStats.vue:116` 只有 `v-else-if="stats"`，无空态/错误态）；写着「更新于」但不会自动刷新。**S**
 - **O8 可达性细节**：几处 `outline-none` 没补焦点环（`Settings.vue:146,156`、`DeviceStats.vue:93,175`、`ScrcpySessions.vue:72,96,101`）；纯图标按钮无可访问名称（`PageHeader.vue:57`、`AppList.vue:405-427`）；`<html lang="">` 是空的（`index.html:2`、`mirror.html:2`）；`prefers-reduced-motion` 只在镜像页处理（`src/mirror/App.vue` 样式里的 `@media (prefers-reduced-motion)`）。**S–M**
-- **O3 两套 IPC 访问方式并存**：主窗口走 `src/api/index.js` + preload，镜像窗口裸 `window.__anddriveIpc` + `CHANNELS`（`src/mirror/session.js` 开头）。镜像页 `nodeIntegration` 有意为之，已在 `ARCHITECTURE.md` §1 写明边界；改 IPC 时两边都要看。**记录，不改**
+- **O3 两套 IPC 访问方式并存**：主窗口走 `src/api/index.js` + preload，镜像窗口裸 `window.__anddriveIpc` + `CHANNELS`（`src/mirror/direct-session.js` 的 `ipc()`）。镜像页 `nodeIntegration` 有意为之，已在 `ARCHITECTURE.md` §1 写明边界；改 IPC 时两边都要看。**记录，不改**
 - **O12 没有 CI**：`.github/` 不存在。本地门已齐（`typecheck` + `lint` + `test` + `format:check` + `verify-resources`），先串成一条 `pnpm verify` 再上 Actions。**S**
 - **O13 渲染层零测试**：`tests/` 只覆盖 electron 与 mirror 纯逻辑。`useFavorites` 回滚、`needsIcon`/`patchIcons` 合并、`sections` 分组、`readableError` 都是纯函数，成本极低。**S–M**
 - ⚠️ **我原先那句「关闭类按钮有 取消/关闭/断开 三种 = 不一致」是错的，撤回**：核对后它们是三种职责 ——「取消」关确认框、「关闭」关信息框（`AppInfoDialog`）、「断开」是确认框里的**肯定动作**（`confirm-label="断开"`）。同屏不会出现两个都表示关掉的词，不该强行统一。
@@ -103,15 +103,12 @@
 
 ### 5.2 X 组：死代码清理
 
+**2026-10-01 一批已交付并从本节移除**（细节查提交信息）：api 透传壳（`src/api/index.js` 改名为直接绑 preload 函数，调用点不动）、`ConfirmDialog.vue` 的 `cancel`/`close` 双 emit 合成一个出口、`src/mirror/session.js` 并入 `direct-session.js`、`displayFollow.js` 的 `lastSentKey` getter（测试改断言行为）、serial/package 校验收口到 `electron/validators.js`（谓词共用、抛错/回 null 由入口自己定）、`adbExec`/`adbExecSafe` 的 args[0] 嗅探（改 `(command[], timeout?)` 显式签名）。
+
 **仍然开着的**（要么不是零调用，要么删/改会动到行为或结构，所以不能当死码删）：
 
-- `src/api/index.js` — 约 40 个一行透传壳，纯重复 preload 命名。删层或删壳，二选一。**M**
-- `ConfirmDialog.vue` 的 `cancel` 与 `close` 两个 emit 行为相同，调用点还都绑一样（`AppList.vue`、`PageHeader.vue`）。**S**
-- `src/mirror/displayFollow.js` 的 `lastSentKey` getter（只有测试用）；`src/mirror/session.js` 是 8 个 handler 1:1 的转发壳 → **并进 `direct-session.js`**；`electron/mirror/appSession.js` 单调用方 → 可内联。**M**
-- 重复校验：serial/package 合法性在 `adb.js`、`shortcutCore.js`、`favorites.js`、`mirror/session.js` 各写一遍（package 一处正则、一处只判长度）。IPC 边界已校验，内部再校验属冗余 → 收成一个 `validators.js`。**S–M**
-- 空 catch 吞异常（对照 `ARCHITECTURE.md` §4 的分寸）：`adb.js` 两处、`iconImage.js` 的 `composeMacosIconPng`、`favorites.js` 的写盘回滚分支、`direct-session.js` 四处（含一处双层嵌套全吞）。**S**
+- `electron/mirror/appSession.js` 单调用方（`mirror/session.js`），但它有独立单测：内联进依赖 Electron 的文件反而测不了 → **决定不内联**。
 - 目录名与版本号的漂移：缓存目录仍叫 `apps-v1`，版本常量已是 `CACHE_VERSION = 2`。**已复核不致命**（读写同一常量，不会每次启动作废），只是名字骗人。**S**
-- `adb.js` 的 `adbExecSafe` + `splitCallOptions`：靠嗅探 `args[0]` 是不是配置对象来区分调用形式，守的全是内部调用点。**S**
 
 ### 5.3 会话归属与跨层混淆（改动要谨慎）
 
@@ -376,14 +373,13 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 
 ## 9. 建议动手顺序
 
-> 批次编号不重排：第 1 批（D1/D3/D5/D6/D10/O0/O2 + README 纠偏）已于 2026-09-22 交付并从本表移除。
+> 批次编号不重排：第 1 批（D1/D3/D5/D6/D10/O0/O2 + README 纠偏）已于 2026-09-22 交付并从本表移除；第 2 批（零风险清理）已于 2026-10-01 交付，范围见 §5.2 交付记录。
 
 | 批次 | 内容 | 为什么这么排 |
 | --- | --- | --- |
-| **第 2 批：零风险清理** | 要动结构/行为的四条：api 透传壳、`src/mirror/session.js` 合并、`validators.js` 收口、空 catch | 每条独立可验，改完跑 `pnpm lint && typecheck && test` 就是回归 |
 | **第 3 批：卡住问题剩下的两类** | 「停合成」那类已结案（9-29，见 §0.2）；剩**客户端断链**与**MIUI 息屏收回窗口**两类待拍板：修，还是归档为已知限制 | 这是你点名的"最严重问题"的后两格；收回那类目前只有手动「接回画面」入口 |
 | **第 4 批：链路收口** | §5.1 三条状态轮询合成一条事件推送、mDNS browser 补 stop（D9）、D8 改事件驱动 | 第 4 批开始要动 UI/链路，需要小设计 |
-| **第 5 批：结构与几何** | O1 拆 `adb.js`、§3 遮罩收口与 letterbox 换成 CSS、§5.3 会话归属合并、`src/mirror/session.js` 并进 `direct-session.js` | 拆分与几何都要一次做透 |
+| **第 5 批：结构与几何** | O1 拆 `adb.js`、§3 遮罩收口与 letterbox 换成 CSS、§5.3 会话归属合并 | 拆分与几何都要一次做透 |
 | **并行可插队** | F1 截图、F7 二维码页、O12 一条 CI、O9 对话框换 reka-ui | 便宜且用户可感 |
 
 ---
@@ -391,7 +387,8 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 ## 10. 口径与「已经确认不是问题」
 
 - 本文所有 `file:line` 由并行探查主进程 / 渲染层 / 文档三路后**逐条复核**；复核不上的（包括一些被夸大的性能说法）没写进来。
-- **安全边界已处理好**：包名进设备 shell 前有正则+长度校验（`adb.js` 起），`moveAppTaskToDisplay` 只接受校验过的整数；serial 走 `execFile` 参数数组而非拼 shell；dev launcher 脚本路径经 `shellQuote`（`shortcut.js:144`）；osascript 只接 argv（`iconImage.js:81`）；`.adr` 内容经 `URLSearchParams` 编解码并在读取时重新校验（`shortcutCore.js:67-93`）。
+- **安全边界已处理好**：包名进设备 shell 前有正则+长度校验（统一谓词在 `electron/validators.js`，各入口自己决定抛错/回 null），`moveAppTaskToDisplay` 只接受校验过的整数；serial 走 `execFile` 参数数组而非拼 shell；dev launcher 脚本路径经 `shellQuote`（`shortcut.js:144`）；osascript 只接 argv（`iconImage.js:81`）；`.adr` 内容经 `URLSearchParams` 编解码并在读取时重新校验（`shortcutCore.js:67-93`）。
+- **§5.2 原先列的「空 catch」已盘点（2026-10-01）**：`adb.js`、`iconImage.js`、`favorites.js`、`direct-session.js` 的每一处都有明确语义（返回值代答「没有」、或注释说明为什么可以吞），不是静默吞异常，不改。
 - **并发与原子性已有守卫**：稳定标识解析有 in-flight 去重、缓存写 tmp+rename 原子、发现循环令牌化。**2026-09-28 补上第四、五、六道**：应用缓存的读-改-写按设备文件串行（`mutateAppCache`）；图标改成每包一个文件，一批只写自己的 png，不再参与快照的合并（图标批次之间已无共享可变状态）；`deleteAppCache` 走同一把锁（清除不会与在途写入互相覆盖）。注意锁守的是「同一台设备的多个批次」，不是「多台设备」。
 - **反馈链路**：P0-1（`useNotifications` + 列表/图标/Helper 失败提示）与 P0-2（心跳 + 退避重连）确实交付了。仍漏的死角只剩 `src/composables/useScrcpyPreferences.js` 里保存参数那条 `.catch(() => {})` 把失败吞干净了。⚠️ 配对弹窗那次的**根因仍在**：主进程 `waitForMdnsService` 不返回、被取代时返回永不 settle 的 Promise（= **D9**），弹窗侧只是自卫；真修要按 §5.1 改事件驱动。
 - **当前基线**：`adbExec` / `adbExecSafe` 每次调用都带超时（默认 15s、connect/pair 45s、安装卸载拉文件 5min），超时统一报「设备无响应」，`getDeviceState` 把超时归为 `offline`；`CHANNELS` 是唯一通道来源并有唯一性单测守着。**2026-09-28 复跑**：`typecheck` 通过、`test` **209 passed / 1 skipped / 21 文件**（净变化：动作键用例 -2、D4 串行 +1、D7 命名与择优 +7、图标落盘与冷启动 +5、删重复的 `scrcpy.test.js` 套件 -4、删老兼容 -6、`deleteAppCache` 补锁 +1、`newDisplay` 必填与 `formatNewDisplay` +2、启动参数带图标的新套件 +3）、`oxlint` 0 错、`eslint` 0 错（原体检里的 **O0「lint 门是红的」确已修掉**，故不再列为待办）。

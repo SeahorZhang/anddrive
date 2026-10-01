@@ -10,6 +10,7 @@ import {
   setSecureSetting,
 } from "../adb.js";
 import { sanitizeIcon } from "../iconImage.js";
+import { isValidPackageName, isValidSerial } from "../validators.js";
 import { findAppSession } from "./appSession.js";
 import { startMiProjection } from "./miProjection.js";
 import { mirrorWindowBounds, resolveRuntimePrefs } from "./options.js";
@@ -128,8 +129,8 @@ function notifyExit(payload) {
 export async function startMirrorSession(request) {
   const serial = typeof request?.serial === "string" ? request.serial.trim() : "";
   const packageName = typeof request?.packageName === "string" ? request.packageName.trim() : "";
-  if (!serial) throw new Error("设备序列号无效");
-  if (!packageName) throw new Error("应用包名无效");
+  if (!isValidSerial(serial)) throw new Error("设备序列号无效");
+  if (!isValidPackageName(packageName)) throw new Error("应用包名无效");
   const label = typeof request?.label === "string" && request.label.trim() ? request.label.trim() : packageName;
 
   const existing = findAppSession(sessions.values(), { serial, packageName });

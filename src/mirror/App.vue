@@ -1,8 +1,7 @@
 <script setup>
 import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { useMirrorInput } from './useMirrorInput.js'
-import { bootstrap, dispose as disposeSession, reclaimApp, getSessionInfo } from './session.js'
-import { setContentElement } from './direct-session.js'
+import { bootstrap, dispose as disposeSession, reclaimApp, getSessionInfo, setContentElement } from './direct-session.js'
 import { aspectDiffers, createReflowGate } from './displayFollow.js'
 
 // 镜像窗口（渲染层直连）：adb/scrcpy 全在本进程内由 Tango 官方库建立，

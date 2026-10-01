@@ -123,11 +123,6 @@ export function createDisplayFollower({
       timer = null;
       pending = null;
     },
-
-    /** 最近一次实际下发的尺寸指纹（`宽x高`），未下发过为空串。 */
-    get lastSentKey() {
-      return lastSent;
-    },
   };
 }
 

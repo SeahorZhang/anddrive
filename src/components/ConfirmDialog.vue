@@ -10,22 +10,18 @@ const props = defineProps({
   error: { type: String, default: '' },
 })
 const modelValue = defineModel({ type: Boolean, required: true })
-const emit = defineEmits(['confirm', 'cancel', 'close'])
+const emit = defineEmits(['confirm', 'cancel'])
 
 function handleConfirm() {
   if (props.loading) return
   emit('confirm')
 }
 
-function handleCancel() {
+// 取消按钮 / 点遮罩 / Esc 都是同一个出口：不确认并关闭。
+function handleClose() {
   if (props.loading) return
   modelValue.value = false
   emit('cancel')
-}
-
-function handleClose() {
-  if (props.loading) return
-  emit('close')
 }
 </script>
 
@@ -52,7 +48,7 @@ function handleClose() {
           {{ error }}
         </p>
         <div class="flex justify-end gap-2">
-          <BaseButton variant="secondary" size="sm" :disabled="loading" @click="handleCancel">
+          <BaseButton variant="secondary" size="sm" :disabled="loading" @click="handleClose">
             {{ cancelLabel }}
           </BaseButton>
           <BaseButton variant="danger" size="sm" :loading="loading" @click="handleConfirm">

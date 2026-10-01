@@ -9,6 +9,7 @@ import { browse } from "./mdns.js";
 import { pickStableId } from "./deviceIdentity.js";
 import { parseEncoderMimes, VIDEO_ENCODER_PROBE_CMD } from "../shared/scrcpyConfig.js";
 import { iconPngBuffer, MAX_ICON_BYTES, PNG_DATA_URL_PREFIX } from "./iconImage.js";
+import { isValidPackageName, isValidSerial } from "./validators.js";
 import helperVersion from "../resources/helper-app.version.json" with { type: "json" };
 
 // ---------------------------------------------------------------------------
@@ -44,20 +45,6 @@ const ADB_TIMEOUT_MS = 15_000;
 const ADB_CONNECT_TIMEOUT_MS = 45_000;
 /** 安装 / 卸载 / 拉文件是分钟级的正常慢操作，不能用默认超时去掐。 */
 const ADB_TRANSFER_TIMEOUT_MS = 5 * 60_000;
-
-/** @typedef {{ timeoutMs?: number }} AdbCallOptions */
-
-/**
- * 把写在最前面的选项对象从 adb 参数里摘出来：
- * `adbExec({ timeoutMs: ADB_TRANSFER_TIMEOUT_MS }, "-s", serial, "install", …)`。
- * @param {(string | AdbCallOptions)[]} args
- * @returns {[AdbCallOptions, string[]]}
- */
-function splitCallOptions(args) {
-  const first = args[0];
-  if (first && typeof first === "object") return [first, args.slice(1)];
-  return [{}, args];
-}
 
 /**
  * execFile 被超时杀掉的特征：Node 置 `killed`/`signal`，部分版本给 `ETIMEDOUT`。
@@ -99,9 +86,12 @@ export function ensureServer() {
   return pendingServerStart;
 }
 
-/** @param {...(string | AdbCallOptions)} args */
-function adbExec(...args) {
-  const [{ timeoutMs = ADB_TIMEOUT_MS }, command] = splitCallOptions(args);
+/**
+ * 跑一次 adb 并等文本输出；命令失败即 reject。
+ * @param {string[]} command
+ * @param {number} [timeoutMs]
+ */
+function adbExec(command, timeoutMs = ADB_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     execFile(adbPath(), command, { timeout: timeoutMs }, (err, stdout, stderr) => {
       if (err) reject(isAdbTimeoutError(err) ? adbTimeoutError() : new Error(stderr || err.message));
@@ -115,10 +105,10 @@ function adbExec(...args) {
  * callers can inspect exit codes and device output. adb exits non-zero while
  * still printing a meaningful message (e.g. uninstalling a missing package).
  * 超时也算「有结果」：`timedOut` 为真、`stderr` 是给用户看的中文说明。
- * @param {...(string | AdbCallOptions)} args
+ * @param {string[]} command
+ * @param {number} [timeoutMs]
  */
-export function adbExecSafe(...args) {
-  const [{ timeoutMs = ADB_TIMEOUT_MS }, command] = splitCallOptions(args);
+function adbExecSafe(command, timeoutMs = ADB_TIMEOUT_MS) {
   return new Promise((resolve) => {
     execFile(adbPath(), command, { timeout: timeoutMs }, (err, stdout, stderr) => {
       const out = stdout?.trim() || "";
@@ -165,7 +155,7 @@ async function disconnectTransport(serial) {
   if (isUsbSerial(serial)) return true;
   await ensureServer();
   try {
-    await adbExec("disconnect", serial);
+    await adbExec(["disconnect", serial]);
   } catch (error) {
     if (isAlreadyDisconnectedError(error)) return true;
     throw error;
@@ -182,12 +172,8 @@ async function disconnectTransport(serial) {
  * @returns {string}
  */
 export function normalizeDisconnectSerial(value) {
-  if (typeof value !== "string") throw new Error("设备序列号无效");
-  const serial = value.trim();
-  if (!serial || serial.length > 1024 || /\s/.test(serial)) {
-    throw new Error("设备序列号无效");
-  }
-  return serial;
+  if (!isValidSerial(value)) throw new Error("设备序列号无效");
+  return value.trim();
 }
 
 /** @param {unknown} error */
@@ -252,7 +238,7 @@ async function waitForMdnsService(serviceType, hint) {
   const token = ++discoveryToken;
   await ensureServer();
   while (token === discoveryToken) {
-    const output = await adbExec("mdns", "services");
+    const output = await adbExec(["mdns", "services"]);
     if (token !== discoveryToken) break;
     const service = pickMdnsService(parseMdnsServices(output), serviceType, hint);
     if (service) return service;
@@ -368,7 +354,7 @@ async function deviceDisplayName(serial) {
   if (deviceNames.has(serial)) return deviceNames.get(serial);
   const shell = async (...args) => {
     try {
-      return (await adbExec("-s", serial, "shell", ...args)).trim() || null;
+      return (await adbExec(["-s", serial, "shell", ...args])).trim() || null;
     } catch {
       return null;
     }
@@ -405,7 +391,7 @@ async function listConnectDevices() {
   await ensureServer();
   const [bySerial, devicesOutput] = await Promise.all([
     connectServicesBySerial(),
-    adbExec("devices"),
+    adbExec(["devices"]),
   ]);
 
   const entries = [...parseAdbDevices(devicesOutput)].filter(
@@ -426,7 +412,7 @@ async function listConnectDevices() {
 
 /** serial → 它对应的 `_adb-tls-connect` 服务；实例名和 `host:port` 两种键都登记。 */
 async function connectServicesBySerial() {
-  const services = parseMdnsServices(await adbExec("mdns", "services")).filter(
+  const services = parseMdnsServices(await adbExec(["mdns", "services"])).filter(
     (s) => s.type === "_adb-tls-connect._tcp",
   );
   /** @type {Map<string, { name: string, type: string, address: string }>} */
@@ -536,7 +522,7 @@ async function getConnectedDevice() {
   ensureConnectBrowser();
   await ensureServer();
   const [devicesOutput, bySerial] = await Promise.all([
-    adbExec("devices"),
+    adbExec(["devices"]),
     connectServicesBySerial().catch(() => new Map()),
   ]);
   const online = [...parseAdbDevices(devicesOutput)]
@@ -582,7 +568,7 @@ export async function getDeviceState(serial) {
   if (typeof serial !== "string" || !serial) return "absent";
   await ensureServer();
   try {
-    return parseAdbDevices(await adbExec("devices")).get(serial) || "absent";
+    return parseAdbDevices(await adbExec(["devices"])).get(serial) || "absent";
   } catch (error) {
     // 问不到状态就按「离线」上报：心跳与快捷方式都据此走重连分支。
     // 旧行为是让它一直挂着，调用方永远等不到答案。
@@ -599,7 +585,7 @@ export async function getDeviceState(serial) {
 async function resolveReconnectAddress(serial) {
   if (typeof serial !== "string" || !serial) return null;
   await ensureServer();
-  const services = parseMdnsServices(await adbExec("mdns", "services")).filter(
+  const services = parseMdnsServices(await adbExec(["mdns", "services"])).filter(
     (s) => s.type === "_adb-tls-connect._tcp",
   );
   const matched = services.find(
@@ -626,7 +612,7 @@ export async function reconnectDevice(serial) {
 
   if (isUsbSerial(serial)) {
     if (state === "absent") return { online: false, reason: "usb-absent" };
-    await adbExecSafe("-s", serial, "reconnect");
+    await adbExecSafe(["-s", serial, "reconnect"]);
     const again = await getDeviceState(serial);
     return again === "device"
       ? { online: true, address: serial }
@@ -637,7 +623,7 @@ export async function reconnectDevice(serial) {
   const address = /:\d+$/.test(serial) ? serial : await resolveReconnectAddress(serial);
   if (!address) return { online: false, reason: "no-address" };
 
-  const result = await adbExecSafe({ timeoutMs: ADB_CONNECT_TIMEOUT_MS }, "connect", address);
+  const result = await adbExecSafe(["connect", address], ADB_CONNECT_TIMEOUT_MS);
   if (!/connected to /i.test(result.stdout)) {
     return { online: false, reason: result.stderr || result.stdout || "connect-failed" };
   }
@@ -664,11 +650,7 @@ function validTimestamp(value) {
 export function sanitizeApp(value) {
   if (!value || typeof value !== "object") return null;
   const entry = /** @type {Record<string, unknown>} */ (value);
-  if (
-    typeof entry.packageName !== "string" ||
-    !entry.packageName ||
-    entry.packageName.length > 512
-  ) {
+  if (!isValidPackageName(entry.packageName)) {
     return null;
   }
   const label =
@@ -779,7 +761,7 @@ export async function writeIconFiles(stable, entries) {
   await Promise.all(
     entries.map(async ({ packageName, dataUrl }) => {
       const png = iconPngBuffer(dataUrl);
-      if (!png || !packageName || packageName.length > 512) return;
+      if (!png || !isValidPackageName(packageName)) return;
       const filePath = iconFileFrom(dir, packageName);
       const tempPath = `${filePath}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
       try {
@@ -835,7 +817,7 @@ export async function readIconFiles(serial, packages) {
   /** @type {Map<string, string>} 文件名 → 包名（磁盘上只有哈希，回给调用方要还原） */
   const wanted = new Map();
   for (const packageName of list) {
-    if (typeof packageName === "string" && packageName && packageName.length <= 512) {
+    if (isValidPackageName(packageName)) {
       wanted.set(`${cacheKey(packageName)}.png`, packageName);
     }
   }
@@ -969,12 +951,7 @@ export async function resolveDeviceStableId(serial) {
   const pending = resolving.get(serial);
   if (pending) return pending;
   const task = (async () => {
-    const { stdout } = await adbExecSafe(
-      "-s",
-      serial,
-      "shell",
-      "getprop ro.serialno; getprop ro.boot.serialno; settings get secure android_id",
-    );
+    const { stdout } = await adbExecSafe(["-s", serial, "shell", "getprop ro.serialno; getprop ro.boot.serialno; settings get secure android_id"]);
     // 只认 stdout：命令失败时 stderr 是给人看的说明（如「设备无响应（命令超时）…」），
     // 混进候选会被 pickStableId 当成序列号写进别名表，之后按标识的查找全对不上。
     const lines = String(stdout ?? "")
@@ -1011,7 +988,7 @@ export async function findTransportByStableId(stableId) {
   // 别名表没命中（比如换过端口还没连上）：问一遍在线设备，谁的稳定标识对得上用谁。
   let devices;
   try {
-    devices = parseAdbDevices(await adbExec("devices"));
+    devices = parseAdbDevices(await adbExec(["devices"]));
   } catch {
     return null;
   }
@@ -1039,7 +1016,7 @@ async function removeFile(filePath) {
 }
 
 export async function readAppCache(serial) {
-  if (typeof serial !== "string" || !serial || serial.length > 1024) return null;
+  if (!isValidSerial(serial)) return null;
   for (const filePath of cacheCandidates(serial)) {
     const snapshot = await readCacheFile(filePath);
     // undefined = 这个路径不可用（没有 / 坏掉 / 过期），继续试下一个候选
@@ -1070,7 +1047,7 @@ async function readCacheFile(filePath) {
 
 /** Delete the cached snapshot of one device. Idempotent. */
 export async function deleteAppCache(serial) {
-  if (typeof serial !== "string" || !serial || serial.length > 1024) return false;
+  if (!isValidSerial(serial)) return false;
   // 必须和写路径共用同一把锁：否则一次正在收尾的写入（tmp 已写、待 rename）会在删除
   // 之后落地，用户点了「清除缓存」列表却原地复活。锁键与 mutateAppCache 一致。
   return withCacheLock(cachePath(stableIdOf(serial)), async () => {
@@ -1203,7 +1180,7 @@ function withCacheLock(filePath, task) {
  *   否则一把锁会按批数串行化整条设备链路。
  */
 export async function mutateAppCache(serial, mutate) {
-  if (typeof serial !== "string" || !serial || serial.length > 1024) {
+  if (!isValidSerial(serial)) {
     throw new Error("设备序列号无效");
   }
   const stable = stableIdOf(serial);
@@ -1243,7 +1220,7 @@ async function isHelperInstalled(serial) {
 /** @returns {Promise<string | null>} on-device base.apk path of the helper */
 async function deviceApkPath(serial) {
   try {
-    const output = await adbExec("-s", serial, "shell", "pm", "path", HELPER_PACKAGE);
+    const output = await adbExec(["-s", serial, "shell", "pm", "path", HELPER_PACKAGE]);
     const line = output.split("\n").find((l) => l.startsWith("package:"));
     return line ? line.slice("package:".length).trim() || null : null;
   } catch {
@@ -1253,14 +1230,7 @@ async function deviceApkPath(serial) {
 
 /** 安装 helper APK；adb 报错或输出不含 Success 均视为失败。 */
 async function installHelper(serial) {
-  const stdout = await adbExec(
-    { timeoutMs: ADB_TRANSFER_TIMEOUT_MS },
-    "-s",
-    serial,
-    "install",
-    "-r",
-    helperApkPath(),
-  );
+  const stdout = await adbExec(["-s", serial, "install", "-r", helperApkPath()], ADB_TRANSFER_TIMEOUT_MS);
   if (!/Success/i.test(stdout)) throw new Error(stdout || "安装失败");
   return "安装成功";
 }
@@ -1274,19 +1244,13 @@ async function installHelper(serial) {
 async function uninstallHelper(serial) {
   // adbExecSafe never rejects: on this ROM a *successful* uninstall still
   // exits 1 and prints "Failure [...]". Output is logged, not trusted.
-  return await adbExecSafe(
-    { timeoutMs: ADB_TRANSFER_TIMEOUT_MS },
-    "-s",
-    serial,
-    "uninstall",
-    HELPER_PACKAGE,
-  );
+  return await adbExecSafe(["-s", serial, "uninstall", HELPER_PACKAGE], ADB_TRANSFER_TIMEOUT_MS);
 }
 
 /** @returns {Promise<string | null>} versionName of the on-device Helper */
 async function getInstalledHelperVersion(serial) {
   try {
-    const output = await adbExec("-s", serial, "shell", "dumpsys", "package", HELPER_PACKAGE);
+    const output = await adbExec(["-s", serial, "shell", "dumpsys", "package", HELPER_PACKAGE]);
     const match = output.match(/versionName=(\S+)/);
     return match ? match[1] : null;
   } catch {
@@ -1467,9 +1431,6 @@ async function getAppIcons(serial, packages) {
 // 应用操作（强制停止 / 清除数据 / 卸载 / 应用信息 / 导出 APK）
 // ---------------------------------------------------------------------------
 
-const PACKAGE_NAME_RE = /^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$/;
-const MAX_PACKAGE_LENGTH = 512;
-
 /**
  * 校验并规范化包名。所有应用操作都先经过这里，避免把任意字符串带进
  * 设备 shell 命令。
@@ -1477,19 +1438,13 @@ const MAX_PACKAGE_LENGTH = 512;
  * @returns {string}
  */
 export function normalizePackageName(value) {
-  if (typeof value !== "string") throw new Error("应用包名无效");
-  const pkg = value.trim();
-  if (!pkg || pkg.length > MAX_PACKAGE_LENGTH || !PACKAGE_NAME_RE.test(pkg)) {
-    throw new Error("应用包名无效");
-  }
-  return pkg;
+  if (!isValidPackageName(value)) throw new Error("应用包名无效");
+  return value.trim();
 }
 
 /** @param {unknown} serial */
 function assertSerial(serial) {
-  if (typeof serial !== "string" || !serial.trim() || serial.length > 1024) {
-    throw new Error("设备序列号无效");
-  }
+  if (!isValidSerial(serial)) throw new Error("设备序列号无效");
   return serial;
 }
 
@@ -1499,7 +1454,7 @@ function assertSerial(serial) {
  * @returns {Promise<string[]>}
  */
 async function getAppApkPaths(serial, packageName) {
-  const output = await adbExecSafe("-s", serial, "shell", "pm", "path", packageName);
+  const output = await adbExecSafe(["-s", serial, "shell", "pm", "path", packageName]);
   return output.stdout
     .split("\n")
     .map((line) => line.trim())
@@ -1520,13 +1475,13 @@ export async function getAppTask(serial, packageName) {
   assertSerial(serial);
   const pkg = normalizePackageName(packageName);
   await ensureServer();
-  const { stdout } = await adbExecSafe(
+  const { stdout } = await adbExecSafe([
     "-s",
     serial,
     "shell",
     // 只 grep 需要的那几行，别把整份 dumpsys（几百 KB）拖回本机。
     `dumpsys window windows | grep -E 'Window #.*${pkg}' -A4 | grep -m1 -oE 'mDisplayId=[0-9]+ taskId=[0-9]+'`,
-  );
+  ]);
   const match = /mDisplayId=(\d+) taskId=(\d+)/.exec(stdout);
   if (!match) return null;
   return { displayId: Number(match[1]), taskId: Number(match[2]) };
@@ -1547,12 +1502,7 @@ export async function moveAppTaskToDisplay(serial, taskId, displayId) {
     throw new Error("任务或显示编号无效");
   }
   await ensureServer();
-  const { code, stderr, stdout } = await adbExecSafe(
-    "-s",
-    serial,
-    "shell",
-    `am display move-stack ${task} ${display}`,
-  );
+  const { code, stderr, stdout } = await adbExecSafe(["-s", serial, "shell", `am display move-stack ${task} ${display}`]);
   // 命令成功时没有输出；失败通常是 `Exception ... Unknown displayId`，按文本 + 退出码判。
   const output = `${stdout}\n${stderr}`;
   if (code !== 0 || /exception|error|unknown/i.test(output)) {
@@ -1570,7 +1520,7 @@ export async function moveAppTaskToDisplay(serial, taskId, displayId) {
 export async function getPhysicalScreenSize(serial) {
   assertSerial(serial);
   await ensureServer();
-  const { stdout, stderr } = await adbExecSafe("-s", serial, "shell", "wm size");
+  const { stdout, stderr } = await adbExecSafe(["-s", serial, "shell", "wm size"]);
   const match = /Physical size:\s*(\d+)x(\d+)/.exec(`${stdout}\n${stderr}`);
   if (!match) return null;
   return { width: Number(match[1]), height: Number(match[2]) };
@@ -1580,7 +1530,7 @@ export async function getPhysicalScreenSize(serial) {
 export async function isMiuiDevice(serial) {
   assertSerial(serial);
   await ensureServer();
-  const { code, stdout } = await adbExecSafe("-s", serial, "shell", "getprop", "ro.miui.ui.version.name");
+  const { code, stdout } = await adbExecSafe(["-s", serial, "shell", "getprop", "ro.miui.ui.version.name"]);
   return code === 0 && stdout.trim() !== "";
 }
 
@@ -1592,7 +1542,7 @@ export async function isMiuiDevice(serial) {
 export async function setSecureSetting(serial, key, value) {
   assertSerial(serial);
   await ensureServer();
-  return adbExecSafe("-s", serial, "shell", "settings", "put", "secure", key, String(value));
+  return adbExecSafe(["-s", serial, "shell", "settings", "put", "secure", key, String(value)]);
 }
 
 const videoCodecCapsCache = new Map();
@@ -1609,7 +1559,7 @@ export async function getDeviceVideoCodecs(serial) {
   const cached = videoCodecCapsCache.get(serial);
   if (cached) return cached;
   await ensureServer();
-  const { stdout } = await adbExecSafe("-s", serial, "shell", VIDEO_ENCODER_PROBE_CMD);
+  const { stdout } = await adbExecSafe(["-s", serial, "shell", VIDEO_ENCODER_PROBE_CMD]);
   const caps = parseEncoderMimes(stdout);
   if (caps.mimes.length === 0) {
     console.warn("AndDrive: 没读到设备编码器清单（media_codecs 路径因 ROM 而异），编码列表按「未知」处理");
@@ -1624,7 +1574,7 @@ export async function forceStopApp(serial, packageName) {
   assertSerial(serial);
   const pkg = normalizePackageName(packageName);
   await ensureServer();
-  const { code, stderr } = await adbExecSafe("-s", serial, "shell", "am", "force-stop", pkg);
+  const { code, stderr } = await adbExecSafe(["-s", serial, "shell", "am", "force-stop", pkg]);
   if (code !== 0) throw new Error(stderr || "强制停止失败");
   return true;
 }
@@ -1634,7 +1584,7 @@ async function clearAppData(serial, packageName) {
   assertSerial(serial);
   const pkg = normalizePackageName(packageName);
   await ensureServer();
-  const { code, stdout, stderr } = await adbExecSafe("-s", serial, "shell", "pm", "clear", pkg);
+  const { code, stdout, stderr } = await adbExecSafe(["-s", serial, "shell", "pm", "clear", pkg]);
   if (code !== 0 || !/success/i.test(stdout)) {
     throw new Error(stderr || stdout || "清除应用数据失败");
   }
@@ -1646,13 +1596,7 @@ async function uninstallApp(serial, packageName) {
   assertSerial(serial);
   const pkg = normalizePackageName(packageName);
   await ensureServer();
-  const { code, stdout, stderr } = await adbExecSafe(
-    { timeoutMs: ADB_TRANSFER_TIMEOUT_MS },
-    "-s",
-    serial,
-    "uninstall",
-    pkg,
-  );
+  const { code, stdout, stderr } = await adbExecSafe(["-s", serial, "uninstall", pkg], ADB_TRANSFER_TIMEOUT_MS);
   if (code !== 0 && !/success/i.test(stdout)) {
     throw new Error(stderr || stdout || "卸载失败");
   }
@@ -1668,7 +1612,7 @@ async function getAppInfo(serial, packageName) {
   const pkg = normalizePackageName(packageName);
   await ensureServer();
   const [dump, apkPaths] = await Promise.all([
-    adbExecSafe("-s", serial, "shell", "dumpsys", "package", pkg),
+    adbExecSafe(["-s", serial, "shell", "dumpsys", "package", pkg]),
     getAppApkPaths(serial, pkg),
   ]);
   const text = dump.stdout;
@@ -1714,14 +1658,7 @@ async function exportApk(serial, packageName) {
   for (const remote of apkPaths) {
     const name = path.posix.basename(remote);
     const destination = path.join(dir, name);
-    const result = await adbExecSafe(
-      { timeoutMs: ADB_TRANSFER_TIMEOUT_MS },
-      "-s",
-      serial,
-      "pull",
-      remote,
-      destination,
-    );
+    const result = await adbExecSafe(["-s", serial, "pull", remote, destination], ADB_TRANSFER_TIMEOUT_MS);
     const pulled = /(\d+) files? pulled/i.exec(result.stdout);
     if (result.code !== 0 || !pulled || Number(pulled[1]) === 0) {
       throw new Error(result.stderr || result.stdout || `导出 ${name} 失败`);
@@ -1878,11 +1815,11 @@ async function getDeviceStats(serial, force = false) {
   const cpuScript =
     "cat /proc/loadavg; echo ---; nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo; echo ###; grep -m1 -i hardware /proc/cpuinfo";
   const [propRes, batteryRes, memRes, cpuRes, netRes] = await Promise.all([
-    adbExecSafe("-s", serial, "shell", "getprop"),
-    adbExecSafe("-s", serial, "shell", "dumpsys", "battery"),
-    adbExecSafe("-s", serial, "shell", "cat", "/proc/meminfo"),
-    adbExecSafe("-s", serial, "shell", cpuScript),
-    adbExecSafe("-s", serial, "shell", "ip -o -4 addr 2>/dev/null"),
+    adbExecSafe(["-s", serial, "shell", "getprop"]),
+    adbExecSafe(["-s", serial, "shell", "dumpsys", "battery"]),
+    adbExecSafe(["-s", serial, "shell", "cat", "/proc/meminfo"]),
+    adbExecSafe(["-s", serial, "shell", cpuScript]),
+    adbExecSafe(["-s", serial, "shell", "ip -o -4 addr 2>/dev/null"]),
   ]);
 
   if (propRes.code !== 0 && !propRes.stdout) {
@@ -1923,7 +1860,7 @@ ipcMain.handle(CHANNELS.adbConnect, async (_, address) => {
         : "USB 设备未授权，请在手机上允许 USB 调试后重试",
     );
   }
-  const output = await adbExec({ timeoutMs: ADB_CONNECT_TIMEOUT_MS }, "connect", address);
+  const output = await adbExec(["connect", address], ADB_CONNECT_TIMEOUT_MS);
   if (!/connected to /i.test(output)) throw new Error(output || "连接失败");
   return output.trim();
 });
@@ -1951,7 +1888,7 @@ ipcMain.handle(CHANNELS.adbReconnect, (_, serial) => reconnectDevice(serial));
 
 // 配对设备
 ipcMain.handle(CHANNELS.adbPair, async (_, device, password) => {
-  return adbExec({ timeoutMs: ADB_CONNECT_TIMEOUT_MS }, "pair", device.address, password);
+  return adbExec(["pair", device.address, password], ADB_CONNECT_TIMEOUT_MS);
 });
 
 /**

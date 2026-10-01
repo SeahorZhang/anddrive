@@ -7,6 +7,8 @@
 // 后缀避开了 `.anddrive`：那是 AndroMeld 已声明的文件类型（其“投屏设置指引”），
 // 会被系统优先交给 AndroMeld。`.adr` 目前无人占用，AndDrive 才能成为默认。
 
+import { isValidSerial } from "./validators.js";
+
 /** `anddrive://` 自定义协议，需与 electron-builder.json 的 protocols 一致。 */
 export const MIRROR_SCHEME = "anddrive";
 /** 快捷方式文件后缀，需与 electron-builder.json 的 `mac.extendInfo` 一致。 */
@@ -23,18 +25,13 @@ export const MIRROR_FILE_EXTENSION = "adr";
 export const MIRROR_FILE_UTI = "com.anddrive.mirror-shortcut";
 const SHORTCUT_FILE_TYPE = "anddrive-mirror-shortcut";
 const SHORTCUT_FILE_VERSION = 1;
-const MAX_SERIAL_LENGTH = 1024;
 const MAX_LABEL_LENGTH = 120;
 const MAX_NAME_LENGTH = 80;
 
 /** @param {unknown} value @returns {string} */
 export function sanitizeSerial(value) {
-  if (typeof value !== "string") throw new Error("设备地址无效");
-  const serial = value.trim();
-  if (!serial || serial.length > MAX_SERIAL_LENGTH || /\s/.test(serial)) {
-    throw new Error("设备地址无效");
-  }
-  return serial;
+  if (!isValidSerial(value)) throw new Error("设备地址无效");
+  return value.trim();
 }
 
 /** 去掉控制字符并截断的展示文本；非字符串返回空串。 */

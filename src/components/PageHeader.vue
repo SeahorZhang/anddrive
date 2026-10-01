@@ -196,8 +196,7 @@ watch(
       </div>
 
       <ConfirmDialog v-model="showConfirm" title="断开连接" :message="disconnectMessage" confirm-label="断开"
-        :loading="disconnecting" :error="disconnectError" @confirm="handleConfirm" @cancel="handleCancel"
-        @close="handleCancel" />
+        :loading="disconnecting" :error="disconnectError" @confirm="handleConfirm" @cancel="handleCancel" />
     </div>
   </TooltipProvider>
 </template>

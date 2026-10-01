@@ -76,7 +76,6 @@ describe('createDisplayFollower', () => {
     advance(RESIZE_SETTLE_MS)
 
     expect(sent).toEqual([])
-    expect(follower.lastSentKey).toBe('920x1800')
   })
 
   it('sends once when the size actually changes', () => {
@@ -88,7 +87,6 @@ describe('createDisplayFollower', () => {
     advance(RESIZE_SETTLE_MS)
 
     expect(sent).toEqual(['1000x1800'])
-    expect(follower.lastSentKey).toBe('1000x1800')
   })
 
   it('coalesces a burst of window resizes into the latest size', () => {
@@ -178,7 +176,11 @@ describe('createDisplayFollower', () => {
     await settle()
     expect(sents).toEqual(['920x1800'])
     expect(skips).toEqual([1])
-    expect(follower.lastSentKey).toBe('')
+
+    // 同步抛错同样要回滚记录：同一尺寸允许再次下发（不靠内部状态 getter，看行为）
+    follower.request({ width: 920, height: 1800 })
+    await settle()
+    expect(sent).toEqual(['920x1800', '920x1800'])
   })
 
   it('reports every size change as intent, while the burst is still merging', () => {

@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { CHANNELS } from "./ipcContract.js";
 import { resolveDeviceStableId } from "./adb.js";
+import { isValidPackageName, isValidSerial } from "./validators.js";
 
 // ---------------------------------------------------------------------------
 // 应用收藏（favorites）
@@ -12,18 +13,14 @@ import { resolveDeviceStableId } from "./adb.js";
 // 收藏只影响界面分组与置顶，不改变设备上的任何状态。
 // ---------------------------------------------------------------------------
 
-const MAX_SERIAL_LENGTH = 1024;
-const MAX_PACKAGE_LENGTH = 512;
 const MAX_FAVORITES_PER_DEVICE = 500;
 
 const storePath = () => path.join(app.getPath("userData"), "favorites.json");
 
 /** @param {unknown} value @returns {string | null} */
 export function sanitizePackage(value) {
-  if (typeof value !== "string") return null;
-  const pkg = value.trim();
-  if (!pkg || pkg.length > MAX_PACKAGE_LENGTH) return null;
-  return pkg;
+  if (!isValidPackageName(value)) return null;
+  return value.trim();
 }
 
 /** @param {unknown} value @returns {string[]} */
@@ -46,7 +43,7 @@ export function sanitizeStore(value) {
   if (!value || typeof value !== "object") return {};
   const store = {};
   for (const [serial, list] of Object.entries(value)) {
-    if (typeof serial !== "string" || !serial || serial.length > MAX_SERIAL_LENGTH) continue;
+    if (!isValidSerial(serial)) continue;
     const favorites = sanitizeFavoriteList(list);
     if (favorites.length) store[serial] = favorites;
   }
@@ -88,7 +85,7 @@ async function writeStore(store) {
 
 /** @param {string} serial @returns {Promise<string[]>} */
 export async function getFavorites(serial) {
-  if (typeof serial !== "string" || !serial || serial.length > MAX_SERIAL_LENGTH) return [];
+  if (!isValidSerial(serial)) return [];
   const stableId = await resolveStableId(serial);
   const store = await readStore();
   return store[stableId] || [];
@@ -101,7 +98,7 @@ export async function getFavorites(serial) {
  */
 export async function toggleFavorite(serial, packageName) {
   const pkg = sanitizePackage(packageName);
-  if (typeof serial !== "string" || !serial || serial.length > MAX_SERIAL_LENGTH || !pkg) {
+  if (!isValidSerial(serial) || !pkg) {
     return null;
   }
   const stableId = await resolveStableId(serial);

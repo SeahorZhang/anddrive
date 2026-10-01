@@ -1,6 +1,6 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import { KEYBOARD_KEYS, KEY_META } from '../../shared/keys.js'
-import { sendControl } from './session.js'
+import { sendControl } from './direct-session.js'
 
 /**
  * 镜像窗口输入：把指针 / 滚轮 / 键盘事件翻成控制消息，直接写
