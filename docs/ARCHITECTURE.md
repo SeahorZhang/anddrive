@@ -2,7 +2,7 @@
 
 > **这份文档是什么**：读代码前该知道的地图 —— 进程怎么分、数据怎么流、每条链路的真入口在哪、哪些设计是**刻意**的（别顺手"优化"掉）。
 > 所有 `file:line` 于 2026-09-28 逐条核对过当前代码。**不一致时以代码为准**，并请顺手改这份文档。
-> 待办与缺陷见 [`TODO.md`](TODO.md)；镜像引擎的取证记录与实测数据见 [`NATIVE_MIRROR.md`](NATIVE_MIRROR.md)；Helper 的输出契约见 [`../helper-app/README.md`](../helper-app/README.md)。
+> 待办与缺陷见 [`TODO.md`](TODO.md)；镜像引擎的取证记录与实测数据见 [`NATIVE_MIRROR.md`](NATIVE_MIRROR.md)；Helper 的输出契约见 [`../helper-app/README.md`](../helper-app/README.md)；**adb 的完整调用清单与「能不能不用 adb」的判定**见 [`ADB_DEPENDENCY.md`](ADB_DEPENDENCY.md)。
 
 ## 1. 形态
 
