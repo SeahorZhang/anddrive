@@ -91,7 +91,7 @@ function updateQuality(tier) {
       <div class="min-w-0 flex-1">
         <div class="text-[13px] text-ink-2">画质档位</div>
         <div class="mt-0.5 text-[11px] text-ink-3">
-          一档 = 像素倍率 + 码率上限，会话建立时读取（改动不影响进行中的镜像）。
+          一档 = 码率上限（开了下面「大屏模式」才还决定像素倍率），会话建立时读取（改动不影响进行中的镜像）。
           实测只影响清晰度与带宽、不影响帧率：排版异常的应用用兼容，Wi-Fi 不稳时降档
         </div>
       </div>
@@ -101,6 +101,18 @@ function updateQuality(tier) {
           {{ tier.label }}
         </option>
       </select>
+    </div>
+
+    <div class="flex items-center gap-3 px-4 py-2.5">
+      <div class="min-w-0 flex-1">
+        <div class="text-[13px] text-ink-2">大屏模式</div>
+        <div class="mt-0.5 text-[11px] text-ink-3">
+          改用随包的补丁版 server：虚拟显示按窗口 CSS × 画质档位倍率开、并忽略应用尺寸限制，固定竖屏的应用在横屏显示上能铺满。
+          关闭（默认）用上游原生 server，显示按窗口物理像素开（1:1 不缩放），密度照设备主屏等比
+        </div>
+      </div>
+      <SwitchToggle :model-value="props.config.largeScreenDisplay" :disabled="disabled"
+        @update:model-value="(value) => update({ largeScreenDisplay: value })" />
     </div>
 
     <div class="flex items-center gap-3 px-4 py-2.5">

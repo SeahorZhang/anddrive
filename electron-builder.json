@@ -80,6 +80,10 @@
       {
         "from": "resources/scrcpy/scrcpy-server",
         "to": "scrcpy/scrcpy-server"
+      },
+      {
+        "from": "resources/scrcpy/patched/scrcpy-server",
+        "to": "scrcpy/patched/scrcpy-server"
       }
     ]
   }

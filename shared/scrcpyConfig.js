@@ -12,6 +12,21 @@ export const DEFAULT_SCRCPY_CONFIG = Object.freeze({
   fullscreen: false,
   /** 画质档位：见 DISPLAY_QUALITY_TIERS。默认 sharp = 与老版本一致（倍率 3）。 */
   quality: "sharp",
+  /**
+   * 「大屏模式」：选随包用哪一份 scrcpy server，并连带决定虚拟显示的尺寸口径。
+   * - `false`（默认）= **上游 5.0 原生产物**，`new_display` 传空串（上游语义：主屏尺寸 + 主屏密度，
+   *   见 `Options.parseNewDisplay`），画质档位只换码率、不再换算显示像素。
+   * - `true` = 随包 `scrcpy/patched/scrcpy-server`（带 `debug.anddrive.vd.*` 三个开关，走
+   *   `VirtualDisplayConfig.setIgnoreActivitySizeRestrictions`），并按「窗口 CSS × 档位倍率」
+   *   开显示 —— 固定竖屏的应用在横屏逻辑尺寸上能铺满（代价：产物是自编的，Android 16 的隐藏 API）。
+   */
+  largeScreenDisplay: false,
+  /**
+   * 上次用过的那台设备的**稳定标识**，不是 adb serial：无线调试的 serial 是
+   * `adb-<serialno>-<随机>._adb-tls-connect._tcp`，每次开无线调试那个随机串都换，
+   * 存下来下次必然对不上（同一台机器在列表里的 stableId 才跨重启稳定）。
+   */
+  lastDeviceStableId: "",
 });
 
 /** 虚拟显示基准密度：1dp = 1px（实际下发 dpi = 该值 × 档位倍率）。 */
@@ -239,6 +254,19 @@ export function planCodecList({ device = null, local = null, current = null } = 
 }
 
 /**
+ * 「大屏模式」用的是哪一份随包 server 产物（相对 resources 目录的路径）。
+ * 判据只有这一个函数：主进程拼路径、脚本对账都读它，别再在第二处各比一次开关。
+ * 传入的 config 应当已经过 `normalizeScrcpyConfig`（主进程缓存的就是归一化后的那份）。
+ * @param {{ largeScreenDisplay?: boolean }} config
+ * @returns {'scrcpy/scrcpy-server'|'scrcpy/patched/scrcpy-server'}
+ */
+export function scrcpyServerResource(config) {
+  return config?.largeScreenDisplay === true
+    ? "scrcpy/patched/scrcpy-server"
+    : "scrcpy/scrcpy-server";
+}
+
+/**
  * 归一化投屏参数：非法值静默回落到默认值，避免把任意字符串带进命令行。
  * 已废弃的字段（`engine`、`tablet` 那类历史存盘键）在这里被**静默丢弃** ——
  * 老用户的配置文件因此无需迁移，下次保存就干净了。
@@ -273,5 +301,8 @@ export function normalizeScrcpyConfig(input) {
     quality,
     alwaysOnTop: raw.alwaysOnTop === true,
     fullscreen: raw.fullscreen === true,
+    largeScreenDisplay: raw.largeScreenDisplay === true,
+    lastDeviceStableId:
+      typeof raw.lastDeviceStableId === "string" ? raw.lastDeviceStableId.trim().slice(0, 128) : "",
   };
 }

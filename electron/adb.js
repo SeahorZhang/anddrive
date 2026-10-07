@@ -5,9 +5,14 @@ import { promises as fs, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHANNELS } from "./ipcContract.js";
+import { currentScrcpyConfig } from "./scrcpyConfig.js";
 import { browse } from "./mdns.js";
 import { pickStableId } from "./deviceIdentity.js";
-import { parseEncoderMimes, VIDEO_ENCODER_PROBE_CMD } from "../shared/scrcpyConfig.js";
+import {
+  parseEncoderMimes,
+  scrcpyServerResource,
+  VIDEO_ENCODER_PROBE_CMD,
+} from "../shared/scrcpyConfig.js";
 import { iconPngBuffer, MAX_ICON_BYTES, PNG_DATA_URL_PREFIX } from "./iconImage.js";
 import { isValidPackageName, isValidSerial } from "./validators.js";
 import helperVersion from "../resources/helper-app.version.json" with { type: "json" };
@@ -25,7 +30,14 @@ function resourcesBase() {
 
 export const adbPath = () => path.join(resourcesBase(), "adb", "mac", "adb");
 const helperApkPath = () => path.join(resourcesBase(), "helper-app.apk");
-export const scrcpyServerPath = () => path.join(resourcesBase(), "scrcpy", "scrcpy-server");
+/**
+ * 随包 scrcpy server 的产物路径，跟着「大屏模式」开关走：默认是上游 5.0 原生那份，
+ * 开关打开才用 `scrcpy/patched/` 里那份带 `debug.anddrive.vd.*` 的自编产物。
+ * 两份烤的协议版本号必须都等于 `SCRCPY_SERVER_VERSION`（`scripts/verify-resources.mjs` 逐个查）。
+ * 选哪一份的判据在 `scrcpyServerResource`（shared），这里只负责拼到 resources 根目录下。
+ */
+export const scrcpyServerPath = () =>
+  path.join(resourcesBase(), scrcpyServerResource(currentScrcpyConfig()));
 
 // ---------------------------------------------------------------------------
 // ADB 执行

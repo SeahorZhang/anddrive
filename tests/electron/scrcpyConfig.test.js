@@ -1,7 +1,16 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { promises as fs } from 'node:fs'
+import { promises as fs, statSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+
+const projectRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..')
+const isReadable = (file) => {
+  try {
+    return statSync(file).isFile() && statSync(file).size > 0
+  } catch {
+    return false
+  }
+}
 
 const userDataDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ad-scrcpy-config-'))
 
@@ -14,6 +23,7 @@ vi.mock('electron', () => ({
 const {
   DEFAULT_SCRCPY_CONFIG,
   normalizeScrcpyConfig,
+  scrcpyServerResource,
   computeDisplayMetrics,
   DISPLAY_BASE_DPI,
   DISPLAY_PIXEL_SCALE,
@@ -72,6 +82,25 @@ describe('normalizeScrcpyConfig', () => {
     expect(normalizeScrcpyConfig({ quality: 3 }).quality).toBe(DEFAULT_SCRCPY_CONFIG.quality)
   })
 
+  it('大屏模式默认关：老存盘里没这个键时必须走上游原生那份产物', () => {
+    expect(normalizeScrcpyConfig({}).largeScreenDisplay).toBe(false)
+    expect(normalizeScrcpyConfig({ largeScreenDisplay: true }).largeScreenDisplay).toBe(true)
+    // 只认显式 true（与 audio 那几个开关同一套判据），脏值不能把补丁版产物带起来。
+    expect(normalizeScrcpyConfig({ largeScreenDisplay: 'yes' }).largeScreenDisplay).toBe(false)
+  })
+
+  it('上次设备的 stableId 只留能用的形状（它只用来比对，永不进命令行）', () => {
+    expect(normalizeScrcpyConfig({}).lastDeviceStableId).toBe('')
+    expect(normalizeScrcpyConfig({ lastDeviceStableId: 'af3d7abd' }).lastDeviceStableId).toBe(
+      'af3d7abd',
+    )
+    expect(normalizeScrcpyConfig({ lastDeviceStableId: '  af3d7abd  ' }).lastDeviceStableId).toBe(
+      'af3d7abd',
+    )
+    expect(normalizeScrcpyConfig({ lastDeviceStableId: 42 }).lastDeviceStableId).toBe('')
+    expect(normalizeScrcpyConfig({ lastDeviceStableId: 'x'.repeat(200) }).lastDeviceStableId).toHaveLength(128)
+  })
+
   // 从 scrcpy.test.js 折过来：这几条是原来那份独有的，别跟着文件一起丢。
   it('拒绝会带进命令行的畸形值', () => {
     const config = normalizeScrcpyConfig({
@@ -103,6 +132,28 @@ describe('normalizeScrcpyConfig', () => {
         engine: 'scrcpy',
       }),
     ).toEqual({ ...DEFAULT_SCRCPY_CONFIG })
+  })
+})
+
+describe('scrcpyServerResource', () => {
+  it('默认指上游原生那份，大屏模式才指补丁版', () => {
+    expect(scrcpyServerResource(DEFAULT_SCRCPY_CONFIG)).toBe('scrcpy/scrcpy-server')
+    expect(scrcpyServerResource({ largeScreenDisplay: true })).toBe(
+      'scrcpy/patched/scrcpy-server',
+    )
+    // 只认显式 true：没传 config / 脏值都不能把补丁版产物带起来。
+    expect(scrcpyServerResource(undefined)).toBe('scrcpy/scrcpy-server')
+    expect(scrcpyServerResource({ largeScreenDisplay: 'yes' })).toBe('scrcpy/scrcpy-server')
+  })
+
+  it('两个分支各自指向真实存在的随包产物（少打一份就是开关另一边白屏）', () => {
+    // 返回值是**相对 resources 目录**的路径，主进程拼的就是 `resourcesBase() + 它`。
+    for (const relative of new Set([
+      scrcpyServerResource(DEFAULT_SCRCPY_CONFIG),
+      scrcpyServerResource({ largeScreenDisplay: true }),
+    ])) {
+      expect(isReadable(path.join(projectRoot, 'resources', relative))).toBe(true)
+    }
   })
 })
 
@@ -197,6 +248,12 @@ describe('scrcpy config store', () => {
     const reloaded = await loadScrcpyConfig()
     expect(reloaded.config.alwaysOnTop).toBe(true)
     expect(currentScrcpyConfig().alwaysOnTop).toBe(true)
+  })
+
+  it('上次设备跟着文件往返（启动能不能连回那台就看这一条链路）', async () => {
+    await saveScrcpyConfig({ ...DEFAULT_SCRCPY_CONFIG, lastDeviceStableId: 'af3d7abd' })
+    const reloaded = await loadScrcpyConfig()
+    expect(reloaded.config).toMatchObject({ lastDeviceStableId: 'af3d7abd' })
   })
 
   it('normalizes invalid values on save', async () => {

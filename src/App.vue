@@ -22,6 +22,7 @@ import {
 } from "@/utils/deviceState";
 import { notify, notifyError } from "@/composables/useNotifications";
 import { autoReconnect } from "@/composables/useConnectionPreferences";
+import { scrcpyConfig } from "@/composables/useScrcpyPreferences";
 import { isDark } from "@/composables/useTheme";
 import {
   startScrcpySessionPolling,
@@ -238,6 +239,9 @@ async function startRecovery(target) {
 // 接管已连接设备并进入首页（设备已在 adb devices 中，无需再次 connect）
 function adoptDevice(target) {
   device.value = target;
+  // 接管过谁就记下来（存 stableId，理由见 `DEFAULT_SCRCPY_CONFIG.lastDeviceStableId`）：
+  // 下次多台同时在线时静默接管的就是这一台。
+  if (target.stableId) scrcpyConfig.lastDeviceStableId = target.stableId;
   deviceDialogVisible.value = false;
   lostDevice = null;
   autoAdopt = true;
@@ -309,6 +313,8 @@ const connect = async () => {
     console.error("获取已连接设备失败：", e);
   }
 
+  // 发现循环在这一趟往返里已经接管了上次那台（`pickAdoptableDevice`），别把它踢回添加设备页。
+  if (device.value) return;
   device.value = null;
   pageType.value = "addDevice";
 };
@@ -323,9 +329,12 @@ async function discoverLoop() {
       const devices = await refreshDeviceList();
       if (device.value || token !== discoveryToken) break;
       // 扫码弹窗开着时**不接管**：人正盯着弹窗里的「可用设备」，自动进首页会把那份
-      // 列表直接抽走。多台在线时也不接管，规则在 `pickAdoptableDevice`。
+      // 列表直接抽走。多台在线时只接管上次用过的那台（`scrcpyConfig.lastDeviceStableId`
+      // 只有这一个读取处），规则在 `pickAdoptableDevice`。
       const connected =
-        autoAdopt && !deviceDialogVisible.value ? pickAdoptableDevice(devices) : null;
+        autoAdopt && !deviceDialogVisible.value
+          ? pickAdoptableDevice(devices, scrcpyConfig.lastDeviceStableId)
+          : null;
       if (connected) {
         adoptDevice(connected);
         break;

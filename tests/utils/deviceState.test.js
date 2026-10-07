@@ -148,6 +148,21 @@ describe('pickAdoptableDevice', () => {
     expect(pickAdoptableDevice([currentRow(), otherRow()])).toBeNull()
   })
 
+  it('两台同时在线时，接管上次用过的那台（记过谁 = 用户自己已经答过这个问题）', () => {
+    expect(pickAdoptableDevice([currentRow(), otherRow()], 'c0ffee00')?.stableId).toBe('c0ffee00')
+    expect(pickAdoptableDevice([currentRow(), otherRow()], USB)?.stableId).toBe(USB)
+  })
+
+  it('记的那台不在这份列表里时回到「不接管」，不能因为认得就随便挑一台', () => {
+    expect(pickAdoptableDevice([currentRow(), otherRow()], 'deadbeef')).toBeNull()
+    expect(pickAdoptableDevice([currentRow(), otherRow()])).toBeNull()
+  })
+
+  it('记的那台待授权、只有另一台可连接时，接管可连接那台（一条规则不因记忆而落空）', () => {
+    const pending = { ...otherRow(), connected: false }
+    expect(pickAdoptableDevice([currentRow(), pending], 'c0ffee00')?.stableId).toBe(USB)
+  })
+
   it('可连接的只有一台、另一台待授权时接管那台', () => {
     const pending = { ...otherRow(), connected: false }
     expect(pickAdoptableDevice([currentRow(), pending])?.stableId).toBe(USB)

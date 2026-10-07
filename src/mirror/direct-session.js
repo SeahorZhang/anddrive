@@ -52,13 +52,27 @@ function contentCss() {
   return cssViewport();
 }
 
+/** 「大屏模式」这一个判据：尺寸口径、要不要 flex 与跟随器都读它（`buildMirrorOptions` 里同一开关）。 */
+function largeScreenMode() {
+  return current.info?.config?.largeScreenDisplay === true;
+}
+
 /**
- * 虚拟显示尺寸的唯一算法：窗口 CSS × 画质档位倍率（dpi 同倍，于是 1dp = 1 CSS px）。
- * 建显示和后续 resizeDisplay 必须走同一个公式，否则初始密度与跟随期的密度会错位。
- * 档位取本会话建立时那份 config：dpi 在建显示时定死，中途换档会让 1dp ≠ 1 CSS px。
+ * 虚拟显示尺寸的唯一算法（建显示与后续 resizeDisplay 必须同源，否则初始密度与跟随期密度错位）：
+ * - **大屏模式**：窗口 CSS × 画质档位倍率，dpi 同倍，于是 1dp = 1 CSS px。档位整场不变
+ *   （`resizeDisplay` 只带宽高、不带 dpi，dpi 在建显示时定死）。
+ * - **默认（上游原生产物）**：窗口画面区的**物理像素**（CSS × `devicePixelRatio`），并且
+ *   **不给密度** —— 上游 `NewDisplayCapture.scaleDpi` 会按长边等比把主屏密度缩到新尺寸，
+ *   长边 dp 数与主屏一致，版式仍由设备决定；同时 1 个显示像素正好落在 1 个屏幕物理像素上，
+ *   按 px 写死的控件（抖音弹幕、顶部那排 tab）不再被整帧 downscale 压小。
+ * 主进程没给到设备画面比例（`screenSize`）时整块不给尺寸：窗口形状不可信，退上游默认更安全。
  */
 function displayFor(css) {
-  return computeDisplayMetrics(css.width, css.height, current.info?.config?.quality);
+  if (largeScreenMode()) {
+    return computeDisplayMetrics(css.width, css.height, current.info?.config?.quality);
+  }
+  const dpr = window.devicePixelRatio || 1;
+  return { width: Math.round(css.width * dpr), height: Math.round(css.height * dpr) };
 }
 
 /**
@@ -67,6 +81,7 @@ function displayFor(css) {
  * 开出一块错尺寸的显示（2026-09-28 实测 512x512/480）。
  */
 function initialDisplay(info) {
+  if (!info?.screenSize) return undefined;
   const css = info?.initialCss;
   return displayFor(css?.width > 0 && css?.height > 0 ? css : contentCss());
 }
@@ -175,35 +190,38 @@ export async function startSession(
   // 之后应用仍可能被别的投屏软件搬走：只负责把入口亮出来，要不要接回由用户点。
   current.stopStolenWatch = watchAppStolen(onStolen);
 
-  // 虚拟显示跟随窗口（scrcpy `--flex-display` / -x 语义）：官方 resizeDisplay
-  // 控制消息驱动，窗口一变化虚拟显示即按窗口尺寸重排（排版随之变化）。
+  // 虚拟显示跟随窗口（scrcpy `--flex-display` / -x 语义）**只在大屏模式启动**：
+  // 默认模式的显示就是主屏尺寸与密度，一路不动，拖窗口只是画面缩放（`src/mirror/App.vue` 的 contain）。
+  // 官方 resizeDisplay 控制消息也只有开了 flex 的显示能用（服务端 `requestResize` 对非 flex 显示直接抛错）。
   //
-  // 只在尺寸真的变化时才下发：初始尺寸已用于创建虚拟显示（`initialDisplay()`），
-  // 启动阶段再补发一条完全相同的请求会让服务端白走一次 `virtualDisplay.resize()`
-  // → capture reset；而虚拟显示是 `VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT`，
-  // 每次配置变更设备上的应用都会重新决定方向，表现出来就是镜像画面反复旋转。
-  // 合并/去重逻辑见 `src/mirror/displayFollow.js`。
+  // 只在尺寸真的变化时才下发：建显示用的那份尺寸已经定死（`initialDisplay()`），启动阶段再补发一条
+  // 完全相同的请求会让服务端白走一次 `virtualDisplay.resize()` → capture reset；而虚拟显示是
+  // `VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT`，每次配置变更设备上的应用都会重新决定方向，
+  // 表现出来就是镜像画面反复旋转。合并/去重逻辑见 `src/mirror/displayFollow.js`。
   //
   // 尺寸来自**画面区**（dev 时比窗口窄，右侧那条 HUD 边栏不算）的 ResizeObserver，
   // 而不是 window 的 `resize` 事件 + innerWidth：macOS 上窗口被系统缩放/吸附时，resize 事件
   // 可能滞后甚至不触发，innerWidth 会读到旧值，导致宽度不跟随。
-  const follower = createDisplayFollower({
-    // 手一拖就通知页面盖遮罩（`onIntent` 每次尺寸请求都回调），停手合并完才真正下发；
-    // 如果合并下来发现尺寸没变（拖出去又拖回来），用 `onSkip` 让页面把遮罩撤掉。
-    onIntent: (size) => onReflowStart?.(size),
-    onSkip: () => onReflowAbort?.(),
-    onSent: () => onReflowSent?.(),
-    send: (size) => controller?.resizeDisplay({ width: size.width, height: size.height }),
-  });
-  follower.seed(createdDisplay);
-  current.follower = follower;
+  if (largeScreenMode()) {
+    const follower = createDisplayFollower({
+      // 手一拖就通知页面盖遮罩（`onIntent` 每次尺寸请求都回调），停手合并完才真正下发；
+      // 如果合并下来发现尺寸没变（拖出去又拖回来），用 `onSkip` 让页面把遮罩撤掉。
+      onIntent: (size) => onReflowStart?.(size),
+      onSkip: () => onReflowAbort?.(),
+      onSent: () => onReflowSent?.(),
+      send: (size) => controller?.resizeDisplay({ width: size.width, height: size.height }),
+    });
+    // 种子是**服务端真开出来的那块显示**（这条路上就是我们算并传给它的那份），拿错会压掉第一次真实 resize。
+    follower.seed(createdDisplay);
+    current.follower = follower;
 
-  // observe() 会立即回调一次当前尺寸：窗口在会话建立期间变过的话，这次就会补上。
-  // dev 的 HUD 边栏只在渲染层存在，`initialCss`（主进程算的整窗内容区）比画面区宽，
-  // 所以首帧往往是一次**真实的尺寸修正** —— 与上面说的「补发完全相同的请求」不是一回事。
-  const observer = new ResizeObserver(() => follower.request(displayFor(contentCss())));
-  observer.observe(contentEl ?? document.documentElement);
-  current.resizeObserver = observer;
+    // observe() 会立即回调一次当前尺寸：窗口在会话建立期间变过的话，这次就会补上。
+    // dev 的 HUD 边栏只在渲染层存在，`initialCss`（主进程算的整窗内容区）比画面区宽，
+    // 所以首帧往往是一次**真实的尺寸修正** —— 与上面说的「补发完全相同的请求」不是一回事。
+    const observer = new ResizeObserver(() => follower.request(displayFor(contentCss())));
+    observer.observe(contentEl ?? document.documentElement);
+    current.resizeObserver = observer;
+  }
 
   report("ready", {
     codec: video.metadata.codec,

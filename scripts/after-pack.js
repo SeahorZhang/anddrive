@@ -30,6 +30,8 @@ export default async function afterPack(context) {
   requireFile(path.join(resources, 'helper-app.apk'))
 
   requireFile(path.join(resources, 'scrcpy', 'scrcpy-server'))
+  // 「大屏模式」用的那份带补丁的产物也必须在包里，缺它则开关打开起不了会话。
+  requireFile(path.join(resources, 'scrcpy', 'patched', 'scrcpy-server'))
 
   const adbPath = path.join(resources, 'adb', 'mac', 'adb')
   requireFile(adbPath)

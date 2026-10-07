@@ -53,7 +53,13 @@ const env = vi.hoisted(() => {
       handle: (channel, fn) => handlers.set(channel, fn),
       on: (channel, fn) => handlers.set(channel, fn),
     },
-    screen: { getPrimaryDisplay: () => ({ workAreaSize: { width: 1440, height: 900 } }) },
+    screen: {
+      // 主进程建窗口前读这块屏的可用区，把窗口按设备画面比例开。
+      getPrimaryDisplay: () => ({
+        workAreaSize: { width: 1440, height: 900 },
+        workArea: { width: 1440, height: 900 },
+      }),
+    },
     app: { getPath: () => '' },
   }
 })
@@ -70,7 +76,9 @@ vi.mock('electron', () => ({
 vi.mock('../../electron/adb.js', () => ({
   ensureServer: async () => {},
   scrcpyServerPath: () => '/tmp/scrcpy-server',
-  getPhysicalScreenSize: async () => ({ width: 1200, height: 2608 }),
+  // 设备物理分辨率：默认按 1200x2608 回；serial 带 `unknown` 的模拟 `wm size` 读不到（回 null）。
+  getPhysicalScreenSize: async (serial) =>
+    String(serial ?? '').includes('unknown') ? null : { width: 1200, height: 2608 },
   onDeviceTeardown: (hook) => {
     env.teardownHooks.push(hook)
     return () => {
@@ -128,6 +136,32 @@ describe('mirror session 启动参数', () => {
     expect(init.label).toBe('com.example.app')
   })
 })
+
+// 默认模式的虚拟显示尺寸取自「窗口画面区的物理像素」，所以窗口形状必须在建之前就对：
+// 横窗会开出一块横显示，竖屏 app 立刻换版式（`mirrorWindowBounds` 照设备画面比例 fit 可用区）。
+describe('镜像窗口照设备画面比例开', () => {
+  it('竖屏手机 → 等比竖窗，并把设备分辨率透传给镜像页（它据此决定给不给显示尺寸）', async () => {
+    await startMirrorSession({ serial: 'dev-shape', packageName: 'com.example.app' })
+    const win = env.windows.at(-1)
+    // adb mock 回 1200x2608；可用区 1440x900 减 80 边距 = 1360x820 → 高顶满 820，宽按比 377。
+    expect({ width: win.options.width, height: win.options.height }).toEqual({
+      width: 377,
+      height: 820,
+    })
+    expect(initFrom(win).screenSize).toEqual({ width: 1200, height: 2608 })
+  })
+
+  it('读不到设备分辨率时退回 850x600，并把 screenSize=null 带给镜像页', async () => {
+    await startMirrorSession({ serial: 'dev-shape-unknown', packageName: 'com.example.app' })
+    const win = env.windows.at(-1)
+    expect({ width: win.options.width, height: win.options.height }).toEqual({
+      width: 850,
+      height: 600,
+    })
+    expect(initFrom(win).screenSize).toBeNull()
+  })
+})
+
 
 // 切换设备不该把已经开着的镜像关掉：主进程的 release 带 keepMirror，
 // 会话的清理钩子见到它就原样返回。

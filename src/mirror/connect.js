@@ -41,9 +41,9 @@ export function createScid() {
  * 随包 server 的**选项集与 4.1 逐字相同**（5.0 只改了服务端 `AudioPlaybackCapture`/`CameraCapture`，
  * `Options.java` 一字未动），差别只在 server 自己烤进去的版本号：它拿客户端声明的版本做等值校验，
  * 不等就直接退出 → 所以第二个参数必须显式报 `SCRCPY_SERVER_VERSION`，不能靠库里的默认 "4.1"。
- * 虚拟显示尺寸由调用方算好后传入（`direct-session.js` 是全项目唯一算它的地方），
- * 这里只拼成协议字符串；返回该尺寸供调用方初始化「跟随窗口」的请求合并器，
- * 避免启动阶段再下发一条完全相同的 resizeDisplay。
+ * 虚拟显示尺寸由调用方算好后传入（`direct-session.js` 是全项目唯一算它的地方），要不要用它拼成
+ * 协议字符串由 `buildMirrorOptions` 按「大屏模式」决定 —— 默认（上游原生 server）传空串 = 主屏尺寸。
+ * 返回该尺寸供调用方初始化「跟随窗口」的请求合并器，避免启动阶段再下发一条完全相同的 resizeDisplay。
  * @param {{ adb: unknown, serverPath: string, config: unknown,
  *           display: { width: number, height: number, dpi: number } }} params
  * @returns {Promise<{ client: unknown, display: { width: number, height: number, dpi: number } }>}
@@ -53,20 +53,17 @@ export async function startScrcpy({ adb, serverPath, config, display, caps }) {
   const { DefaultServerPath } = req("@yume-chan/scrcpy");
   const { ReadableStream } = req("@yume-chan/stream-extra");
   const { createReadStream } = req("node:fs");
-  const { buildMirrorOptions, resolveNativeCodec, formatNewDisplay } = await import(
-    "../../electron/mirror/options.js"
-  );
+  const { buildMirrorOptions, resolveNativeCodec } = await import("../../electron/mirror/options.js");
 
   const { codec, downgraded } = resolveNativeCodec(config, caps);
   if (downgraded) {
     console.warn(`[mirror] 自研引擎暂不支持所选编码，改用 ${codec}`);
   }
-  const newDisplay = formatNewDisplay(display);
   const file = ReadableStream.from(createReadStream(serverPath));
   await AdbScrcpyClient.pushServer(adb, file, DefaultServerPath);
   const options = new AdbScrcpyOptions4_1(
     {
-      ...buildMirrorOptions(config, { videoCodec: codec, newDisplay }),
+      ...buildMirrorOptions(config, { videoCodec: codec, display }),
       scid: createScid(),
     },
     { version: SCRCPY_SERVER_VERSION },

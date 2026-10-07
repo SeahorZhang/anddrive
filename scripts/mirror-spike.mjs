@@ -18,11 +18,16 @@ import { AdbServerNodeJsClient } from "@yume-chan/adb-server-node-tcp";
 import { AdbScrcpyClient, AdbScrcpyOptions4_1 } from "@yume-chan/adb-scrcpy";
 import { DefaultServerPath, ScrcpyVideoCodecNameMap } from "@yume-chan/scrcpy";
 import { ReadableStream } from "@yume-chan/stream-extra";
-import { SCRCPY_SERVER_VERSION } from "../shared/scrcpyConfig.js";
+import { scrcpyServerResource, SCRCPY_SERVER_VERSION } from "../shared/scrcpyConfig.js";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const adbBin = path.join(root, "resources/adb/mac/adb");
-const serverPath = path.join(root, "resources/scrcpy/scrcpy-server");
+// 默认跑上游原生那份产物；`SPIKE_SERVER=patched` 换带 `debug.anddrive.vd.*` 的那份，同一套参数 A/B。
+const serverPath = path.join(
+  root,
+  "resources",
+  scrcpyServerResource({ largeScreenDisplay: process.env.SPIKE_SERVER === "patched" }),
+);
 
 const [, , serial, codec = "h265", rawOut, seconds = "15"] = process.argv;
 if (!serial) {
@@ -35,7 +40,9 @@ if (!serial) {
 //   SPIKE_FPS=<n>                maxFps（默认 60）
 //   SPIKE_BITRATE=<M>            码率上限，单位 Mbps（默认 24）
 //   SPIKE_MOTION=1               在镜像那块显示上匀速来回滑动，提供受控运动源
-const envDisplay = process.env.SPIKE_DISPLAY || "1920x1080/320";
+// 应用默认路径发的是**空串**（上游语义：主屏尺寸 + 主屏密度）。空串会被下面的 `||` 吞成默认值，
+// 所以给它一个显式入口：`SPIKE_NO_DISPLAY=1` 才是和线上默认路径一致的那一条。
+const envDisplay = process.env.SPIKE_NO_DISPLAY ? "" : process.env.SPIKE_DISPLAY || "1920x1080/320";
 const envFps = Number(process.env.SPIKE_FPS || 60);
 const envBitRateM = Number(process.env.SPIKE_BITRATE || 24);
 const driveMotion = process.env.SPIKE_MOTION === "1";
@@ -111,14 +118,20 @@ if (driveMotion) {
   } else {
     const [geom] = envDisplay.split("/");
     const [dw, dh] = geom.split("x").map(Number);
-    const cx = Math.round(dw * 0.5);
-    const y0 = Math.round(dh * 0.72);
-    const y1 = Math.round(dh * 0.28);
-    const loop = `while true; do input -d ${displayId} swipe ${cx} ${y0} ${cx} ${y1} 300; input -d ${displayId} swipe ${cx} ${y1} ${cx} ${y0} 300; done`;
-    motion = spawn(adbBin, ["-s", serial, "shell", loop], { stdio: "ignore" });
-    console.log("[spike] 运动源已启动（300ms 单程来回滑）");
-    // 让列表先动起来，再开始统计（头几秒还在惯性滚动）。
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (!(dw > 0) || !(dh > 0)) {
+      // 不传尺寸（`SPIKE_NO_DISPLAY=1`）时显示是主屏尺寸，这里的坐标得从设备实际尺寸取，
+      // spike 不去猜：宁可跳过运动源，也不要往一块未知的显示上滑。
+      console.warn("[spike] 本次没传显示尺寸，跳过运动源（帧数只反映内容动静）");
+    } else {
+      const cx = Math.round(dw * 0.5);
+      const y0 = Math.round(dh * 0.72);
+      const y1 = Math.round(dh * 0.28);
+      const loop = `while true; do input -d ${displayId} swipe ${cx} ${y0} ${cx} ${y1} 300; input -d ${displayId} swipe ${cx} ${y1} ${cx} ${y0} 300; done`;
+      motion = spawn(adbBin, ["-s", serial, "shell", loop], { stdio: "ignore" });
+      console.log("[spike] 运动源已启动（300ms 单程来回滑）");
+      // 让列表先动起来，再开始统计（头几秒还在惯性滚动）。
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
   }
 }
 

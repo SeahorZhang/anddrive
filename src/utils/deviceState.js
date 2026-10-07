@@ -98,12 +98,18 @@ export function markDevicesKnown(devices, seen) {
 }
 
 /**
- * 没连着设备时的静默接管规则：**只有一台**可连接才接管。
- * 两台以上就是「接管哪台」的决定，得留给用户点，随便挑一台等于把另一台顶掉。
- * @param {{ connected: boolean }[]} devices
+ * 没连着设备时的静默接管规则：
+ * - **只有一台**可连接 → 接管它。
+ * - **两台以上** → 只接管「上次用过的那台」（`lastStableId`）；对不上就谁都不接管，
+ *   把选择留给用户点。随便挑一台等于把另一台顶掉，但用户上一轮刚用过谁，是他自己
+ *   已经答过的问题 —— 所以这一条不算静默降级。
+ * @param {{ connected: boolean, stableId: string }[]} devices
+ * @param {string} [lastStableId] 上次接管的设备的稳定标识，空 = 没记过或开关已关
  * @returns {{ connected: boolean } | null}
  */
-export function pickAdoptableDevice(devices) {
+export function pickAdoptableDevice(devices, lastStableId = "") {
   const candidates = devices.filter((d) => d.connected)
-  return candidates.length === 1 ? candidates[0] : null
+  if (candidates.length === 1) return candidates[0]
+  if (!lastStableId || candidates.length < 2) return null
+  return candidates.find((d) => d.stableId === lastStableId) ?? null
 }

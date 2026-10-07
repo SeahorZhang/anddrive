@@ -1,9 +1,10 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { BrowserWindow, ipcMain, screen } from "electron";
 import path from "node:path";
 import { CHANNELS } from "../ipcContract.js";
 import {
   ensureServer,
   getDeviceVideoCodecs,
+  getPhysicalScreenSize,
   isMiuiDevice,
   onDeviceTeardown,
   scrcpyServerPath,
@@ -147,8 +148,11 @@ export async function startMirrorSession(request) {
   await ensureServer();
   const serverPath = scrcpyServerPath();
   const prefs = resolveRuntimePrefs(request?.config);
-  // 窗口初始尺寸固定 850x600，不看设备分辨率、也不看桌面可用区域（见 mirrorWindowBounds）。
-  const bounds = mirrorWindowBounds();
+  // 窗口照**设备画面比例**开：默认模式的虚拟显示尺寸就取自窗口画面区的物理像素，
+  // 窗口形状不对会开出一块错比例的显示（横窗 → 横显示 → 竖屏 app 直接换版式）。
+  // 读不到设备分辨率时退回既有 850x600，渲染层那边同时不给显示尺寸。
+  const screenSize = await getPhysicalScreenSize(serial).catch(() => null);
+  const bounds = mirrorWindowBounds(screenSize, screen.getPrimaryDisplay().workArea);
   // 设备能编码哪些：给镜像页落地 `auto`，也顺带进 pendingInit（渲染层不再自己查）。
   const deviceEncoders = await getDeviceVideoCodecs(serial).catch(() => null);
 
@@ -189,6 +193,9 @@ export async function startMirrorSession(request) {
     config: request?.config ?? null,
     prefs,
     initialCss: { width: content.width, height: content.height },
+    // 设备画面比例（`wm size` 的 Physical）：渲染层据此决定要不要给虚拟显示尺寸 ——
+    // 拿不到就不给，`new_display` 退空串走上游默认，不自己编一个比例。
+    screenSize,
     // 只把「能用的那几个」带给镜像页落地 auto；全量清单是设置页的事。
     deviceCodecs: deviceEncoders?.usable ?? null,
     // 图标随启动参数一起给：镜像页为「接回」横幅取一个图标，不该去读整台设备的

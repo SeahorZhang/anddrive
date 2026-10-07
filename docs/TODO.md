@@ -65,7 +65,7 @@
 - 抖音适配随 `081f110` 删干净；`NATIVE_MIRROR.md` 写明「仓库不留单 app 适配」。全仓（`src/` + `electron/` + `shared/`）**没有任何按包名 / 应用名 / 机型 / 厂商分支的可执行代码**。历史产生过的 `padMode.js`、`kickDisplaySize`、`relayout.js`、`frameProbe.js`、`tablet` 模式、按包豁免全部删除。
 - 仅剩注释痕迹：`shared/scrcpyConfig.js` 的 `DISPLAY_QUALITY_TIERS` 注释（默认档位选 sharp 的理由是抖音顶部 tab 像素硬编码）、`electron/mirror/appSession.js:5-6`（引 MIUI `SecondaryDisplayLauncher` 行为）、`src/mirror/displayFollow.js:9`、测试 fixture 里的 `com.ss.android.ugc.aweme`。
 - 仍在跑的**设备类别分支**（不算 app 定制，但属特殊处理，保留还是收敛需拍板）：跳过 `emulator-*` 有三处（`listConnectDevices` / `getConnectedDevice` / `resolveDeviceStableId` 附近）；`getConnectedDevice` 优先带 `:` 或 `._adb-tls-connect` 的无线 serial；设备网络信息里优先 `wlan` 网卡；设备名读 `ro.product.marketname`（小米口味）。
-- `debug.anddrive.vd.isr` 是留作 A/B 的逃生口，**既定接口，别动**。
+- **仍在跑的产物分支（2026-10-07 起）**：设置页「大屏模式」决定用哪一份随包 server（判据只在 `shared/scrcpyConfig.js` 的 `scrcpyServerResource`），默认是上游原生那份 —— 于是补丁的三个 prop `debug.anddrive.vd.isr` / `.pres` / `.rot` **默认路径已经用不到了**（产物里没有那些代码），只有开关打开才是既定接口。要 A/B 两条产物：`SPIKE_SERVER=patched pnpm mirror:spike …`。
 
 ---
 
@@ -333,18 +333,19 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 | # | 项 | 状态与备注 |
 | --- | --- | --- |
 | P0-3 | 操作进行态与进度反馈 | Helper 安装/升级分阶段、图标补取 `已完成/总数`、禁用重复触发并暴露取消重试 |
-| P0-4 | 设置持久化 | 上次设备 serial、scrcpy 默认参数、**窗口几何**、自动重连开关 |
+| P0-4 | 设置持久化 | ~~上次设备~~（已做：`lastDeviceStableId`，见 `ARCHITECTURE.md` §4）、scrcpy 默认参数（已做）；剩 **窗口几何**、**自动重连开关**（`useConnectionPreferences.autoReconnect` 目前只是会话内的 ref，重启就回到默认开） |
 | P0-5 | 列表刷新与失败重试 | 刷新入口、图标批次指数退避（当前失败只记录）、区分「无应用」与「读取失败」空态 |
 | P0-6 | 测试与 CI | = O12 + O13 |
 | P1-1 | 搜索/排序 | 拼音首字母搜索、名称/安装时间排序、MRU（依赖 P1-4）。注意现状**根本没有 MRU**（`ARCHITECTURE.md` §3） |
 | P1-4 | MRU 跨会话持久化 | 按设备记录最近启动 + 上限淘汰 + 损坏降级为空；数据源可用 H6 |
 | P2-4 | 快捷键与命令面板 | ⌘K 面板、⌘R 刷新、⌘, 设置、Esc 关闭 |
 | P2-5 | 分组、标签与隐藏 | 自定义分组/标签/隐藏/显示名，本地持久化 |
-| P3-1 | 多设备支持 | **部分完成**：显式切换下拉已上线（`PageHeader.vue` + `adb:releaseDevice`，只切活动设备、保留 transport）；冷启动与自动重连都不再静默挑设备（`pickAdoptableDevice` / `getConnectedDevice` / `watchNewConnectedDevices`，见 `ARCHITECTURE.md` §4）；切换设备不再关掉已开着的镜像（`adb:releaseDevice` 的 `keepMirror`）。**待决策**：「多台同时投屏」要不要正式做；动手前先补 §1 那条 **D7 的真机验证**（多台同时广播的命名） |
-| P3-2 | 记忆设备与启动自动重连 | 启动读上次 serial → mDNS 解析 → connect → 直接进首页。同样卡在 D7 的真机验证；冷启动时别名表还没建立，解析要能容错 |
+| P3-1 | 多设备支持 | **部分完成**：显式切换下拉已上线（`PageHeader.vue` + `adb:releaseDevice`，只切活动设备、保留 transport）；冷启动与自动重连都不再静默挑**没记过的**设备（`pickAdoptableDevice` / `getConnectedDevice` / `watchNewConnectedDevices`，见 `ARCHITECTURE.md` §4；多台时唯一的例外是上次接管过的那台，见 P3-2）；切换设备不再关掉已开着的镜像（`adb:releaseDevice` 的 `keepMirror`）。**待决策**：「多台同时投屏」要不要正式做；动手前先补 §1 那条 **D7 的真机验证**（多台同时广播的命名） |
+| P3-2 | 免扫码重连的真机验证 | 功能已上线（记忆上次设备 + 接管，`ARCHITECTURE.md` §4），**验证还欠着**：重启手机、关掉再开无线调试（端口会换）、以及 adb server 自己那条自动连的链路靠不靠得住 —— 现场见过 `adb mdns services` 回空表而 `adb-…+_adb-tls-connect._tcp` 那条 transport 仍在。若自动连不可靠再谈桌面侧主动 `adb connect`（**别**照 AirSync 加手机侧上报通道，已评估不做） |
 | P3-3 | 自动更新与提示 | 自签名 + 非公证，`electron-updater` 需适配；建议先做"更新提示 + 手动安装" |
 | P3-4 | 深色模式与 i18n | 深色已上线（`src/styles/index.css` 双主题 token + `composables/useTheme.js`，设置页「深色模式」开关，2026-09-30）；剩**文案抽离**（i18n） |
 | P3-5 | 新手引导与帮助 | 首次启动分步引导（开无线调试 → 扫码 → 浏览/启动）；F7 是它的廉价前半 |
+| 镜像 P0 | **默认路径换产物与换尺寸口径后的真机账**（2026-10-07） | 默认产物 = 上游原生；`new_display` 只给 `<宽>x<高>`（窗口画面区的物理像素，CSS × DPR），**不给密度**（上游 `scaleDpi` 按长边等比 → 长边 dp 数照主屏）、**不下发 `flex_display`** ⇒ 不跟随窗口；窗口在建之前照设备画面比例 fit（`getPhysicalScreenSize` 读 `wm size`，只读不改）。改这一条的直接原因是用户反馈「弹幕字体很小」：原默认（不传尺寸 = 主屏 2340 行）被等比塞进 820 CSS 高的窗口 = 0.7×，按 px 写死的控件跟着缩；现在 1 显示像素 = 1 屏幕物理像素。**设备侧已实测**：`SPIKE_DISPLAY=756x1640` → 显示 756x1640、密度 **308**（= 440×1640/2340）、h265 正常出帧。**还没在 UI 上验的**：弹幕实际观感（是否真的大约 1/0.7 ≈ 1.4 倍）、版式是否仍与主屏一致、默认路径下固定竖屏应用的铺满（`sw866dp land` 那组效果仍只在**大屏模式**里，要回来就开那个开关）、三档码率观感。A/B 产物用 `SPIKE_SERVER=patched pnpm mirror:spike …` |
 | 镜像 P1 | 指针习惯 | 右键→返回、中键→主屏（操作栏已删，鼠标侧手势是主要入口）；多指/捏合（`pointerId` 现在固定 0） |
 | 镜像 P2 | 截图保存、会话列表增强（重开/置顶）、窗口尺寸记忆、断线自动重连（复用 `adb.js` 重连逻辑） | |
 | 镜像 P3 | AV1 验证并移出回落名单、控制错误可见性（现仅 `console.warn`）、消费 `client.output` 把 scrcpy 报错并入异常退出提示、设备侧旋转剩余观感（`--no-vd-system-decorations` 或把启动应用放服务端侧） | |
@@ -364,7 +365,7 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 - **剪贴板同步 G3 = 已放弃**：服务端写完同进程回读拿到 `null`，这一条判据分不清「读被挡」与「写没落地」，**不足以下"ROM 挡剪贴板"的结论**（曾据此断言过，被驳回，记录在此免得重犯）。也别动 appop（`READ_CLIPBOARD` 本来就 allow）。
 - **采集别人的虚拟显示可以，resize 与销毁不行**（`VirtualDisplay` 与创建它的进程绑死）。多窗口共览一块显示需要一个常驻持有者，这一档暂不做。
 - **不要用 `audioDup`**（会让手机出声，与"投屏时手机静音"的要求相反）。
-- **`wm size` / `wm density` 改物理屏、compat 强制平板那套** —— 已删，别再碰；真横屏走自编 server 的 `setIgnoreActivitySizeRestrictions`。唯一还挂着的一条未验路子：那排抖音 tab 也可能是按**物理屏 density**（恒 480）算而非真写死，若是，临时抬 `wm density` 能两全 —— 但设备有锁屏密码，测不了。
+- **`wm size` / `wm density` 改物理屏、compat 强制平板那套** —— 已删，别再碰；真横屏走「大屏模式」那份补丁产物（`VirtualDisplayConfig.setIgnoreActivitySizeRestrictions`），**默认路径没有这个效果**（2026-10-07 改：默认产物 = 上游原生、显示 = 主屏尺寸与密度）。唯一还挂着的一条未验路子：那排抖音 tab 也可能是按**物理屏 density**（恒 480）算而非真写死，若是，临时抬 `wm density` 能两全 —— 但设备有锁屏密码，测不了。
 - **不做老用户兼容（2026-09-28 决定，迁移代码已全删）**：收藏的传输地址桶、`scrcpyConfig` 的 localStorage 旧参数、快照里的内联图标迁移、`stored` 标志 —— 一律不再写"升级一次"的适配，代价见 §1 那条。**默认别再提议加迁移**；真要发布时靠一次性手动清缓存解决。（别名表 `device-aliases.json` 不是兼容代码，是运行时必需，留着。）
 - **非目标**：Windows/Linux、账号与云同步、遥测/崩溃上报（若引入必须 opt-in 且可离线）、删除设备端配对记录（断开只移 transport）、把 helper 改成常驻后台/监听端口的服务。
 - **待决策**：自动更新方案、拼音搜索是否引依赖（建议预生成索引）、录屏是否带音频（建议先做无音频）。
