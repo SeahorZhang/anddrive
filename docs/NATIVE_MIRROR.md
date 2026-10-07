@@ -25,7 +25,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 | --- | --- | --- |
 | 协议与连接 | `src/mirror/connect.js` | Tango 官方 `AdbServerNodeJsClient` + `AdbScrcpyClient`；push server、`AdbScrcpyOptions4_0`、scid 由官方库直接处理 |
 | 编码能力 | `shared/scrcpyConfig.js` + `src/utils/codecCaps.js` + `src/composables/useCodecCaps.js` | 设备侧扫 `media_codecs*.xml`（`electron/adb.js` 的 `getDeviceVideoCodecs`，按序列号缓存、断开时清），本机侧 `VideoDecoder.isConfigSupported`；两头的能力表喂给 `resolveVideoCodec` 落地 `auto`，设置页与启动对话框用它标记下拉项 |
-| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 4.1 选项；不干预设备屏幕（原「屏幕策略」三选已于 2026-09-29 删除：`keepActive` 不再下发，`setDisplayPower(false)` 那条控制消息也删了）、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口 CSS × 画质档位倍率` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`，档位表 `DISPLAY_QUALITY_TIERS`：compat 1.5 / native 2 / sharp 3，会话建立时定死），dpi 同步乘，于是 **1dp = 1 CSS px**、画面比例恒等于窗口比例。镜像只有大屏一种形态，不再压 600dp dpi 下限、也没有平板 1.5x（两者都已删除），见 §P3「真横屏虚拟显示」。**这条等式只在同一个会话内成立**：`resizeDisplay` 只带宽高、不带 dpi，而 dpi 在建显示时定死，所以档位取自开会话时那份 config 并整场不变，中途换档不会改变已开的窗口（详见 `shared/scrcpyConfig.js:56-59` 的注释与 [`TODO.md`](TODO.md) §3）|
+| 参数映射 | `electron/mirror/options.js` | `ScrcpyConfig` → scrcpy 选项（形状是 Tango 的 `ScrcpyOptions4_1.Init`；随包 5.0 server 的选项集与 4.1 逐字相同）；不干预设备屏幕（原「屏幕策略」三选已于 2026-09-29 删除：`keepActive` 不再下发，`setDisplayPower(false)` 那条控制消息也删了）、恒定 `flexDisplay`（`--flex-display`，窗口 resize → 官方 `resizeDisplay` 控制消息）。虚拟显示初始尺寸与后续跟随尺寸都由渲染层按 `窗口 CSS × 画质档位倍率` 计算（`shared/scrcpyConfig.js` 的 `computeDisplayMetrics`，档位表 `DISPLAY_QUALITY_TIERS`：compat 1.5 / native 2 / sharp 3，会话建立时定死），dpi 同步乘，于是 **1dp = 1 CSS px**、画面比例恒等于窗口比例。镜像只有大屏一种形态，不再压 600dp dpi 下限、也没有平板 1.5x（两者都已删除），见 §P3「真横屏虚拟显示」。**这条等式只在同一个会话内成立**：`resizeDisplay` 只带宽高、不带 dpi，而 dpi 在建显示时定死，所以档位取自开会话时那份 config 并整场不变，中途换档不会改变已开的窗口（详见 `shared/scrcpyConfig.js:56-59` 的注释与 [`TODO.md`](TODO.md) §3）|
 | 显示跟随去重 | `src/mirror/displayFollow.js` | 只在尺寸**真的变化**时下发 `resizeDisplay`：初始尺寸已用于创建虚拟显示，重复下发会让服务端白走一次 `virtualDisplay.resize()` → capture reset，设备侧应用随之重新决定方向（表现为画面反复旋转）；**停手 `RESIZE_SETTLE_MS`（250ms）后才发最终尺寸**（debounce，不是 throttle）。见 §3 排查记录 |
 | 息屏协同保活 | `electron/mirror/miProjection.js` | HyperOS 在息屏时会停止合成那块虚拟显示（画面定住）。做法照小米互联：开会话往 `Settings.Secure` 写 `synergy_mode=1`（等价于它的 `beginSynergy()`），关会话写 0。**每个 MIUI/HyperOS 会话都生效**，且置位必须赶在息屏之前落地。机制与取证见 §3 排查记录 2026-09-29 |
 | 会话生命周期 | `electron/mirror/session.js` | 窗口管理、会话记录、断开/退出清理；`src/mirror/direct-session.js` 与官方流的接线（bootstrap/会话/接回都在这一份里）；横屏虚拟显示由随包 server 的 `VirtualDisplayConfig` 开关决定，见 §P3「真横屏虚拟显示」 |
@@ -37,7 +37,10 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 
 ### 2.1 关键约束
 
-- **协议层依赖 Tango beta**：scrcpy 4.0 / **4.1**（`AdbScrcpyOptions4_1`，VP8/VP9 与 `getEncoders`）都在 `3.0.0-beta.2` 里，版本已在 `package.json` 锁定，升级需回归。
+- **协议层依赖 Tango beta**：`AdbScrcpyOptions4_1`（VP8/VP9 与 `getEncoders`）在 `3.0.0-beta.3` 里，版本已在 `package.json` 锁定，升级需回归。
+  ⚠️ **Tango 目前没有 5.0 的选项类**（`AdbScrcpyOptionsLatest` 就是 `AdbScrcpyOptions4_1`），但**不需要**：scrcpy 5.0 的 server 侧 `Options.java` 与 4.1 一字未改，
+  它只在 `Options.parse` 的**第一个参数**上比对客户端声明的版本号。所以随包 5.0 server 的做法是继续用 `AdbScrcpyOptions4_1`，
+  第二个构造参数显式传 `{ version: SCRCPY_SERVER_VERSION }`（`shared/scrcpyConfig.js` 的常量，唯一出处；漏改 = server 当场退出 = 白屏）。
 - **全用官方库、同一模块副本**：渲染层所有 `@yume-chan/*` 包必须经 preload 注入的
   `window.require` 获取（`sandbox:false` + `nodeIntegration`）。Vite 静态打包镜像侧的
   `@yume-chan/*` 会产生第二份模块实例，stream 内部类（`PushReadableStream`、
@@ -98,13 +101,18 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
   - **不动主屏**：全程没有 `wm size`/`wm density`、没有 compat 开关、没有 force-stop + 重启 app。开会话前后 `wm size` 都只有 `Physical size: 1200x2608`（无 Override），手机本体画面不变，之前「先在手机上打开 app 又消失」的闪动随配方一起消失。
   - 开关位置：server 侧 `debug.anddrive.vd.isr`（默认 `"1"` 生效，设 `0` 可临时关掉做对比）；系统没有该 @hide API 时 `NewDisplayCapture` 自动退回公开 `createVirtualDisplay(name,w,h,dpi,surface,flags)`，老设备不受影响。
   - 重编方式（改动在 `NewDisplayCapture.startNew` 与 `wrappers/DisplayManager.createNewVirtualDisplay(..., ignoreActivitySizeRestrictions, homeSupported)`）：
-    `cd /Users/xh/code/scrcpy-4.1-patched/server && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ANDROID_HOME=~/Library/Android/sdk ANDROID_PLATFORM=36 ANDROID_BUILD_TOOLS=36.1.0 BUILD_DIR=/tmp/vd-build ./build_without_gradle.sh`，产物 `/tmp/vd-build/scrcpy-server` 覆盖到 `resources/scrcpy/scrcpy-server`。替换前已用同一份 client 链路验证视频（h265）+ 音频（Opus，6s 内 245 个音频包）+ `new-display` + `startApp` 全部正常。
-  - **升级到新版本 scrcpy 的做法（2026-09-29 从 4.0 → 4.1 走过一遍，可复用）**：我们的补丁只碰**两个文件** ——
+    `cd /Users/xh/code/scrcpy-5.0-patched/server && JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ANDROID_HOME=~/Library/Android/sdk ANDROID_PLATFORM=36 ANDROID_BUILD_TOOLS=36.1.0 BUILD_DIR=/tmp/vd-build ./build_without_gradle.sh`，产物 `scrcpy-server` 覆盖到 `resources/scrcpy/scrcpy-server`。替换前已用同一份 client 链路验证视频（h265）+ 音频（Opus，6s 内 245 个音频包）+ `new-display` + `startApp` 全部正常。
+  - **升级到新版本 scrcpy 的做法（2026-09-29 从 4.0 → 4.1、2026-10-07 从 4.1 → 5.0 各走过一遍）**：我们的补丁只碰**两个文件** ——
     `video/NewDisplayCapture.java`（三个 `debug.anddrive.vd.*` prop 钩子 + flags 日志 + 无 VirtualDisplayConfig 时的回退）与
     `wrappers/DisplayManager.java`（反射 `VirtualDisplayConfig.Builder` 的那条 `createNewVirtualDisplay(..., ignoreActivitySizeRestrictions, homeSupported)` + `tryOptional`）。
-    步骤：下载**上游同版本**与**旧版本**源码 → `diff -u --label a/... --label b/...` 从旧 patched 树抽出补丁 → 在新版本树里 `patch -p1`（4.1 两处上下文没变，直接过）→
-    `BUILD_DIR` 要先 `mkdir`（脚本不会自己建）→ 编出的 server 版本烤成 `SCRCPY_VERSION_NAME`，**客户端必须同步换 `AdbScrcpyOptions4_x`**，否则版本对不上。
+    步骤：下载**上游同版本**与**旧版本**源码 → `diff -u --label a/... --label b/...` 从旧 patched 树抽出补丁 → 在新版本树里 `patch -p1` →
+    `BUILD_DIR` 要先 `mkdir`（脚本不会自己建）→ 编出的 server 版本烤成 `SCRCPY_VERSION_NAME`，**客户端必须把 `SCRCPY_SERVER_VERSION` 改成同一份**（`src/mirror/connect.js` 与 `scripts/mirror-spike.mjs` 都读它，`pnpm verify-resources` 会拿产物里的版本对账）。
     验证：server stdout 里要看到 `anddrive vd flags=0x… ignoreSizeRestrictions=true`，这行在就说明补丁没丢。
+  - **2026-10-07 那次（4.1 → 5.0）的两条便宜**：① 上游那**两个文件在 5.0 里一字未改** → 补丁不用重做、不用 `patch`，直接从旧 patched 树 `cp` 过去即可；
+    ② 5.0 的全部改动都在 **C 客户端**（`--hwdec` 硬解、EGL/interop、FFmpeg 9.0.2、SDL），我们走 WebCodecs 本来就硬解，**拿不到任何收益**；
+    server 侧只有 `AudioPlaybackCapture`（把可捕获的 `AudioAttributes.USAGE_*` 从 1 种扩到 13 种）与 `CameraCapture.stop()` 不再抛 ——
+    前者只在 `audio_source=playback` 时实例化，我们用的是默认 `output`（`AudioCapture`），**所以这条也碰不到我们**。
+    → 结论：随包 server 该跟着上游走，但**别把「升 scrcpy」当成能拿来承诺体验的项**；真要 audio_source 那一档的收益，得先让 Tango 暴露它。
   - 同时删除：`electron/mirror/padMode.js`（compat + 物理屏改写 + 重启轮询那套配方）、`mirror:padMode` IPC、`LARGE_SCREEN_COMPAT` 常量、`adb.js` 里只为配方服务的 `setLargeScreenCompat` / `overrideDisplayGeometry` / `resetDisplayGeometry` / `getAppWindowGeometry`。
   - 已删的历史方案：`tablet` 平板模式（1.5x 上报）与「dpi 下限把 sw 钉在 600dp 以下」的小屏方案；`computeDisplayMetrics` 就是 `窗口 × DISPLAY_PIXEL_SCALE` + `dpi = 160 × DISPLAY_PIXEL_SCALE`，即 1dp = 1 CSS px。旧参数存盘里的 `tablet` 字段由 `normalizeScrcpyConfig` 静默丢弃。
   - **px 写死的控件 → 倍率现在做成「画质档位」`DISPLAY_QUALITY_TIERS`（compat 1.5 / native 2 / sharp 3，默认 sharp = 老行为）**：抖音有一批控件按 px 写死，顶部那排 tab 最明显 —— 真机量过 dpi 480 下它的字高只有 ~16 物理像素（14sp 本该 42），且 `settings put system font_scale 1.3` 对它**完全无效**（前后两帧一模一样，抖音不吃系统字体缩放）。唯一能动它的是「同样 dp 少给像素」：倍率减半、dp 不变（布局完全一样），那排字相对画面大一倍；对照实验是同一块 588dp 显示的 `1766x2412` 与 `882x1206` 两帧。**但倍率 1 会把整帧放大 2 倍铺到 Retina 背衬上**，用户实测「不光字不清晰，整个画面都不清晰」→ 定回 2（清晰度优先），字随之回到小。两个诉求物理上顶着，只能选落点（1.5 是中间档）。2026-09-20 真横屏之后用户反馈「抖音上边文字有点大」→ 抬到 **2.5**（那排字小约 20%，dp 布局不变；超过 2 属于过采样，码流按平方涨，觉得发软就回 2）。

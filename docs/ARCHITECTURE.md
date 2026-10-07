@@ -46,7 +46,7 @@ Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的 Android 
 | 应用列表 | `electron/adb.js`（helper `app_process`）+ `src/components/home/AppList.vue` | 范围 = **凡 LAUNCHER 拉得起的都列（含系统应用）**；helper 不再按 `FLAG_SYSTEM` 过滤（9-29 改：HyperOS 的「设置」带 SYSTEM 位、日历/计算器更新过反而不带，按这个位筛会随机缺项）。两阶段：先包名/标签，再补图标。`ICON_BATCH_SIZE=20`、并发 3（`AppList.vue:34-39`）。**图标不在 JSON 里**：每张单独成文件 `userData/app-cache/icons-v1/<稳定标识哈希>/<包名哈希>.png`，年龄看文件 mtime（7 天过期）；快照 `apps-v1/<标识哈希>.json` 只存包名与标签，90 天过期、写盘 tmp+rename 原子。冷启动由主进程读本地文件把 `iconUrl` 补回返回值，渲染层拿到的仍是 data URL |
 | 列表排序 | `AppList.vue:68-78` | **收藏组置顶 + 设备返回原序**；没有 MRU、没有 `orderApps()`、没有 `appOrdering.js` |
 | 投屏启动 | `electron/mirror/session.js` 的 `startMirrorSession` → `mirrorInitGet` → `src/mirror/direct-session.js` 的 `bootstrap`/`startSession` | 同设备同应用只开一个窗口（`findAppSession` 命中就 focus 并返回 `reused: true`）；会话起来后 `startApp` + `ensureAppHere` 搬任务 |
-| 画质档位 | `shared/scrcpyConfig.js` `DISPLAY_QUALITY_TIERS` + `DISPLAY_QUALITY_BIT_RATES` | compat 1.5 / native 2 / sharp 3（默认 sharp）。虚拟显示尺寸 = 窗口 CSS × 倍率、dpi = 160 × 倍率，于是 **1dp = 1 CSS px**。**码率上限按档位走**（8M / 16M / 32M），设置页里两者是**同一个下拉**——实测每档稳态码率差 5 倍，拆开只会配错；存盘仍是 `quality` + `bitRate` 两个字段，老配置对不上预设时下拉列一项标灰的「自定义」，不改用户的值（唯一例外：改版前的出厂组合 `sharp + 24M` 由 `normalizeScrcpyConfig` 升级到 `sharp + 32M`）。倍率与码率都**只在开会话时生效**（`resizeDisplay` 不带 dpi；4.1 控制消息里也没有改码率的） |
+| 画质档位 | `shared/scrcpyConfig.js` `DISPLAY_QUALITY_TIERS` + `DISPLAY_QUALITY_BIT_RATES` | compat 1.5 / native 2 / sharp 3（默认 sharp）。虚拟显示尺寸 = 窗口 CSS × 倍率、dpi = 160 × 倍率，于是 **1dp = 1 CSS px**。**码率上限按档位走**（8M / 16M / 32M），设置页里两者是**同一个下拉**——实测每档稳态码率差 5 倍，拆开只会配错；存盘仍是 `quality` + `bitRate` 两个字段，老配置对不上预设时下拉列一项标灰的「自定义」，不改用户的值（唯一例外：改版前的出厂组合 `sharp + 24M` 由 `normalizeScrcpyConfig` 升级到 `sharp + 32M`）。倍率与码率都**只在开会话时生效**（`resizeDisplay` 不带 dpi；5.0 的控制消息里也没有改码率的） |
 | 桌面快捷方式 | `electron/shortcutCore.js`（纯逻辑）+ `electron/shortcut.js` | `.adr` = 正式 UTI `com.anddrive.mirror-shortcut` + `LSHandlerRank: Owner`（只声明后缀会被历史构建副本抢走）；文件里存稳定设备标识，打开时反查地址，参数取主进程最新全局配置。历史注册清理：`pnpm run shortcut:fix` |
 | Helper | `helper-app/…/ListMain.java`，以 `app_process`（shell uid 2000）一次性执行 | **零权限、零后台组件、不监听端口**，stdout 一行 JSON 即退出。`QrPairActivity` 提供"跳到无线调试二维码页"，Mac 侧至今没调用过 |
 | 设备统计 | `electron/adb.js` `getDeviceStats` | getprop/df/battery/meminfo/loadavg/ip 并行采集，30s 缓存 + force 刷新；`df /data` 失败退到 `df /` |
@@ -57,7 +57,7 @@ Vue 3 + Electron（vite / rolldown），**仅 macOS Apple Silicon** 的 Android 
 - **ROM 怪癖嗅探**：卸载「报 Failure 却退出 1」、装 Helper 与 `clearAppData` 靠 stdout 里 `/Success/i` 判定、`exportApk` 靠 `N files pulled` 正则、helper 输出取最外层 `{`…`}` 以躲 linker/ART 噪声（都在 `adb.js`：`uninstallHelper` / `installHelper` / `clearAppData` / `exportApk` 与 `normalizeListOutput`）。这些丑但**是真需要的**。
 - **投屏时手机静音**：服务端 `ROUTE_FLAG_LOOP_BACK`（不传 `audio_dup`）是刻意的 —— 只回环、不在本机渲染。副作用也已知：会话结束、AudioPolicy 撤销后手机当场出声，这不是 bug。要两边同时出声才需要 `audioDup`。
 - **`displayFollow` 用 debounce 不用 throttle**：`RESIZE_SETTLE_MS = 250`（`src/mirror/displayFollow.js:13-23`）。真机量过：throttle 每 150ms 发一步，服务端 300ms 去抖**并没有**合掉中间值，每一步都真的重排虚拟显示 → 画面"转好几次"。相同尺寸直接丢弃，因为重复 `resizeDisplay` 会让服务端白走一次 `virtualDisplay.resize()` → capture reset。
-- **`debug.anddrive.vd.isr` prop**：随包 server 是自编 scrcpy 4.1（`VirtualDisplayConfig.setIgnoreActivitySizeRestrictions`），该 prop 默认 `"1"`、留作 A/B 逃生口，系统缺 @hide API 时自动退回公开 `createVirtualDisplay`。既定接口，不要改成启动参数。
+- **`debug.anddrive.vd.isr` prop**：随包 server 是自编 scrcpy 5.0（`VirtualDisplayConfig.setIgnoreActivitySizeRestrictions`），该 prop 默认 `"1"`、留作 A/B 逃生口，系统缺 @hide API 时自动退回公开 `createVirtualDisplay`。既定接口，不要改成启动参数。
 - **`.catch` 吞掉的分寸**：设备侧探测类失败（读第三个 prop、卸载已卸载的 helper）允许吞；**用户操作的结果不许吞**（收藏写盘失败必须抛，渲染层据此回滚星标）。
 - **虚拟显示尺寸只有一个主人**：显示像素只在 `src/mirror/direct-session.js` 的 `displayFor(css)` 一处算（建显示与后续 `resizeDisplay` 同源），`src/mirror/connect.js` 的 `startScrcpy` 只**接收**算好的 `display`；建显示用的 CSS 优先取主进程传来的 `pendingInit.initialCss`（窗口内容区），读不到才回落 DOM —— 深链冷启动时页面还没排版完，读 DOM 会拿到 Electron 默认的 512x512。相应地 `buildMirrorOptions` 的 `newDisplay` 是**必填**（缺了就抛），拼串走 `formatNewDisplay`：**别再加兜底默认尺寸**，任何写死的 `WxH/dpi` 都与画质档位的 dpi 不符，会静默开出一块错密度的显示。
 - **镜像页不碰设备缓存**：接回横幅要的那个图标随启动参数走（`startMirrorSession` 的 `request.iconUrl` → `sanitizeIcon` → `pendingInit.iconUrl`），不是去 `adb:getCachedApps` 读全量再 find —— 为一格图标花一整轮 IO，且 `.adr` 冷启动时缓存根本还没建。
@@ -102,7 +102,7 @@ electron/
   menu.js            自定义菜单：⌘Q 只关镜像窗口，⌥⌘Q 硬退出
   mdns.js            手写 DNS-SD 报文（UDP 5353）
   mirror/
-    options.js       ScrcpyConfig → scrcpy 4.1 选项、编码解析（auto 落地）、窗口 bounds（纯函数，双端共用）
+    options.js       ScrcpyConfig → scrcpy 选项（随包 server 5.0，选项集同 4.1）、编码解析（auto 落地）、窗口 bounds（纯函数，双端共用）
     session.js       窗口/记录生命周期、断开清理、异常退出通知（不做帧转发）
     appSession.js    同设备同应用复用判定      control.js  DOM 事件 → Tango writer 入参（只有 touch/scroll/key/text；`kind:'action'` 那套已删）
 src/mirror/

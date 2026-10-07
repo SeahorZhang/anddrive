@@ -1,8 +1,10 @@
 #!/usr/bin/env node
+import { execFileSync } from 'node:child_process'
 import { statSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
+import { SCRCPY_SERVER_VERSION } from '../shared/scrcpyConfig.js'
 
 const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -23,6 +25,23 @@ function isReadableFile(relativePath) {
   }
 }
 
+/**
+ * 随包 server 里烤进去的版本（`BuildConfig.VERSION_NAME` 被编译期内联进那句报错字符串）。
+ * server 在 `Options.parse` 的第一个参数上比对客户端声明的版本，**不等就直接退出**，
+ * 表现是镜像白屏 —— 换包时漏改 `SCRCPY_SERVER_VERSION` 就是这个后果，所以拿产物本身来对账。
+ */
+function bakedServerVersion() {
+  const dex = execFileSync(
+    'unzip',
+    ['-p', path.join(projectRoot, 'resources/scrcpy/scrcpy-server'), 'classes.dex'],
+    { maxBuffer: 64 * 1024 * 1024 },
+  )
+  const match = /The server version \(([^)]+)\) does not match the client/.exec(
+    dex.toString('latin1'),
+  )
+  return match ? match[1] : null
+}
+
 const missing = requiredResources.filter((resource) => !isReadableFile(resource))
 if (missing.length > 0) {
   for (const resource of missing) {
@@ -32,4 +51,15 @@ if (missing.length > 0) {
   process.exit(1)
 }
 
+const baked = bakedServerVersion()
+if (baked !== SCRCPY_SERVER_VERSION) {
+  console.error(
+    `随包 scrcpy-server 的版本 (${baked ?? '读不出来'}) 与客户端声明的 ` +
+      `SCRCPY_SERVER_VERSION (${SCRCPY_SERVER_VERSION}) 不一致，镜像会白屏。`,
+  )
+  console.error('改 `shared/scrcpyConfig.js` 的 SCRCPY_SERVER_VERSION，或换回配套的产物。')
+  process.exit(1)
+}
+
 console.log('All packaged resources are present.')
+console.log(`随包 scrcpy-server = ${baked}，与客户端声明一致。`)

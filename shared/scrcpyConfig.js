@@ -126,6 +126,15 @@ export function codecLabel(nameOrMime) {
 }
 
 /**
+ * 随包 `resources/scrcpy/scrcpy-server` 的版本号。
+ * server 在 `Options.parse` 的第一个参数上比对客户端声明的版本，**不等就直接退出**
+ * （`The server version (X) does not match the client (Y)` → 表现为白屏），所以这一处
+ * 必须与 5.0 树里烤进 `BuildConfig.VERSION_NAME` 的那份逐字相同。
+ * 换随包产物时只改这里：`src/mirror/connect.js` 与 `scripts/mirror-spike.mjs` 都读它。
+ */
+export const SCRCPY_SERVER_VERSION = "5.0";
+
+/**
  * 设备上「有哪些视频编码器」的探测命令（adb shell 里跑）。
  * 字符类必须含 `.` 与 `-`：VP8/VP9 的 mime 是 `video/x-vnd.on2.vp8` 这种厂商命名，
  * 只写 `[a-z0-9]` 会在点号处截断成 `video/x`，那两种编码就永远探不到（踩过）。

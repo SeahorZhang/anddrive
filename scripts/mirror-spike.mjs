@@ -18,6 +18,7 @@ import { AdbServerNodeJsClient } from "@yume-chan/adb-server-node-tcp";
 import { AdbScrcpyClient, AdbScrcpyOptions4_1 } from "@yume-chan/adb-scrcpy";
 import { DefaultServerPath, ScrcpyVideoCodecNameMap } from "@yume-chan/scrcpy";
 import { ReadableStream } from "@yume-chan/stream-extra";
+import { SCRCPY_SERVER_VERSION } from "../shared/scrcpyConfig.js";
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const adbBin = path.join(root, "resources/adb/mac/adb");
@@ -49,19 +50,23 @@ console.log("[spike] 推送 scrcpy-server…");
 const source = ReadableStream.from(createReadStream(serverPath));
 await AdbScrcpyClient.pushServer(adb, source, DefaultServerPath);
 
-const options = new AdbScrcpyOptions4_1({
-  video: true,
-  audio: false,
-  control: true,
-  sendStreamMeta: true,
-  videoCodec: codec,
-  videoBitRate: Math.round(envBitRateM * 1_000_000),
-  maxFps: envFps,
-  newDisplay: envDisplay,
-  keepActive: true,
-  // scrcpy server 用 Integer.parseInt(scid, 16) 解析，最高位必须为 0。
-  scid: ((randomBytes(4).readUInt32BE(0) & 0x7fffffff) >>> 0).toString(16).padStart(8, "0"),
-});
+const options = new AdbScrcpyOptions4_1(
+  {
+    video: true,
+    audio: false,
+    control: true,
+    sendStreamMeta: true,
+    videoCodec: codec,
+    videoBitRate: Math.round(envBitRateM * 1_000_000),
+    maxFps: envFps,
+    newDisplay: envDisplay,
+    keepActive: true,
+    // scrcpy server 用 Integer.parseInt(scid, 16) 解析，最高位必须为 0。
+    scid: ((randomBytes(4).readUInt32BE(0) & 0x7fffffff) >>> 0).toString(16).padStart(8, "0"),
+  },
+  // 随包 server 会比对客户端声明的版本，不等直接退出（见 `shared/scrcpyConfig.js`）。
+  { version: SCRCPY_SERVER_VERSION },
+);
 
 console.log(`[spike] 启动 scrcpy-server（${codec} ${envDisplay} fps=${envFps} ${envBitRateM}M）…`);
 const client = await AdbScrcpyClient.start(adb, DefaultServerPath, options);
