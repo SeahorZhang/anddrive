@@ -57,7 +57,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
   某一头整表没探测到（null）按未知放行，不因为探测失败把能用的藏掉；存盘里的值在当前设备不可用时
   仍列出来、标灰并写原因，不让下拉对着空选项。
   `auto` 只活在设置里：`buildMirrorOptions` 收到没解析过的 `auto` 直接抛错，不留静默兜底。
-- **音频仅 Opus**：scrcpy 服务端的音频链路只支持 `opus`（`ScrcpyAudioCodec.Opus`），WebCodecs 直接解码；配置包是 `OpusHead`，preskip 在播放侧裁掉（`src/mirror/audio.js`）。音频不可用（disabled/errored）时自动降级纯画面。
+- **音频仅 Opus**：scrcpy 服务端的音频链路只支持 `opus`（`ScrcpyAudioCodec.Opus`），WebCodecs 直接解码；配置包是 `OpusHead`，`src/mirror/audio.js` 只从它取 channels/sampleRate 建 AudioContext —— **pre-skip 不在我们这边裁**：WebCodecs 的 Opus 注册把 OpusHead 的 pre-skip 定义成解码器的 `[[priming samples to discard]]`，Chromium 已实现（2026-10-07 实测：48kHz 编一段第 0 帧为冲激的 PCM 再解回，4800 帧进 / 4800 帧出、冲激仍在第 0 帧，OpusHead 里 preskip=312），自己再裁一遍等于丢两遍。音频不可用（disabled/errored）时自动降级纯画面。
 - **帧率上限来自显示器**：可见帧率受屏幕刷新率限制（例如 4K@60 屏最高 60fps），与渲染管线无关。
 - **只读之外的能力**：剪贴板、中文 IME、多指手势尚未接入。
 - **构建请注意 chunk 隔离**：镜像页与主页共享模块被 rolldown 合并进主页入口 chunk 会导致镜像页执行主页的 `createApp().mount('#app')`，`vite.config.js` 里已用 `advancedChunks` 把共享代码拆成独立 `mirror-support` chunk，勿删。
@@ -131,7 +131,7 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
 - [x] **镜像窗口绿色按钮 = 全屏**（2026-09-19 完成）：`electron/mirror/session.js` 显式 `fullscreenable: true`。Electron 44 上只要构造时显式传了 `fullscreen`（未勾「全屏启动」即 `false`），窗口就被标成不可全屏，macOS 绿色按钮退化成 zoom（最大化、保留菜单栏）；置顶与全屏启动两种组合下均已验证为可全屏
 - [ ] **设备侧旋转的剩余观感**：虚拟显示带 `VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT`，方向由设备上的应用决定；应用自身在启动过程中换向（例如抖音）仍会让画面转一次。可选缓解：`--no-vd-system-decorations`（不渲染虚拟显示里的 launcher/系统装饰）、或把启动应用放到服务端侧，避免「先显示 launcher 再启动应用」这段换向窗口
 
-- [x] **音频转发**（2026-09-16 完成；2026-09-21 修两处）：scrcpy 服务端 Opus → WebCodecs `AudioDecoder` → AudioContext 排程播放，preskip 裁剪、落后丢帧。
+- [x] **音频转发**（2026-09-16 完成；2026-09-21 修两处；2026-10-07 删掉自造的 pre-skip 裁剪）：scrcpy 服务端 Opus → WebCodecs `AudioDecoder`（pre-skip 由解码器负责，见 §2.1）→ AudioContext 排程播放，落后丢帧。
   - **音频开关以前是死的**：`buildMirrorOptions` 把 `audio: true` 写死、完全不读 `config.audio`，所以设置页那个开关没有任何作用（实测存盘 `audio:true` 也掩盖了这点）。现在按设置下发，关掉的会话不建音频采集。
   - **投屏时手机静音是刻意的**：服务端 `AudioPlaybackCapture(keepPlayingOnDevice)` 为 false（scrcpy 默认，即不传 `audio_dup`）时给 `AudioMix` 设 `ROUTE_FLAG_LOOP_BACK` —— 只回环、**不在本机渲染**，所以声音只在电脑上出。用户 2026-09-21 明确要求「投屏时手机不要发出声音」，因此我们不开 `audioDup`。要知道的副作用：会话结束、AudioPolicy 撤销后手机恢复渲染，正在播的内容会当场出声（这正是「电脑上结束投屏，手机立马响起声音」的由来，不是 bug）；要两边同时出声才需要 `audioDup: true`（`ROUTE_FLAG_LOOP_BACK_RENDER`）。真机验证过两种都能跑：`c2.android.opus.encoder`、5 秒 253 个 Opus 包。
   - 默认值仍是**关**（`DEFAULT_SCRCPY_CONFIG.audio = false`，早先实际行为等于常开）；要声音去设置页打开「音频转发」。

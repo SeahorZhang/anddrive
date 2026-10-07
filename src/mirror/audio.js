@@ -2,7 +2,11 @@
  * 自研镜像的音频播放：opus 包（scrcpy 4.0 唯一音频编码）经 WebCodecs
  * `AudioDecoder` 解码，用 AudioContext 按播放时钟排程，保持低延迟：
  * 提前 AHEAD 秒排队，落后即丢弃旧帧，超前太多直接丢包。
- * 配置包是 `OpusHead`（channels / sampleRate / preskip 都在其中）。
+ * 配置包是 `OpusHead`，这里只取它的 channels / sampleRate（AudioContext 要按它建）。
+ * ⚠️ **不要在这里再裁 pre-skip**：WebCodecs 的 Opus 注册规范把 OpusHead 的 pre-skip
+ * 定义成解码器的 `[[priming samples to discard]]`，Chromium 已实现 —— 实测（48kHz 编一段
+ * 第 0 帧为冲激的 PCM 再解回）4800 帧进、4800 帧出、冲激仍在第 0 帧。自己再裁一次就是
+ * 把同一批样本丢两遍，开头会吞掉 ~6.5ms 且首包对不上时间轴。
  */
 
 const START_AHEAD_S = 0.08 // 首帧前预留的启动缓冲
@@ -14,7 +18,6 @@ function parseOpusHead(data) {
   return {
     channels: data[9],
     sampleRate: data[12] | (data[13] << 8) | (data[14] << 16) | (data[15] << 24),
-    preskip: data[10] | (data[11] << 8),
   }
 }
 
@@ -22,7 +25,6 @@ export function createOpusPlayer({ onStats, onError } = {}) {
   let context = null
   let decoder = null
   let playTime = 0 // 下一个 AudioBuffer 的起点（AudioContext 时钟，秒）
-  let preskip = 0 // 尚需丢弃的开头样本（输出声道数）
   let framesDelta = 0 // 累计解码条数
   let playedCount = 0
 
@@ -57,36 +59,26 @@ export function createOpusPlayer({ onStats, onError } = {}) {
 
   function scheduleFrame(frame) {
     framesDelta += 1
-    let body = frame
-    if (preskip > 0) {
-      if (preskip >= body.numberOfFrames) {
-        preskip -= body.numberOfFrames
-        body.close()
-        return
-      }
-      body = trimStart(body, preskip)
-      preskip = 0
-    }
-    if (!context || body.numberOfFrames <= 0) {
-      body.close()
+    if (!context || frame.numberOfFrames <= 0) {
+      frame.close()
       return
     }
     playTime = Math.max(playTime, context.currentTime - STALL_RESYNC_S + 0.02)
     if (playTime > context.currentTime + RESYNC_AHEAD_S) {
-      body.close()
+      frame.close()
       return
     }
     const buffer = context.createBuffer(
-      body.numberOfChannels,
-      body.numberOfFrames,
-      body.sampleRate,
+      frame.numberOfChannels,
+      frame.numberOfFrames,
+      frame.sampleRate,
     )
-    for (let channel = 0; channel < body.numberOfChannels; channel += 1) {
-      const plane = new Float32Array(body.numberOfFrames)
-      body.copyTo(plane, { planeIndex: channel, format: 'f32-planar' })
+    for (let channel = 0; channel < frame.numberOfChannels; channel += 1) {
+      const plane = new Float32Array(frame.numberOfFrames)
+      frame.copyTo(plane, { planeIndex: channel, format: 'f32-planar' })
       buffer.copyToChannel(plane, channel)
     }
-    body.close()
+    frame.close()
 
     const source = context.createBufferSource()
     source.buffer = buffer
@@ -118,7 +110,6 @@ export function createOpusPlayer({ onStats, onError } = {}) {
       numberOfChannels: head.channels,
       description: packet.data,
     })
-    preskip = head.preskip
     stats()
     return true
   }
@@ -155,26 +146,4 @@ export function createOpusPlayer({ onStats, onError } = {}) {
   }
 
   return { push, dispose }
-}
-
-/** 把 AudioData 的前 skip 条样本裁掉，返回新 AudioData。 */
-function trimStart(frame, skip) {
-  const keep = frame.numberOfFrames - skip
-  const channels = frame.numberOfChannels
-  const merged = new Float32Array(keep * channels)
-  for (let channel = 0; channel < channels; channel += 1) {
-    const plane = new Float32Array(frame.numberOfFrames)
-    frame.copyTo(plane, { planeIndex: channel, format: 'f32-planar' })
-    merged.set(plane.subarray(skip), channel * keep)
-  }
-  const dst = new window.AudioData({
-    format: 'f32-planar',
-    sampleRate: frame.sampleRate,
-    numberOfFrames: keep,
-    numberOfChannels: channels,
-    timestamp: frame.timestamp + Math.round((skip / frame.sampleRate) * 1e6),
-    data: merged,
-  })
-  frame.close()
-  return dst
 }
