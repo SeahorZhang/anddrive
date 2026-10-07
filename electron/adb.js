@@ -1538,6 +1538,23 @@ export async function getPhysicalScreenSize(serial) {
   return { width: Number(match[1]), height: Number(match[2]) };
 }
 
+/**
+ * 设备物理密度（`wm density` 的 `Physical density:` 行）。
+ * 默认模式要它来自建虚拟显示的密度：上游 `flex_display` **必须同时给尺寸和密度**
+ * （`NewDisplayCapture.prepare()` 里 `if (dpi == 0) { assert !flexDisplay; … }`），
+ * 缺密度时的 `scaleDpi` 只在非 flex 那条路上跑，所以这份密度得我们自己按长边换算。
+ * 读不到返回 null，调用方退成「不给显示尺寸」（上游默认），不猜数字。
+ * @param {string} serial
+ * @returns {Promise<number | null>}
+ */
+export async function getPhysicalScreenDensity(serial) {
+  assertSerial(serial);
+  await ensureServer();
+  const { stdout, stderr } = await adbExecSafe(["-s", serial, "shell", "wm density"]);
+  const match = /Physical density:\s*(\d+)/.exec(`${stdout}\n${stderr}`);
+  return match ? Number(match[1]) : null;
+}
+
 /** 是不是 MIUI/HyperOS（`ro.miui.ui.version.name` 有值）。 */
 export async function isMiuiDevice(serial) {
   assertSerial(serial);

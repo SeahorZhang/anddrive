@@ -67,6 +67,9 @@ const options = new AdbScrcpyOptions4_1(
     videoBitRate: Math.round(envBitRateM * 1_000_000),
     maxFps: envFps,
     newDisplay: envDisplay,
+    // `SPIKE_FLEX=1` 带上 `flex_display`（官方 -x 语义），用来验「flex 必须同时给密度」这条：
+    // 与 `SPIKE_DISPLAY=`（只给尺寸）组合应当撞上游 `NewDisplayCapture.prepare()` 的断言。
+    ...(process.env.SPIKE_FLEX ? { flexDisplay: true } : {}),
     keepActive: true,
     // scrcpy server 用 Integer.parseInt(scid, 16) 解析，最高位必须为 0。
     scid: ((randomBytes(4).readUInt32BE(0) & 0x7fffffff) >>> 0).toString(16).padStart(8, "0"),

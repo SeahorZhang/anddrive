@@ -64,6 +64,8 @@ export function buildMirrorOptions(input, overrides = {}) {
     // 音频转发跟着设置走，不写死：抓系统音频（REMOTE_SUBMIX playback capture）会抢
     // 设备侧的音频焦点，正在播的 app 会因此暂停，会话结束时焦点回来又自动续播 ——
     // 用户实机反馈就是「关掉投屏，手机立刻响起声音」。关掉音频就没有这次焦点抢占。
+    // 开的时候命令行里**看不到 `audio=`** 是对的：Tango 会丢掉与默认值相同的键，
+    // 而上游 server 的默认就是 `audio = true`（`Options.java:28`），省略即开。
     audio: config.audio === true,
     control: true,
     sendStreamMeta: true,
@@ -80,22 +82,21 @@ export function buildMirrorOptions(input, overrides = {}) {
     // 想要两边同时有声才需要 audioDup: true（ROUTE_FLAG_LOOP_BACK_RENDER）。
   }
 
-  // 建显示：两种模式都给 `<宽>x<高>`，差别在密度与跟不跟随窗口。
-  // - 默认（上游原生产物）：只给尺寸、**不给密度**，让 server 按长边等比缩（`scaleDpi`），长边 dp 数
-  //   与主屏一致 → 版式仍由设备决定；尺寸 = 窗口画面区的**物理像素**（CSS × DPR，渲染层算），
-  //   于是 1 个显示像素正好落在 1 个屏幕物理像素上，按 px 写死的控件（抖音弹幕、顶部那排 tab）
-  //   不再被整帧 downscale 压小。
+  // 建显示：**给得出尺寸就同时开 flex**（scrcpy `--flex-display` / -x），显示跟着窗口重排。
+  // 这两件事在上游是绑死的：`NewDisplayCapture.prepare()` 里 `if (dpi == 0) { assert !flexDisplay }`
+  // —— flex 显示不许缺密度（缺省时的 `scaleDpi` 只在不 flex 那条路跑），所以两种模式都要把
+  // 尺寸与密度算全：
+  // - 默认（上游原生产物）：尺寸 = 窗口画面区的**物理像素**（CSS × DPR），密度 = `scaleDisplayDpi`
+  //   照主屏长边等比换算 → 1 显示像素 = 1 屏幕物理像素（按 px 写死的控件不被整帧压小），
+  //   同时长边 dp 数与主屏一致（版式不随窗口漂移）。
   // - 大屏模式（补丁产物）：尺寸 = 窗口 CSS × 画质档位倍率，密度同倍，1dp = 1 CSS px。
-  // 主进程没给到设备画面比例时不给 `display`：默认模式退回空串 = 上游默认（主屏尺寸与密度），
-  // 大屏模式没有尺寸就没有密度口径，宁可抛（2026-09-28「不留兜底默认尺寸」那条教训）。
+  // 拿不到设备信息时 `display` 为空：默认模式给空串 = 上游默认（主屏尺寸与密度）且**不开 flex**
+  // （flex 缺尺寸就撞上上面那条断言）；大屏模式没有尺寸就没有密度口径，宁可抛
+  // （2026-09-28「不留兜底默认尺寸」那条教训）。`new_display` 这个键本身必须带 —— 不带 key 时
+  // server 不新建显示、改去镜像主屏。
   options.newDisplay =
     overrides.display || config.largeScreenDisplay ? formatNewDisplay(overrides.display) : "";
-
-  // flex display（scrcpy `--flex-display` / -x）只有大屏模式要：它换来的就是官方那条
-  // `resizeDisplay` 控制消息（服务端 `requestResize` 对非 flex 显示直接抛错）。默认模式要的是
-  // 「上游默认」—— 显示按主屏尺寸开着一路不动，窗口再拖也只是画面缩放，所以**不下发这个键**
-  // （上游默认 false），渲染层的跟随器按同一判据一起不启动（`src/mirror/direct-session.js`）。
-  if (config.largeScreenDisplay) options.flexDisplay = true;
+  if (overrides.display) options.flexDisplay = true;
 
   // 虚拟显示不渲染系统装饰（scrcpy 的 `--no-vd-system-decorations`）：镜像里不要头部那条状态栏，
   // 整块显示都留给应用。代价：那块显示上没有状态栏也没有 launcher 兜底，导航只能靠注入的手势/键值。

@@ -30,39 +30,40 @@ describe('parseBitRate', () => {
 })
 
 describe('buildMirrorOptions', () => {
-  /** 默认模式：只给尺寸、不给密度（上游 `scaleDpi` 按长边等比缩，长边 dp 数照主屏）。 */
-  const PHYSICAL = { width: 1080, height: 2400 }
+  /**
+   * 默认模式：尺寸 = 窗口画面区的物理像素，密度按主屏长边等比（`scaleDisplayDpi`）。
+   * flex 显示在上游必须带密度（`prepare()` 对 `dpi == 0` 的 flex 断言），所以给全 `{w,h,dpi}`。
+   */
+  const PHYSICAL = { width: 756, height: 1640, dpi: 308 }
   /** 大屏模式：尺寸 = 窗口 CSS × 档位倍率，密度同倍。 */
   const TIERED = { width: 1080, height: 2400, dpi: 320 }
   const LARGE = { largeScreenDisplay: true }
   const optionsFor = (config, overrides = {}) =>
     buildMirrorOptions(config, { videoCodec: 'h265', display: PHYSICAL, ...overrides })
 
-  it('默认（上游原生 server）：给尺寸但不给密度，也不开 flex', () => {
+  it('默认（上游原生 server）：尺寸与密度都带全，并开 flex 让显示跟着窗口', () => {
     const options = optionsFor(undefined)
     expect(options).toMatchObject({
       video: true,
-      audio: false,
+      // 音频转发默认开（声音转到电脑、手机静音；2026-10-08 用户定的那一档）。
+      audio: true,
       control: true,
       sendStreamMeta: true,
       videoCodec: 'h265',
       // 默认码率跟着默认档位走：清晰档 3x 实测 ~27Mbps，默认上限 32M（见 DISPLAY_QUALITY_BIT_RATES）。
       videoBitRate: 32_000_000,
       maxFps: 60,
-      // 尺寸来自窗口画面区的物理像素；不带 `/dpi` 是让 server 自己 scaleDpi。
-      newDisplay: '1080x2400',
+      newDisplay: '756x1640/308',
+      // flex 与尺寸是一家的：开了 flex 才有官方 `resizeDisplay`（服务端对非 flex 显示直接抛错）。
+      flexDisplay: true,
       // 镜像里不显示手机的状态栏（整块显示留给应用）。
       vdSystemDecorations: false,
     })
-    // 默认模式连 `flex_display` 都不下发（上游默认 false）：没 flex 就没官方 resizeDisplay
-    // （服务端对非 flex 显示直接抛错）—— 不给 flex 就等于不给「跟随窗口」。
-    expect('flexDisplay' in options).toBe(false)
   })
 
-  it('大屏模式带密度开显示，并开 flex 供窗口跟随', () => {
+  it('大屏模式带档位倍率的尺寸与密度，同样开 flex', () => {
     expect(optionsFor(LARGE, { display: TIERED })).toMatchObject({
       newDisplay: '1080x2400/320',
-      // 跟随窗口 = 官方 `resizeDisplay` 控制消息，服务端 `requestResize` 只认 flex 显示。
       flexDisplay: true,
     })
   })
@@ -81,15 +82,18 @@ describe('buildMirrorOptions', () => {
     })
   })
 
-  it('拿不到设备比例时不给尺寸 = 空串（上游默认主屏尺寸与密度），不自己编数字', () => {
-    expect(buildMirrorOptions(undefined, { videoCodec: 'h265' }).newDisplay).toBe('')
+  it('拿不到设备信息时：空串 + **不开 flex**，也不自己编数字', () => {
+    const options = buildMirrorOptions(undefined, { videoCodec: 'h265' })
+    expect(options.newDisplay).toBe('')
+    // flex 缺尺寸会撞上游 `prepare()` 的断言，所以这一条必须跟着关。
+    expect('flexDisplay' in options).toBe(false)
     expect(buildMirrorOptions({}, { videoCodec: 'h265', display: null }).newDisplay).toBe('')
     // 大屏模式没有尺寸就没有密度口径，宁可抛也不猜（2026-09-28 那条教训）。
     expect(() => buildMirrorOptions(LARGE, { videoCodec: 'h265' })).toThrow(/虚拟显示/)
     expect(() => buildMirrorOptions(LARGE, { videoCodec: 'h265', display: {} })).toThrow(/虚拟显示/)
   })
 
-  it('转发音频时才请求 Opus；关掉就完全不建音频采集', () => {
+  it('转发音频时才请求 Opus；显式关掉就完全不建音频采集', () => {
     // 抓系统音频会抢设备侧音频焦点（在播的 app 会暂停、会话结束时又自动续播），
     // 所以设置里的音频开关必须是真的开关 —— 早先这里写死 audio: true。
     expect(optionsFor({ audio: true }).audio).toBe(true)
@@ -101,7 +105,8 @@ describe('buildMirrorOptions', () => {
     expect(optionsFor({ audio: false }).audioCodec).toBeUndefined()
     expect(optionsFor({ audio: false }).audioDup).toBeUndefined()
 
-    expect(optionsFor(undefined).audio).toBe(false)
+    // 没配置 = 默认值 = 开（2026-10-08 翻的默认，见 `DEFAULT_SCRCPY_CONFIG.audio`）。
+    expect(optionsFor(undefined).audio).toBe(true)
   })
 
   it('overrides the codec when the native engine requests it', () => {
@@ -170,12 +175,13 @@ describe('resolveNativeCodec', () => {
 })
 
 describe('resolveRuntimePrefs', () => {
-  it('运行时偏好只剩窗口行为', () => {
+  it('运行时偏好只剩窗口行为，全屏默认关', () => {
     expect(resolveRuntimePrefs({ alwaysOnTop: true, fullscreen: true })).toEqual({
       alwaysOnTop: true,
       fullscreen: true,
     })
     expect(resolveRuntimePrefs(undefined)).toEqual({ alwaysOnTop: false, fullscreen: false })
+    expect(resolveRuntimePrefs({ fullscreen: 'yes' }).fullscreen).toBe(false)
   })
 })
 

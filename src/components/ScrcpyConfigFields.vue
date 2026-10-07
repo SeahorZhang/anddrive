@@ -142,7 +142,9 @@ function updateQuality(tier) {
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
         <div class="text-[13px] text-ink-2">音频转发</div>
-        <div class="mt-0.5 text-[11px] text-ink-3">把设备声音转发到电脑播放</div>
+        <div class="mt-0.5 text-[11px] text-ink-3">
+          把设备声音转发到电脑播放（默认开）；转发期间手机不出声，结束投屏后手机立刻恢复播放
+        </div>
       </div>
       <SwitchToggle :model-value="props.config.audio" :disabled="disabled"
         @update:model-value="(value) => update({ audio: value })" />

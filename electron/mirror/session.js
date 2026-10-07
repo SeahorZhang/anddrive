@@ -5,6 +5,7 @@ import {
   ensureServer,
   getDeviceVideoCodecs,
   getPhysicalScreenSize,
+  getPhysicalScreenDensity,
   isMiuiDevice,
   onDeviceTeardown,
   scrcpyServerPath,
@@ -68,9 +69,10 @@ function createMirrorWindow(session, prefs, bounds) {
     backgroundColor: "#000000",
     show: false,
     alwaysOnTop: prefs.alwaysOnTop,
-    fullscreen: prefs.fullscreen,
-    // Electron 里只要显式传了 `fullscreen`（未勾「全屏启动」时就是 false），窗口就被
-    // 标成不可全屏，macOS 绿色按钮随之退化成 zoom（最大化）。显式打开它。
+    // **不传 `fullscreen`**：macOS 上「构造参数 fullscreen + show:false」常常落不回全屏
+    // （窗口先按普通尺寸显示），要可靠地进全屏得在 show 之后调 `setFullScreen(true)`。
+    // 顺带也不再触发另一个坑：显式传 `fullscreen: false` 会把窗口标成不可全屏，
+    // macOS 绿色按钮随之退化成 zoom —— 这里靠 `fullscreenable` 表达意图。
     fullscreenable: true,
     // 直连形态：Video/Control/audio 在渲染层直连 adb，需要 node 的 ipc 与
     // 同源 socket；自定义页面无第三方内容，安全边界等同于主进程代码。
@@ -83,7 +85,11 @@ function createMirrorWindow(session, prefs, bounds) {
       backgroundThrottling: false,
     },
   });
-  win.once("ready-to-show", () => win.show());
+  win.once("ready-to-show", () => {
+    win.show();
+    // 「全屏启动」在 show 之后落地（见上面构造参数那条注释）。
+    if (prefs.fullscreen) win.setFullScreen(true);
+  });
   void loadMirrorPage(win);
   win.on("closed", () => void stopMirrorSession(session.id));
 
@@ -150,8 +156,13 @@ export async function startMirrorSession(request) {
   const prefs = resolveRuntimePrefs(request?.config);
   // 窗口照**设备画面比例**开：默认模式的虚拟显示尺寸就取自窗口画面区的物理像素，
   // 窗口形状不对会开出一块错比例的显示（横窗 → 横显示 → 竖屏 app 直接换版式）。
-  // 读不到设备分辨率时退回既有 850x600，渲染层那边同时不给显示尺寸。
-  const screenSize = await getPhysicalScreenSize(serial).catch(() => null);
+  // 密度也取自设备（`wm density`）：flex 显示必须同时带密度（上游 `NewDisplayCapture.prepare()`
+  // 对 `dpi == 0` 的 flex 直接断言），渲染层按主屏长边等比换算它。
+  // 任一处读不到就退回既有的 850x600，且渲染层不给显示尺寸（`new_display` 退空串、不开 flex）。
+  const [screenSize, screenDpi] = await Promise.all([
+    getPhysicalScreenSize(serial).catch(() => null),
+    getPhysicalScreenDensity(serial).catch(() => null),
+  ]);
   const bounds = mirrorWindowBounds(screenSize, screen.getPrimaryDisplay().workArea);
   // 设备能编码哪些：给镜像页落地 `auto`，也顺带进 pendingInit（渲染层不再自己查）。
   const deviceEncoders = await getDeviceVideoCodecs(serial).catch(() => null);
@@ -196,6 +207,8 @@ export async function startMirrorSession(request) {
     // 设备画面比例（`wm size` 的 Physical）：渲染层据此决定要不要给虚拟显示尺寸 ——
     // 拿不到就不给，`new_display` 退空串走上游默认，不自己编一个比例。
     screenSize,
+    // 设备物理密度（`wm density`）：flex 显示的密度由渲染层按长边等比换算，缺它就不开 flex。
+    screenDpi,
     // 只把「能用的那几个」带给镜像页落地 auto；全量清单是设置页的事。
     deviceCodecs: deviceEncoders?.usable ?? null,
     // 图标随启动参数一起给：镜像页为「接回」横幅取一个图标，不该去读整台设备的

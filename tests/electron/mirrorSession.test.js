@@ -17,11 +17,26 @@ const env = vi.hoisted(() => {
     constructor(options) {
       this.options = options
       this.webContents = {}
+      this.listeners = {}
+      this.fullscreenCalls = []
       windows.push(this)
     }
-    once() {}
-    on() {}
-    show() {}
+    once(event, fn) {
+      ;(this.listeners[event] ??= []).push(fn)
+    }
+    on(event, fn) {
+      ;(this.listeners[event] ??= []).push(fn)
+    }
+    /** 测试用来把窗口推到「ready-to-show」那一步。 */
+    fire(event) {
+      for (const fn of this.listeners[event] ?? []) fn()
+    }
+    show() {
+      this.shown = true
+    }
+    setFullScreen(value) {
+      this.fullscreenCalls.push(value)
+    }
     focus() {}
     close() {}
     isDestroyed() {
@@ -79,6 +94,9 @@ vi.mock('../../electron/adb.js', () => ({
   // 设备物理分辨率：默认按 1200x2608 回；serial 带 `unknown` 的模拟 `wm size` 读不到（回 null）。
   getPhysicalScreenSize: async (serial) =>
     String(serial ?? '').includes('unknown') ? null : { width: 1200, height: 2608 },
+  // 设备物理密度：flex 显示必须带密度，缺它渲染层就不给显示尺寸。
+  getPhysicalScreenDensity: async (serial) =>
+    String(serial ?? '').includes('unknown') ? null : 440,
   onDeviceTeardown: (hook) => {
     env.teardownHooks.push(hook)
     return () => {
@@ -149,6 +167,7 @@ describe('镜像窗口照设备画面比例开', () => {
       height: 820,
     })
     expect(initFrom(win).screenSize).toEqual({ width: 1200, height: 2608 })
+    expect(initFrom(win).screenDpi).toBe(440)
   })
 
   it('读不到设备分辨率时退回 850x600，并把 screenSize=null 带给镜像页', async () => {
@@ -159,9 +178,42 @@ describe('镜像窗口照设备画面比例开', () => {
       height: 600,
     })
     expect(initFrom(win).screenSize).toBeNull()
+    expect(initFrom(win).screenDpi).toBeNull()
   })
 })
 
+
+// 「全屏启动」必须落在 show 之后：macOS 上构造参数 `fullscreen:true` + `show:false` 常常
+// 进不去全屏，而显式传 `fullscreen:false` 又会把绿色按钮打成 zoom。两头都是踩过的。
+describe('镜像窗口的全屏启动', () => {
+  const open = async (serial, config) => {
+    await startMirrorSession({ serial, packageName: 'com.example.app', config })
+    return env.windows.at(-1)
+  }
+
+  it('开着时：先 show，再 setFullScreen(true)', async () => {
+    const win = await open('dev-fs-on', { fullscreen: true })
+    // 构造参数里不该再有 `fullscreen`（否则又退回那条在 macOS 上不可靠的路径）。
+    expect('fullscreen' in win.options).toBe(false)
+    expect(win.options.fullscreenable).toBe(true)
+    win.fire('ready-to-show')
+    expect(win.shown).toBe(true)
+    expect(win.fullscreenCalls).toEqual([true])
+  })
+
+  it('关着时：只 show，不碰全屏', async () => {
+    const win = await open('dev-fs-off', { fullscreen: false })
+    win.fire('ready-to-show')
+    expect(win.shown).toBe(true)
+    expect(win.fullscreenCalls).toEqual([])
+  })
+
+  it('没配置时默认关：不碰全屏', async () => {
+    const win = await open('dev-fs-default', undefined)
+    win.fire('ready-to-show')
+    expect(win.fullscreenCalls).toEqual([])
+  })
+})
 
 // 切换设备不该把已经开着的镜像关掉：主进程的 release 带 keepMirror，
 // 会话的清理钩子见到它就原样返回。

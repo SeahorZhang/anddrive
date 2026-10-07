@@ -1,6 +1,6 @@
 import { CHANNELS } from "../../electron/ipcContract.js";
 import { getServerClient, acquireDeviceAdb, startScrcpy, codecName } from "./connect.js";
-import { computeDisplayMetrics } from "../../shared/scrcpyConfig.js";
+import { computeDisplayMetrics, scaleDisplayDpi } from "../../shared/scrcpyConfig.js";
 import { createDisplayFollower } from "./displayFollow.js";
 import { probeLocalCodecs } from "../utils/codecCaps.js";
 import { createOpusPlayer } from "./audio.js";
@@ -58,21 +58,25 @@ function largeScreenMode() {
 }
 
 /**
- * 虚拟显示尺寸的唯一算法（建显示与后续 resizeDisplay 必须同源，否则初始密度与跟随期密度错位）：
- * - **大屏模式**：窗口 CSS × 画质档位倍率，dpi 同倍，于是 1dp = 1 CSS px。档位整场不变
- *   （`resizeDisplay` 只带宽高、不带 dpi，dpi 在建显示时定死）。
- * - **默认（上游原生产物）**：窗口画面区的**物理像素**（CSS × `devicePixelRatio`），并且
- *   **不给密度** —— 上游 `NewDisplayCapture.scaleDpi` 会按长边等比把主屏密度缩到新尺寸，
- *   长边 dp 数与主屏一致，版式仍由设备决定；同时 1 个显示像素正好落在 1 个屏幕物理像素上，
- *   按 px 写死的控件（抖音弹幕、顶部那排 tab）不再被整帧 downscale 压小。
- * 主进程没给到设备画面比例（`screenSize`）时整块不给尺寸：窗口形状不可信，退上游默认更安全。
+ * 虚拟显示尺寸的唯一算法（建显示与后续 `resizeDisplay` 必须同源，否则初始密度与跟随期密度错位）：
+ * - **大屏模式**：窗口 CSS × 画质档位倍率，dpi = 160 × 倍率，于是 1dp = 1 CSS px。
+ * - **默认（上游原生产物）**：窗口画面区的**物理像素**（CSS × `devicePixelRatio`），密度按主屏长边
+ *   等比换算（`scaleDisplayDpi`，与上游非 flex 那条路的 `scaleDpi` 同一个算式）—— 上游对 flex 显示
+ *   不允许缺密度（`prepare()` 里 `if (dpi == 0) { assert !flexDisplay }`），所以这份必须我们自己算。
+ *   这样两条同时成立：1 显示像素 = 1 屏幕物理像素（按 px 写死的控件不被整帧压小），
+ *   长边 dp 数与主屏一致（版式不随窗口漂移）。
+ * 档位在主进程给的 config 里，整场不变：`resizeDisplay` 只带宽高、不带 dpi，dpi 在建显示时定死。
+ * 主进程没给到设备信息（`screenSize` / `screenDpi`）时不给尺寸：窗口形状与密度都不可信，
+ * 退上游默认（主屏尺寸与密度、不开 flex）比猜数字好。
  */
 function displayFor(css) {
   if (largeScreenMode()) {
     return computeDisplayMetrics(css.width, css.height, current.info?.config?.quality);
   }
   const dpr = window.devicePixelRatio || 1;
-  return { width: Math.round(css.width * dpr), height: Math.round(css.height * dpr) };
+  const size = { width: Math.round(css.width * dpr), height: Math.round(css.height * dpr) };
+  const dpi = scaleDisplayDpi(current.info?.screenSize, current.info?.screenDpi, size);
+  return dpi ? { ...size, dpi } : size;
 }
 
 /**
@@ -81,7 +85,7 @@ function displayFor(css) {
  * 开出一块错尺寸的显示（2026-09-28 实测 512x512/480）。
  */
 function initialDisplay(info) {
-  if (!info?.screenSize) return undefined;
+  if (!info?.screenSize || !(info?.screenDpi > 0)) return undefined;
   const css = info?.initialCss;
   return displayFor(css?.width > 0 && css?.height > 0 ? css : contentCss());
 }
@@ -190,9 +194,10 @@ export async function startSession(
   // 之后应用仍可能被别的投屏软件搬走：只负责把入口亮出来，要不要接回由用户点。
   current.stopStolenWatch = watchAppStolen(onStolen);
 
-  // 虚拟显示跟随窗口（scrcpy `--flex-display` / -x 语义）**只在大屏模式启动**：
-  // 默认模式的显示就是主屏尺寸与密度，一路不动，拖窗口只是画面缩放（`src/mirror/App.vue` 的 contain）。
-  // 官方 resizeDisplay 控制消息也只有开了 flex 的显示能用（服务端 `requestResize` 对非 flex 显示直接抛错）。
+  // 虚拟显示跟随窗口（scrcpy `--flex-display` / -x 语义）：**只要这块显示是带着尺寸建的就有 flex**
+  // （`buildMirrorOptions` 里 flex 与 `new_display` 一起下发），两种模式都跟随。
+  // 拿不到设备信息时那块显示是上游默认（空串、无 flex），这里就必须整块跳过 ——
+  // 服务端 `requestResize` 对非 flex 显示直接抛错。
   //
   // 只在尺寸真的变化时才下发：建显示用的那份尺寸已经定死（`initialDisplay()`），启动阶段再补发一条
   // 完全相同的请求会让服务端白走一次 `virtualDisplay.resize()` → capture reset；而虚拟显示是
@@ -202,13 +207,14 @@ export async function startSession(
   // 尺寸来自**画面区**（dev 时比窗口窄，右侧那条 HUD 边栏不算）的 ResizeObserver，
   // 而不是 window 的 `resize` 事件 + innerWidth：macOS 上窗口被系统缩放/吸附时，resize 事件
   // 可能滞后甚至不触发，innerWidth 会读到旧值，导致宽度不跟随。
-  if (largeScreenMode()) {
+  if (createdDisplay) {
     const follower = createDisplayFollower({
       // 手一拖就通知页面盖遮罩（`onIntent` 每次尺寸请求都回调），停手合并完才真正下发；
       // 如果合并下来发现尺寸没变（拖出去又拖回来），用 `onSkip` 让页面把遮罩撤掉。
       onIntent: (size) => onReflowStart?.(size),
       onSkip: () => onReflowAbort?.(),
       onSent: () => onReflowSent?.(),
+      // `resizeDisplay` 只带宽高：密度在建显示时定死，所以建显示与这里的尺寸必须同源（`displayFor`）。
       send: (size) => controller?.resizeDisplay({ width: size.width, height: size.height }),
     });
     // 种子是**服务端真开出来的那块显示**（这条路上就是我们算并传给它的那份），拿错会压掉第一次真实 resize。

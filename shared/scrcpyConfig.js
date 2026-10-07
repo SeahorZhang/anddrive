@@ -7,7 +7,11 @@ export const DEFAULT_SCRCPY_CONFIG = Object.freeze({
   maxFps: 60,
   /** 视频编码：auto = 按「设备能编 + 本机 WebCodecs 能解」自动挑（见 pickAutoCodec）。 */
   videoCodec: "auto",
-  audio: false,
+  /**
+   * 音频转发：默认**开**（2026-10-08 用户定「都不加」那一档 = 声音转到电脑、手机静音）。
+   * 归一化只认显式 `false`，且不设 `audioDup` —— 上游因此用 `ROUTE_FLAG_LOOP_BACK`（只回环不本机渲染）。
+   */
+  audio: true,
   alwaysOnTop: false,
   fullscreen: false,
   /** 画质档位：见 DISPLAY_QUALITY_TIERS。默认 sharp = 与老版本一致（倍率 3）。 */
@@ -81,6 +85,25 @@ export const DISPLAY_QUALITY_BIT_RATES = Object.freeze({
 
 /** 老注释与调用点里的「倍率」= 默认档位的倍率。 */
 export const DISPLAY_PIXEL_SCALE = DISPLAY_QUALITY_TIERS.sharp;
+
+/**
+ * 照上游的算法给一块新显示算密度：`主屏密度 × 新长边 / 主屏长边`
+ * （`NewDisplayCapture.scaleDpi`，长边 = `Size.getMax()` = max(w,h)）。
+ * 上游只在**非 flex** 且缺密度时自己做这一步；我们开 `flex_display` 让显示跟着窗口，
+ * 就必须自己算 —— 于是「跟着窗口缩放」和「长边 dp 数与主屏一致」能同时成立：
+ * 1 个显示像素正好落在 1 个屏幕物理像素上，按 px 写死的控件（抖音弹幕那类）不被整帧压小，
+ * 版式的 dp 数又不随我们的窗口形状漂移。
+ * @param {{ width: number, height: number }} mainSize 设备主屏分辨率
+ * @param {number} mainDpi 设备主屏密度
+ * @param {{ width: number, height: number }} size 要开的显示尺寸
+ * @returns {number | null} 输入不可信时返回 null（调用方退成不给尺寸，不猜数字）
+ */
+export function scaleDisplayDpi(mainSize, mainDpi, size) {
+  const [mw, mh] = [Number(mainSize?.width) || 0, Number(mainSize?.height) || 0];
+  const [sw, sh] = [Number(size?.width) || 0, Number(size?.height) || 0];
+  if (!(mw > 0) || !(mh > 0) || !(sw > 0) || !(sh > 0) || !(mainDpi > 0)) return null;
+  return Math.round((mainDpi * Math.max(sw, sh)) / Math.max(mw, mh));
+}
 
 /**
  * 窗口尺寸 → 虚拟显示的像素尺寸与密度：`窗口 CSS × 档位倍率`，dpi = `160 × 档位倍率`，
@@ -297,7 +320,8 @@ export function normalizeScrcpyConfig(input) {
     videoCodec: VIDEO_CODECS.has(raw.videoCodec)
       ? raw.videoCodec
       : DEFAULT_SCRCPY_CONFIG.videoCodec,
-    audio: raw.audio === true,
+    // 默认开，所以只认显式的 false（老存盘/缺省不该把音频关掉）。
+    audio: raw.audio !== false,
     quality,
     alwaysOnTop: raw.alwaysOnTop === true,
     fullscreen: raw.fullscreen === true,

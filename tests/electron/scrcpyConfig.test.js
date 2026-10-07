@@ -23,6 +23,7 @@ vi.mock('electron', () => ({
 const {
   DEFAULT_SCRCPY_CONFIG,
   normalizeScrcpyConfig,
+  scaleDisplayDpi,
   scrcpyServerResource,
   computeDisplayMetrics,
   DISPLAY_BASE_DPI,
@@ -89,6 +90,12 @@ describe('normalizeScrcpyConfig', () => {
     expect(normalizeScrcpyConfig({ largeScreenDisplay: 'yes' }).largeScreenDisplay).toBe(false)
   })
 
+  it('全屏启动默认关：只有显式 true 才开', () => {
+    expect(normalizeScrcpyConfig({}).fullscreen).toBe(false)
+    expect(normalizeScrcpyConfig({ fullscreen: true }).fullscreen).toBe(true)
+    expect(normalizeScrcpyConfig({ fullscreen: 'yes' }).fullscreen).toBe(false)
+  })
+
   it('上次设备的 stableId 只留能用的形状（它只用来比对，永不进命令行）', () => {
     expect(normalizeScrcpyConfig({}).lastDeviceStableId).toBe('')
     expect(normalizeScrcpyConfig({ lastDeviceStableId: 'af3d7abd' }).lastDeviceStableId).toBe(
@@ -101,17 +108,23 @@ describe('normalizeScrcpyConfig', () => {
     expect(normalizeScrcpyConfig({ lastDeviceStableId: 'x'.repeat(200) }).lastDeviceStableId).toHaveLength(128)
   })
 
+  it('音频转发默认开（声音转到电脑、手机静音）', () => {
+    expect(normalizeScrcpyConfig({}).audio).toBe(true)
+    expect(normalizeScrcpyConfig({ audio: undefined }).audio).toBe(true)
+    // 只认显式 false —— 与 fullscreen 那条一样：默认开的开关不能被脏值或缺省关掉。
+    expect(normalizeScrcpyConfig({ audio: false }).audio).toBe(false)
+    expect(normalizeScrcpyConfig({ audio: 'yes' }).audio).toBe(true)
+  })
+
   // 从 scrcpy.test.js 折过来：这几条是原来那份独有的，别跟着文件一起丢。
   it('拒绝会带进命令行的畸形值', () => {
     const config = normalizeScrcpyConfig({
       bitRate: '24M; rm',
       videoCodec: 'mpeg2',
-      audio: 'yes',
       screenMode: 'turnOff',
     })
     expect(config.bitRate).toBe(DEFAULT_SCRCPY_CONFIG.bitRate)
     expect(config.videoCodec).toBe(DEFAULT_SCRCPY_CONFIG.videoCodec)
-    expect(config.audio).toBe(false)
     // 已废弃的屏幕策略：老存盘里残留的 screenMode 静默丢弃，下次保存就干净了。
     expect('screenMode' in config).toBe(false)
   })
@@ -154,6 +167,24 @@ describe('scrcpyServerResource', () => {
     ])) {
       expect(isReadable(path.join(projectRoot, 'resources', relative))).toBe(true)
     }
+  })
+})
+
+describe('scaleDisplayDpi', () => {
+  const MI10 = { width: 1080, height: 2340 }
+
+  it('照上游 scaleDpi：主屏密度 × 新长边 / 主屏长边（长边取 max，横竖同值）', () => {
+    expect(scaleDisplayDpi(MI10, 440, { width: 756, height: 1640 })).toBe(308)
+    expect(scaleDisplayDpi(MI10, 440, { width: 1640, height: 756 })).toBe(308)
+    // 长边 dp 数因此与主屏一致（版式不随窗口漂移）：1640/308 ≈ 2340/440。
+    expect(1640 / 308 / (2340 / 440)).toBeCloseTo(1, 2)
+  })
+
+  it('输入不可信就回 null，让调用方退成「不给显示尺寸」而不是猜一个密度', () => {
+    expect(scaleDisplayDpi(null, 440, { width: 100, height: 100 })).toBeNull()
+    expect(scaleDisplayDpi(MI10, 0, { width: 100, height: 100 })).toBeNull()
+    expect(scaleDisplayDpi(MI10, 440, { width: 0, height: 100 })).toBeNull()
+    expect(scaleDisplayDpi(MI10, 440, undefined)).toBeNull()
   })
 })
 
