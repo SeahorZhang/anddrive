@@ -38,8 +38,8 @@ export function createScid() {
 
 /**
  * 推送并启动 scrcpy（官方 AdbScrcpyClient / AdbScrcpyOptions4_1 直用）。
- * 随包 server 的**选项集与 4.1 逐字相同**（5.0 只改了服务端 `AudioPlaybackCapture`/`CameraCapture`，
- * `Options.java` 一字未动），差别只在 server 自己烤进去的版本号：它拿客户端声明的版本做等值校验，
+ * 随包 server 的**选项集与 4.1 逐字相同**（5.0 与 5.0.1 只改了 C 客户端与服务端
+ * `AudioPlaybackCapture`/`CameraCapture`，`Options.java` 一字未动），差别只在 server 自己烤进去的版本号：它拿客户端声明的版本做等值校验，
  * 不等就直接退出 → 所以第二个参数必须显式报 `SCRCPY_SERVER_VERSION`，不能靠库里的默认 "4.1"。
  * 虚拟显示尺寸由调用方算好后传入（`direct-session.js` 是全项目唯一算它的地方），要不要用它拼成
  * 协议字符串由 `buildMirrorOptions` 按「大屏模式」决定 —— 默认（上游原生 server）传空串 = 主屏尺寸。

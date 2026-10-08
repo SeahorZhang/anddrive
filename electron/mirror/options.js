@@ -3,7 +3,7 @@ import { normalizeScrcpyConfig, resolveVideoCodec } from "../../shared/scrcpyCon
 // ---------------------------------------------------------------------------
 // ScrcpyConfig → scrcpy-server 参数（自研客户端）
 //
-// 纯映射，不依赖 Electron / Tango：这里只产出 scrcpy 的选项对象（形状是 4.1 那份，随包 5.0 server 认同一套），
+// 纯映射，不依赖 Electron / Tango：这里只产出 scrcpy 的选项对象（形状是 4.1 那份，随包 5.0.1 server 认同一套），
 // 直连形态下由 src/mirror/connect.js 包成 `AdbScrcpyOptions4_1` 交给 Tango。
 // 字段名对应 @yume-chan/scrcpy 的 ScrcpyOptions4_1.Init。
 // ---------------------------------------------------------------------------

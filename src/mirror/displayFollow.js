@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // 虚拟显示跟随窗口的请求合并器（纯逻辑，便于单测）
 //
-// 背景（scrcpy 服务端行为，4.1 与 5.0 在这两个文件上无差异，见 server 的 video/NewDisplayCapture.java）：
+// 背景（scrcpy 服务端行为，4.1 / 5.0 / 5.0.1 在这两个文件上无差异，见 server 的 video/NewDisplayCapture.java）：
 // - 虚拟显示以 `--new-display` 的尺寸创建；之后每条 `resizeDisplay` 控制消息都会
 //   走到 `virtualDisplay.resize()`。显示属性一旦变化，服务端就 reset capture、
 //   重启编码器，并把新尺寸经 stream meta 下发给客户端。

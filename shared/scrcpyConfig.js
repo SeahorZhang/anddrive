@@ -18,7 +18,7 @@ export const DEFAULT_SCRCPY_CONFIG = Object.freeze({
   quality: "sharp",
   /**
    * 「大屏模式」：选随包用哪一份 scrcpy server，并连带决定虚拟显示的尺寸口径。
-   * - `false`（默认）= **上游 5.0 原生产物**，`new_display` 传空串（上游语义：主屏尺寸 + 主屏密度，
+   * - `false`（默认）= **上游 5.0.1 原生产物**，`new_display` 传空串（上游语义：主屏尺寸 + 主屏密度，
    *   见 `Options.parseNewDisplay`），画质档位只换码率、不再换算显示像素。
    * - `true` = 随包 `scrcpy/patched/scrcpy-server`（带 `debug.anddrive.vd.*` 三个开关，走
    *   `VirtualDisplayConfig.setIgnoreActivitySizeRestrictions`），并按「窗口 CSS × 档位倍率」
@@ -167,10 +167,10 @@ export function codecLabel(nameOrMime) {
  * 随包 `resources/scrcpy/scrcpy-server` 的版本号。
  * server 在 `Options.parse` 的第一个参数上比对客户端声明的版本，**不等就直接退出**
  * （`The server version (X) does not match the client (Y)` → 表现为白屏），所以这一处
- * 必须与 5.0 树里烤进 `BuildConfig.VERSION_NAME` 的那份逐字相同。
+ * 必须与 5.0.1 树里烤进 `BuildConfig.VERSION_NAME` 的那份逐字相同。
  * 换随包产物时只改这里：`src/mirror/connect.js` 与 `scripts/mirror-spike.mjs` 都读它。
  */
-export const SCRCPY_SERVER_VERSION = "5.0";
+export const SCRCPY_SERVER_VERSION = "5.0.1";
 
 /**
  * 设备上「有哪些视频编码器」的探测命令（adb shell 里跑）。

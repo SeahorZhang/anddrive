@@ -31,7 +31,7 @@ function resourcesBase() {
 export const adbPath = () => path.join(resourcesBase(), "adb", "mac", "adb");
 const helperApkPath = () => path.join(resourcesBase(), "helper-app.apk");
 /**
- * 随包 scrcpy server 的产物路径，跟着「大屏模式」开关走：默认是上游 5.0 原生那份，
+ * 随包 scrcpy server 的产物路径，跟着「大屏模式」开关走：默认是上游 5.0.1 原生那份，
  * 开关打开才用 `scrcpy/patched/` 里那份带 `debug.anddrive.vd.*` 的自编产物。
  * 两份烤的协议版本号必须都等于 `SCRCPY_SERVER_VERSION`（`scripts/verify-resources.mjs` 逐个查）。
  * 选哪一份的判据在 `scrcpyServerResource`（shared），这里只负责拼到 resources 根目录下。
