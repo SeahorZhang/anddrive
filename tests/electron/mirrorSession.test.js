@@ -153,6 +153,27 @@ describe('mirror session 启动参数', () => {
     expect(init.iconUrl).toBeUndefined()
     expect(init.label).toBe('com.example.app')
   })
+
+  /** 「镜像手机」= 不带包名的会话，判据在这里定一次再随 pendingInit 下发（渲染层不再自己猜）。 */
+  it('空包名 = 整机镜像：deviceMirror 为真，label 退「手机镜像」', async () => {
+    await startMirrorSession({ serial: 'dev-device-mirror', packageName: '' })
+    const init = initFrom(env.windows.at(-1))
+    expect(init.packageName).toBe('')
+    expect(init.deviceMirror).toBe(true)
+    expect(init.label).toBe('手机镜像')
+    // 单应用会话这一项必须是假，否则渲染层会跳过 startApp，窗口只剩启动器。
+    await startMirrorSession({ serial: 'dev-app-mirror', packageName: 'com.example.app' })
+    expect(initFrom(env.windows.at(-1)).deviceMirror).toBe(false)
+    // 放开空包名不能顺手放开非法包名。
+    await expect(startMirrorSession({ serial: 'dev-bad', packageName: 'com.a; rm -rf /' })).rejects.toThrow(
+      /应用包名无效/,
+    )
+  })
+
+  it('包名只是空白也算整机镜像（trim 之后判空）', async () => {
+    await startMirrorSession({ serial: 'dev-blank', packageName: '   ' })
+    expect(initFrom(env.windows.at(-1)).deviceMirror).toBe(true)
+  })
 })
 
 // 默认模式的虚拟显示尺寸取自「窗口画面区的物理像素」，所以窗口形状必须在建之前就对：

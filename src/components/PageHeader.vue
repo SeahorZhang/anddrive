@@ -30,6 +30,8 @@ const emit = defineEmits([
   'switchDevice',
   'deviceMenuChange',
   'addDevice',
+  'mirrorDevice',
+  'shortcutDevice',
 ])
 
 const isUsb = computed(() => props.activeDevice?.transport === 'usb')
@@ -68,6 +70,12 @@ function openPairDialog() {
   emit('addDevice')
 }
 
+/** 给这台设备建整机镜像的桌面快捷方式（父级负责建文件与报结果）。 */
+function sendDeviceShortcut(device) {
+  menuOpen.value = false
+  emit('shortcutDevice', device)
+}
+
 const actions = computed(() => {
   if (props.pageType === 'settings') {
     return [{ icon: 'lucide:arrow-left', tip: '返回', event: 'closeSettings' }]
@@ -75,7 +83,9 @@ const actions = computed(() => {
   // 只有首页（= 连着设备）才有设置入口：投屏参数里那一串「这台设备能编什么」的列表
   // 没有设备就算不出来，给个半空的页面进去只会误导人。
   if (props.pageType !== 'home') return []
-  return [{ icon: 'lucide:unplug', tip: '断开连接', event: 'disconnect' }]
+  // 「镜像手机」= 采整机主屏（不指定应用），与会话列表里那个「手机镜像」窗口一一对应。
+  return [{ icon: 'lucide:smartphone', tip: '镜像手机', event: 'mirrorDevice' }]
+    .concat([{ icon: 'lucide:unplug', tip: '断开连接', event: 'disconnect' }])
     .concat([{ icon: 'lucide:settings', tip: '设置', event: 'openSettings' }])
 })
 
@@ -153,8 +163,16 @@ watch(
                   </div>
                 </button>
 
-                <Icon v-if="isCurrent(item)" icon="lucide:check" :width="15" :height="15"
-                  class="shrink-0 text-accent" />
+                <template v-if="isCurrent(item)">
+                  <Icon icon="lucide:check" :width="15" :height="15" class="shrink-0 text-accent" />
+                  <!-- 整机镜像的桌面快捷方式（`anddrive://mirror?address=…`，不带 package）：
+                       双击直接开这台设备的整机镜像。只有当前这台能建，稳定标识要现问设备。 -->
+                  <button type="button" title="在桌面创建这台设备的整机镜像快捷方式"
+                    class="shrink-0 rounded-[6px] px-1.5 py-1 text-[11px] font-medium text-ink-3 outline-none transition-colors duration-150 hover:bg-fill-strong hover:text-accent focus-visible:ring-2 focus-visible:ring-accent/40"
+                    @click="sendDeviceShortcut(item)">
+                    发到桌面
+                  </button>
+                </template>
                 <!-- 列表里能出现的连接态设备都是「可连接」的，那枚状态标记没有信息量，换成断开。 -->
                 <button v-else-if="item.connected" type="button" class="shrink-0 rounded-[6px] px-1.5 py-1 text-[11px] font-medium text-ink-3 outline-none transition-colors duration-150 hover:bg-fill-strong hover:text-[#ff3b30] focus-visible:ring-2 focus-visible:ring-accent/40"
                   @click="emit('disconnectDevice', item)">

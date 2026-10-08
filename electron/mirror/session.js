@@ -130,15 +130,22 @@ function notifyExit(payload) {
 /**
  * 启动一个原生镜像窗口；连接/解码由渲染层完成，主进程轻手笔画。
  * 同一台设备上的同一个应用只开一个窗口：已经有了就把它唤到前台（见 `appSession.js`）。
- * @param {{ serial: string, packageName: string, label?: string, config?: unknown,
+ *
+ * **`packageName` 留空 = 整机镜像**（采集手机主屏，不建虚拟显示）：那条路上没有「这块显示上的
+ * 应用」概念，`startApp`、「接回画面」与「跟随窗口」整块不适用（判据随 `pendingInit.deviceMirror`
+ * 带给渲染层），用的也是**官方那份 server**（补丁产物的效果只作用于新建显示）。
+ * @param {{ serial: string, packageName?: string, label?: string, config?: unknown,
  *           iconUrl?: string }} request
  */
 export async function startMirrorSession(request) {
   const serial = typeof request?.serial === "string" ? request.serial.trim() : "";
   const packageName = typeof request?.packageName === "string" ? request.packageName.trim() : "";
+  const deviceMirror = !packageName;
   if (!isValidSerial(serial)) throw new Error("设备序列号无效");
-  if (!isValidPackageName(packageName)) throw new Error("应用包名无效");
-  const label = typeof request?.label === "string" && request.label.trim() ? request.label.trim() : packageName;
+  if (!deviceMirror && !isValidPackageName(packageName)) throw new Error("应用包名无效");
+  const label =
+    (typeof request?.label === "string" && request.label.trim()) ||
+    (deviceMirror ? "手机镜像" : packageName);
 
   const existing = findAppSession(sessions.values(), { serial, packageName });
   if (existing) {
@@ -152,7 +159,7 @@ export async function startMirrorSession(request) {
   }
 
   await ensureServer();
-  const serverPath = scrcpyServerPath();
+  const serverPath = scrcpyServerPath(deviceMirror ? { largeScreenDisplay: false } : undefined);
   const prefs = resolveRuntimePrefs(request?.config);
   // 窗口照**设备画面比例**开：默认模式的虚拟显示尺寸就取自窗口画面区的物理像素，
   // 窗口形状不对会开出一块错比例的显示（横窗 → 横显示 → 竖屏 app 直接换版式）。
@@ -200,6 +207,9 @@ export async function startMirrorSession(request) {
     serial,
     label,
     packageName,
+    // 整机镜像的判据在这里定一次：渲染层拿它跳过 `startApp`、「接回画面」与「跟随窗口」
+    // （那些都需要一块我们建的虚拟显示，这一档没有）。
+    deviceMirror,
     serverPath,
     config: request?.config ?? null,
     prefs,

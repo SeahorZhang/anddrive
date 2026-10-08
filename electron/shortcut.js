@@ -61,11 +61,13 @@ export async function readShortcutFile(filePath) {
 
 /**
  * 在桌面创建 / 覆盖一个 `.adr` 投屏快捷方式。
+ * `packageName` 留空 = **整机镜像**的快捷方式（见 `shortcutCore.buildMirrorUrl`）。
  * @param {{ address?: unknown, packageName?: unknown, label?: unknown, iconUrl?: unknown }} payload
  * @returns {Promise<{ path: string, name: string }>}
  */
 export async function createAppShortcut(payload) {
-  const packageName = normalizePackageName(payload?.packageName);
+  const rawPackage = typeof payload?.packageName === "string" ? payload.packageName.trim() : "";
+  const packageName = rawPackage ? normalizePackageName(rawPackage) : "";
   // 存**稳定设备标识**而不是 adb 传输地址：无线重连一次地址就换一个，存地址的快捷方式
   // 当场作废（点开没反应）。打开时再由主进程按标识反查当前地址。
   let stableId = "";
@@ -75,7 +77,7 @@ export async function createAppShortcut(payload) {
     // 问不到就用传进来的地址，至少不比旧行为差
   }
   const serial = sanitizeSerial(stableId || payload?.address);
-  const label = sanitizeLabel(payload?.label) || packageName;
+  const label = sanitizeLabel(payload?.label) || packageName || "手机镜像";
   const request = { serial, packageName, label, iconUrl: sanitizeIcon(payload?.iconUrl) };
 
   const name = sanitizeShortcutName(label, packageName);

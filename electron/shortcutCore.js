@@ -59,12 +59,15 @@ export function sanitizeShortcutName(label, fallback) {
 
 /**
  * 构造唤起投屏的 URL。所有字段经 URLSearchParams 编码，无法注入 shell。
- * @param {{ serial: string, packageName: string, label?: string }} request
+ * @param {{ serial: string, packageName?: string, label?: string }} request
  */
 export function buildMirrorUrl(request) {
   const url = new URL(`${MIRROR_SCHEME}://mirror`);
   url.searchParams.set("address", request.serial);
-  url.searchParams.set("package", request.packageName);
+  // **没有 `package` 参数 = 整机镜像**（采手机主屏），有 = 只镜像那个应用。
+  // 用「键在不在」而不是空值来表达：`package=` 这种空值会被解析回一个空串，
+  // 读起来像坏了的快捷方式，而 URL 少一段参数本身就是「没绑应用」的意思。
+  if (request.packageName) url.searchParams.set("package", request.packageName);
   if (request.label) url.searchParams.set("label", request.label);
   return url.toString();
 }
@@ -84,9 +87,9 @@ export function parseMirrorUrl(rawUrl) {
   }
   if (url.protocol !== `${MIRROR_SCHEME}:` || url.hostname !== "mirror") return null;
   const serial = url.searchParams.get("address");
-  const packageName = url.searchParams.get("package");
-  if (!serial || !packageName) return null;
-  const label = url.searchParams.get("label") || packageName;
+  if (!serial) return null;
+  const packageName = url.searchParams.get("package") || "";
+  const label = url.searchParams.get("label") || packageName || "手机镜像";
   return { serial, packageName, label };
 }
 

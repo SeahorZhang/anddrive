@@ -68,8 +68,29 @@ describe('buildMirrorOptions', () => {
     })
   })
 
-  it('任何配置组合都不把系统装饰打开', () => {
-    for (const config of [undefined, { audio: true }, { maxFps: 120 }, { videoCodec: 'av1' }]) {
+  /**
+   * 整机镜像（「镜像手机」）：上游 `Server.java:144-149` 按**这个键在不在**分叉，
+   * 不发 `new_display` 才是不建虚拟显示、直接采主屏（发空串仍会新建一块）。
+   */
+  it('整机镜像：不发 new_display，flex 与 vd_system_decorations 一起没有', () => {
+    const options = buildMirrorOptions(undefined, { videoCodec: 'h265', deviceMirror: true })
+    expect(options.newDisplay).toBeUndefined()
+    expect(options.flexDisplay).toBeUndefined()
+    expect(options.vdSystemDecorations).toBeUndefined()
+    // 其余参数与单应用镜像同规格：编码、码率、fps、音频照设置走，控制通道照旧开着。
+    expect(options).toMatchObject({ video: true, audio: true, control: true, videoCodec: 'h265' })
+    // 大屏模式那份补丁的效果只作用于新建显示，整机镜像这一档带着它也建不出显示。
+    expect(buildMirrorOptions(LARGE, { videoCodec: 'h265', deviceMirror: true }).newDisplay)
+      .toBeUndefined()
+  })
+
+  it('整机镜像还塞进来一块显示尺寸 = 接线错误，抛出来而不是静默忽略', () => {
+    expect(() =>
+      buildMirrorOptions(undefined, { videoCodec: 'h265', deviceMirror: true, display: PHYSICAL }),
+    ).toThrow(/不建虚拟显示/)
+  })
+
+  it('任何配置组合都不把系统装饰打开', () => {    for (const config of [undefined, { audio: true }, { maxFps: 120 }, { videoCodec: 'av1' }]) {
       expect(optionsFor(config).vdSystemDecorations).toBe(false)
     }
   })

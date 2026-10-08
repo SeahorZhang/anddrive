@@ -83,8 +83,10 @@ function displayFor(css) {
  * 开会话时用的 CSS：主进程建窗口时就已知道内容区尺寸（`initialCss`），直接拿它，
  * 不等渲染层布局。深链冷启动时镜像页可能还没排版完，读 DOM 会得到一个错误的默认值，
  * 开出一块错尺寸的显示（2026-09-28 实测 512x512/480）。
+ * **整机镜像不给尺寸**：那条路上 server 采的是主屏、根本不建显示，给了会被 `buildMirrorOptions` 抛。
  */
 function initialDisplay(info) {
+  if (info?.deviceMirror) return undefined;
   if (!info?.screenSize || !(info?.screenDpi > 0)) return undefined;
   const css = info?.initialCss;
   return displayFor(css?.width > 0 && css?.height > 0 ? css : contentCss());
@@ -114,6 +116,7 @@ export async function startSession(
     serverPath: info.serverPath,
     config: info.config,
     display: initialDisplay(info),
+    deviceMirror: info.deviceMirror === true,
     // `auto` 在这里落地：设备能编哪些由主进程探好随启动参数带来，本机能不能解现场探测。
     caps: { device: info.deviceCodecs ?? null, local: await probeLocalCodecs() },
   });
@@ -187,12 +190,17 @@ export async function startSession(
   void pumpLoop(video.stream, onVideoPacket, (detail) => onEnded(detail));
 
   const controller = client.controller;
-  await controller?.startApp(info.packageName).catch(() => {});
-  // 应用可能已经挂在别的显示上（被别的投屏软件搬走、或本来就在主屏上用着），那种情况下
-  // `startApp` 只会把它留在原处，本窗口就只剩启动器画面 —— 补一次不重启的搬移。
-  void ensureAppHere();
-  // 之后应用仍可能被别的投屏软件搬走：只负责把入口亮出来，要不要接回由用户点。
-  current.stopStolenWatch = watchAppStolen(onStolen);
+  // 单应用镜像才有的三步：把目标应用拉到**我们这块显示**上，并盯住它被别处搬走。
+  // 整机镜像采的是主屏 —— 没有「这块显示上的应用」这个东西，`startApp` 会把应用从主屏挪到
+  // 一块并不存在的显示上，接回轮询也只会拿到 null，所以整块跳过。
+  if (!info.deviceMirror) {
+    await controller?.startApp(info.packageName).catch(() => {});
+    // 应用可能已经挂在别的显示上（被别的投屏软件搬走、或本来就在主屏上用着），那种情况下
+    // `startApp` 只会把它留在原处，本窗口就只剩启动器画面 —— 补一次不重启的搬移。
+    void ensureAppHere();
+    // 之后应用仍可能被别的投屏软件搬走：只负责把入口亮出来，要不要接回由用户点。
+    current.stopStolenWatch = watchAppStolen(onStolen);
+  }
 
   // 虚拟显示跟随窗口（scrcpy `--flex-display` / -x 语义）：**只要这块显示是带着尺寸建的就有 flex**
   // （`buildMirrorOptions` 里 flex 与 `new_display` 一起下发），两种模式都跟随。

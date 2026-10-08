@@ -25,10 +25,13 @@ export function parseBitRate(value) {
 
 /**
  * 虚拟显示尺寸的 scrcpy 命令行写法：`<宽>x<高>`，给了密度才拼成 `<宽>x<高>/<dpi>`
- * （上游 `Options.parseNewDisplay` 三种形状都认：空串、带尺寸、只带 `/dpi`）。
- * **不给 dpi 是有意为之**：默认模式让 server 自己按长边等比缩密度
- * （`NewDisplayCapture.scaleDpi`：`initialDpi * 新长边 / 主屏长边`），于是长边 dp 数与主屏一致，
- * 版式仍由设备决定，我们不用去读设备的 density 值。
+ * （上游 `Options.parseNewDisplay` 认 `""`、`WxH`、`WxH/dpi`、`/dpi` 四种**值**，加上「不发这个键」
+ * 一共五种形态，语义见 `buildMirrorOptions`）。
+ * **密度由调用方给全**：上游那份 `scaleDpi`（缺密度时按长边等比缩）**只在非 flex 那条路跑**
+ * —— `NewDisplayCapture.prepare()` 对 `dpi == 0` 的 flex 直接断言，而 release 包断言是关的，
+ * 实测 flex + 只给尺寸会静默退成基准密度 160（长边 dp 数爆掉，应用被当成超大屏）。
+ * 我们这两条**给了尺寸**的路都带 `flex_display`（默认 = 物理像素 + `scaleDisplayDpi`，大屏 = CSS × 档位倍率），
+ * 所以尺寸与密度必须同源，见 `buildMirrorOptions` 与 `shared/scrcpyConfig.js`。
  * 数值由调用方给：曾经有个 `1280x960/160` 的兜底常量，生产唯一调用方总会覆盖它，等于死码，
  * 2026-09-28 删除。
  * @param {{ width: number, height: number, dpi?: number }} display
@@ -47,7 +50,7 @@ export function formatNewDisplay(display) {
  * 只覆盖作用于「服务端」的字段；置顶 / 全屏等窗口行为由 Electron 窗口负责，
  * 息屏等运行时控制后续通过控制消息下发。
  * @param {unknown} input
- * @param {{ videoCodec?: string, display?: { width: number, height: number, dpi: number } }} overrides
+ * @param {{ videoCodec?: string, display?: { width: number, height: number, dpi: number }, deviceMirror?: boolean }} overrides
  * @returns {Record<string, unknown>}
  */
 export function buildMirrorOptions(input, overrides = {}) {
@@ -92,8 +95,21 @@ export function buildMirrorOptions(input, overrides = {}) {
   // - 大屏模式（补丁产物）：尺寸 = 窗口 CSS × 画质档位倍率，密度同倍，1dp = 1 CSS px。
   // 拿不到设备信息时 `display` 为空：默认模式给空串 = 上游默认（主屏尺寸与密度）且**不开 flex**
   // （flex 缺尺寸就撞上上面那条断言）；大屏模式没有尺寸就没有密度口径，宁可抛
-  // （2026-09-28「不留兜底默认尺寸」那条教训）。`new_display` 这个键本身必须带 —— 不带 key 时
-  // server 不新建显示、改去镜像主屏。
+  // （2026-09-28「不留兜底默认尺寸」那条教训）。
+  //
+  // **整机镜像（`deviceMirror`）走另一条路：连 `new_display` 这个键都不发。**
+  // 上游的分叉点是**这个键在不在**（`Server.java:144-149`：`options.getNewDisplay() != null`
+  // → `NewDisplayCapture`，否则 → `ScreenCapture` 采集主屏）。实测随包 5.0.1 官方产物也一致：
+  // 不发键 → server stdout `Display: using SurfaceControl API`、没有 `New display: … (id=N)` 那行；
+  // 发空串 → 仍新建一块主屏尺寸的虚拟显示（那是「空字符串」这个**值**的语义，不是「没有虚拟显示」）。
+  // 于是没有可 resize 的显示（`flex_display` 与「跟随窗口」整块不适用，服务端 `requestResize`
+  // 对非 flex 显示直接抛错）、没有「这块显示上的应用」概念（调用方据此跳过 `startApp` 与接回），
+  // 窗口改大小只是本地缩放主屏画面。`vd_system_decorations` 只作用于新建显示，同样不发。
+  if (overrides.deviceMirror) {
+    if (overrides.display) throw new Error("整机镜像不建虚拟显示，display 必须为空");
+    return options;
+  }
+
   options.newDisplay =
     overrides.display || config.largeScreenDisplay ? formatNewDisplay(overrides.display) : "";
   if (overrides.display) options.flexDisplay = true;

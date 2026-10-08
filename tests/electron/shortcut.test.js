@@ -71,7 +71,7 @@ describe('mirror url', () => {
   it('rejects unrelated or malformed urls', () => {
     expect(parseMirrorUrl('https://example.com')).toBeNull()
     expect(parseMirrorUrl('anddrive://other?address=a&package=b')).toBeNull()
-    expect(parseMirrorUrl('anddrive://mirror?address=a')).toBeNull()
+    expect(parseMirrorUrl('anddrive://mirror')).toBeNull()
     expect(parseMirrorUrl('not a url')).toBeNull()
     expect(parseMirrorUrl(42)).toBeNull()
   })
@@ -79,6 +79,13 @@ describe('mirror url', () => {
   it('defaults label to package name when absent', () => {
     const url = buildMirrorUrl({ serial: '1.2.3.4:5555', packageName: 'com.a.b' })
     expect(parseMirrorUrl(url).label).toBe('com.a.b')
+  })
+
+  /** 没有 `package` = 整机镜像（采主屏，不建虚拟显示），这是「镜像手机」那条快捷方式的形态。 */
+  it('round-trips a device-wide mirror url without the package param', () => {
+    const url = buildMirrorUrl({ serial: '1.2.3.4:5555', packageName: '' })
+    expect(url).toBe('anddrive://mirror?address=1.2.3.4%3A5555')
+    expect(parseMirrorUrl(url)).toEqual({ serial: '1.2.3.4:5555', packageName: '', label: '手机镜像' })
   })
 })
 
@@ -160,8 +167,25 @@ describe('createAppShortcut', () => {
     }
   })
 
-  it('rejects unsafe package names', async () => {
-    // 桌面上临时目录兜底：万一校验顺序被改坏，也不要把测试产物写进仓库。
+  it('整机镜像（空包名）也建得出快捷方式，且不带 package', async () => {
+    const desktop = await fs.mkdtemp(path.join(os.tmpdir(), 'ad-shortcut-device-'))
+    process.env.AD_TEST_DESKTOP = desktop
+    try {
+      const result = await createAppShortcut({ address: '192.168.1.5:5555', packageName: '' })
+      expect(result.name).toBe('手机镜像')
+      const parsed = await readShortcutFile(result.path)
+      expect(parsed).toMatchObject({
+        serial: 'stable-192.168.1.5:5555',
+        packageName: '',
+        label: '手机镜像',
+      })
+    } finally {
+      await fs.rm(desktop, { recursive: true, force: true })
+      delete process.env.AD_TEST_DESKTOP
+    }
+  })
+
+  it('rejects unsafe package names', async () => {    // 桌面上临时目录兜底：万一校验顺序被改坏，也不要把测试产物写进仓库。
     const desktop = await fs.mkdtemp(path.join(os.tmpdir(), 'ad-shortcut-unsafe-'))
     process.env.AD_TEST_DESKTOP = desktop
     try {

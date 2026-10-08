@@ -35,9 +35,11 @@ const helperApkPath = () => path.join(resourcesBase(), "helper-app.apk");
  * 开关打开才用 `scrcpy/patched/` 里那份带 `debug.anddrive.vd.*` 的自编产物。
  * 两份烤的协议版本号必须都等于 `SCRCPY_SERVER_VERSION`（`scripts/verify-resources.mjs` 逐个查）。
  * 选哪一份的判据在 `scrcpyServerResource`（shared），这里只负责拼到 resources 根目录下。
+ * @param {{ largeScreenDisplay?: boolean }} [config] 省略 = 用当前全局参数；
+ *   **整机镜像要显式要官方那份** —— 补丁产物的作用全在「新建虚拟显示」上，整机镜像不建显示。
  */
-export const scrcpyServerPath = () =>
-  path.join(resourcesBase(), scrcpyServerResource(currentScrcpyConfig()));
+export const scrcpyServerPath = (config) =>
+  path.join(resourcesBase(), scrcpyServerResource(config ?? currentScrcpyConfig()));
 
 // ---------------------------------------------------------------------------
 // ADB 执行

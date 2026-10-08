@@ -79,7 +79,9 @@ function elapsed(startedAt) {
             class="group flex items-center gap-2 rounded-[10px] px-2 py-1.5 hover:bg-fill">
             <div
               class="flex size-7 shrink-0 items-center justify-center rounded-[8px] bg-gradient-to-b from-[#30d158] to-[#248a3d] text-white">
-              <Icon icon="lucide:app-window" :width="14" :height="14" />
+              <!-- 整机会话没有包名（采主屏，不建虚拟显示），图标跟着换一枚手机的 -->
+              <Icon :icon="session.packageName ? 'lucide:app-window' : 'lucide:smartphone'" :width="14"
+                :height="14" />
             </div>
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-1.5">
@@ -89,7 +91,7 @@ function elapsed(startedAt) {
                 </span>
               </div>
               <div class="truncate text-[10px] text-ink-3">
-                {{ session.packageName }} · {{ elapsed(session.startedAt) }}
+                {{ session.packageName || '整机镜像' }} · {{ elapsed(session.startedAt) }}
               </div>
             </div>
             <button title="聚焦窗口"

@@ -11,6 +11,9 @@ import {
   reconnectApi,
   onMirrorResultApi,
   onMirrorExitApi,
+  startMirrorApi,
+  createAppShortcutApi,
+  revealShortcutApi,
 } from "@/api";
 import { readableError } from "@/utils/errors";
 import {
@@ -456,6 +459,44 @@ function openSettings() {
 function closeSettings() {
   pageType.value = settingsReturn.value;
 }
+
+/**
+ * 顶栏「镜像手机」：**整机镜像**（不带包名 = 采手机主屏，不建虚拟显示）。
+ * 同一台设备只开一个：包名为空时会话键就是「设备 + 空」，再点一次唤到前台（见 `appSession.js`）。
+ */
+async function mirrorDevice() {
+  const target = device.value;
+  if (!target) return;
+  try {
+    await startMirrorApi({
+      serial: target.address,
+      packageName: "",
+      label: target.label || target.name || "",
+      config: { ...scrcpyConfig },
+    });
+    await refreshScrcpySessions();
+  } catch (error) {
+    notifyError(error, { title: "开启手机镜像失败" });
+  }
+}
+
+/** 设备下拉里「发到桌面」：给这台设备建一个整机镜像的 `.adr` 快捷方式。 */
+async function sendDeviceShortcut(target) {
+  if (!target) return;
+  try {
+    const result = await createAppShortcutApi({
+      address: target.address,
+      packageName: "",
+      label: `${target.label || target.name || "设备"} 整机`,
+    });
+    notify.success(`已在桌面创建「${result.name}」`, {
+      title: "桌面快捷方式已创建",
+      action: { label: "在访达中显示", handler: () => revealShortcutApi(result.path) },
+    });
+  } catch (error) {
+    notifyError(error, { title: "创建手机镜像快捷方式失败" });
+  }
+}
 </script>
 
 <template>
@@ -463,7 +504,8 @@ function closeSettings() {
     :devices="discoveredDevices" :active-device="activeDevice"
     @disconnect="disconnect" @disconnect-device="disconnectListedDevice" @open-settings="openSettings"
     @close-settings="closeSettings" @switch-device="switchDevice"
-    @device-menu-change="onDeviceMenuChange" @add-device="openPairDialog" />
+    @device-menu-change="onDeviceMenuChange" @add-device="openPairDialog"
+    @mirror-device="mirrorDevice" @shortcut-device="sendDeviceShortcut" />
 
   <div v-if="pageType === 'loading'" class="flex flex-1 items-center justify-center">
     <span class="size-5 animate-spin rounded-full border-2 border-line border-t-accent" aria-label="加载中" />
