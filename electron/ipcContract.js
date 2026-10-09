@@ -60,6 +60,10 @@ export const CHANNELS = {
   mirrorAppTask: 'mirror:appTask',
   /** 镜像 → 设备：把应用的任务搬到本窗口的虚拟显示上（不重启应用）。 */
   mirrorMoveTask: 'mirror:moveTask',
+  /** 镜像 → 设备：现在醒着还是睡了（`dumpsys power` 的 `mWakefulness`）。 */
+  mirrorWakefulness: 'mirror:wakefulness',
+  /** 镜像 → 设备：点亮屏幕（用户点「继续使用」；只唤醒不解密码锁）。 */
+  mirrorWake: 'mirror:wake',
 
   /** macOS 系统权限（electron/permissions.js）。 */
   permissionsStatus: 'permissions:getStatus',

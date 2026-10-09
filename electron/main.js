@@ -230,13 +230,17 @@ app.on("window-all-closed", () => {
 if (!app.isPackaged) {
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.on(signal, () => {
-      app.exit(0);
+      // **不能用 `app.exit(0)`**：它跳过 `before-quit`，等于把设备侧登记的还原机会整个丢掉
+      // —— 实测 dev 里 Ctrl+C 之后手机上留下 `stay_on_while_plugged_in=7`（从此插电不息屏）。
+      // 走 `app.quit()` 才会进上面那个 `before-quit`，它自带 3s 超时，不会把退出卡住。
+      app.quit();
     });
   }
   const orphanTimer = setInterval(() => {
     if (process.ppid === 1) {
       clearInterval(orphanTimer);
-      app.exit(0);
+      // 同上：孤儿退出也要走 `before-quit` 的还原，别把设备侧登记留在原地。
+      app.quit();
     }
   }, 1000);
   process.on("exit", () => clearInterval(orphanTimer));

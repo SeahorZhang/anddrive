@@ -5,16 +5,21 @@ import {
   ensureServer,
   getDeviceSdk,
   getDeviceVideoCodecs,
+  getGlobalNumberSetting,
   getPhysicalScreenSize,
   getPhysicalScreenDensity,
+  getWakefulness,
   isMiuiDevice,
   onDeviceTeardown,
   scrcpyServerPath,
+  setGlobalNumberSetting,
   setSecureSetting,
+  wakeDevice,
 } from "../adb.js";
 import { sanitizeIcon } from "../iconImage.js";
 import { isValidPackageName, isValidSerial } from "../validators.js";
 import { findAppSession } from "./appSession.js";
+import { startKeepAwake } from "./keepAwake.js";
 import { startMiProjection } from "./miProjection.js";
 import { mirrorWindowBounds, mirrorsMainDisplay, resolveRuntimePrefs } from "./options.js";
 
@@ -45,6 +50,7 @@ let sessionSeq = 0;
  * @property {import("electron").BrowserWindow | null} win
  * @property {Record<string, unknown> | null} pendingInit
  * @property {(() => Promise<void>) | null} miProjectionRestore
+ * @property {(() => Promise<void>) | null} keepAwakeRestore
  */
 
 function loadMirrorPage(win) {
@@ -170,11 +176,12 @@ export async function startMirrorSession(request) {
   // 密度也取自设备（`wm density`）：flex 显示必须同时带密度（上游 `NewDisplayCapture.prepare()`
   // 对 `dpi == 0` 的 flex 直接断言），渲染层按主屏长边等比换算它。
   // 任一处读不到就退回既有的 850x600，且渲染层不给显示尺寸（`new_display` 退空串、不开 flex）。
-  // 版本（API 级别）决定点应用要不要改走主屏镜像，与这两趟并列读，不多等一个来回。
+  // 版本（API 级别）决定两件事：点应用要不要改走主屏镜像，以及要不要 keepAwake。
+  // 与读分辨率/密度并列，不多等一个来回。
   const [screenSize, screenDpi, sdk] = await Promise.all([
     getPhysicalScreenSize(serial).catch(() => null),
     getPhysicalScreenDensity(serial).catch(() => null),
-    wholeDevice ? Promise.resolve(null) : getDeviceSdk(serial).catch(() => null),
+    getDeviceSdk(serial).catch(() => null),
   ]);
   const deviceMirror = wholeDevice || mirrorsMainDisplay(sdk);
   const serverPath = scrcpyServerPath(deviceMirror ? { largeScreenDisplay: false } : undefined);
@@ -195,6 +202,7 @@ export async function startMirrorSession(request) {
     win: null,
     pendingInit: null,
     miProjectionRestore: null,
+    keepAwakeRestore: null,
   };
   sessions.set(session.id, session);
 
@@ -248,6 +256,23 @@ export async function startMirrorSession(request) {
     })
     .catch(() => {});
 
+  // Android 13 及以下那档采的是手机那块屏：**面板灭了就没帧可采**，而那个版本没有 HyperOS
+  // 的 `Hangup` 门（灭屏仍合成），所以开会话时把「插电不休眠」打开、关会话时还原成它原来的值。
+  // 判据与实测见 `keepAwake.js`；同样不等落地，因为置位必须赶在设备睡之前。
+  if (mirrorsMainDisplay(sdk)) {
+    void startKeepAwake({
+      serial,
+      read: (key) => getGlobalNumberSetting(serial, key),
+      write: (key, mask) => setGlobalNumberSetting(serial, key, mask),
+    })
+      .then(async (restore) => {
+        // 窗口已经关了（用户手快 / 建窗口就失败）：这次登记立即撤销，别把保活留在设备上。
+        if (sessions.has(session.id)) session.keepAwakeRestore = restore;
+        else await restore();
+      })
+      .catch(() => {});
+  }
+
   return { id: session.id, serial, packageName, label, startedAt: session.startedAt };
 }
 
@@ -256,9 +281,13 @@ export async function stopMirrorSession(id) {
   const session = sessions.get(id);
   if (!session) return false;
   sessions.delete(id);
-  const restore = session.miProjectionRestore;
+  // 两条设备侧登记都要还原（关窗 / 断开设备 / ⌘Q 都走这里）。
+  const restoreMiProjection = session.miProjectionRestore;
   session.miProjectionRestore = null;
-  if (restore) await restore().catch(() => {});
+  if (restoreMiProjection) await restoreMiProjection().catch(() => {});
+  const restoreKeepAwake = session.keepAwakeRestore;
+  session.keepAwakeRestore = null;
+  if (restoreKeepAwake) await restoreKeepAwake().catch(() => {});
   if (session.win && !session.win.isDestroyed()) {
     // 渲染层在 beforeunload 里停掉 scrcpy 会话；窗口关闭兜底。
     session.win.close();

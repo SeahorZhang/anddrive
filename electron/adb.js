@@ -1463,6 +1463,16 @@ function assertSerial(serial) {
 }
 
 /**
+ * 设置键与取值是拼进设备 shell 命令的，先卡住字符集。
+ * @param {unknown} value @param {string} label
+ */
+function assertSettingToken(value, label) {
+  const text = String(value ?? "").trim();
+  if (!/^[A-Za-z0-9_.:+-]{1,64}$/.test(text)) throw new Error(`${label}无效`);
+  return text;
+}
+
+/**
  * 读取应用的 APK 路径，split APK 会返回多个。
  * @param {string} serial @param {string} packageName
  * @returns {Promise<string[]>}
@@ -1588,6 +1598,97 @@ export async function setSecureSetting(serial, key, value) {
   assertSerial(serial);
   await ensureServer();
   return adbExecSafe(["-s", serial, "shell", "settings", "put", "secure", key, String(value)]);
+}
+
+/**
+ * `settings get global <key>` 的输出 → 数字（纯函数，便于单测）。
+ * 两条必须分得开：**没设过**（设备回字面量 `null`）= 该键的默认值 0（这条不是猜，AOSP 默认就是 0），
+ * 而**命令失败** = 读不到（null）—— 后者被读成 0 的话，还原时会把用户自己开的设置抹掉。
+ * @param {string} stdout @param {number} code
+ * @returns {number | null}
+ */
+export function parseGlobalNumberSetting(stdout, code) {
+  if (code !== 0) return null;
+  const text = String(stdout ?? "").trim();
+  if (text === "null") return 0;
+  const value = Number.parseInt(text, 10);
+  return Number.isFinite(value) ? value : null;
+}
+
+/**
+ * 读 `Settings.Global` 的一个数字键。
+ * 「插电时保持唤醒」（`stay_on_while_plugged_in`）用它读原值，关镜像时好原样写回。
+ * @param {string} serial @param {string} key
+ * @returns {Promise<number | null>} null = 读不到，调用方据此决定不动设备设置
+ */
+export async function getGlobalNumberSetting(serial, key) {
+  assertSerial(serial);
+  const name = assertSettingToken(key, "设置键");
+  await ensureServer();
+  const { code, stdout } = await adbExecSafe(["-s", serial, "shell", "settings get global", name]);
+  return parseGlobalNumberSetting(stdout, code);
+}
+
+/**
+ * 写 `Settings.Global` 的一个数字键。
+ * 真机量过（Mi 10 / Android 13）：`stay_on_while_plugged_in=7` → `dumpsys power` 的 `mStayOn=true`，
+ * 15s 息屏超时到点后 50s 仍 `mWakefulness=Awake`。**只在插电时成立**，而这台机
+ * `dumpsys battery` 报的是 `AC powered: true / USB powered: false`，所以只写 USB 位
+ * （`svc power stayon usb`）不生效，得 AC|USB|无线 三位一起写。
+ * @param {string} serial @param {string} key @param {number} value
+ * @returns {Promise<boolean>} 命令是否成功。失败**不抛**：调用方按「没写成」处理，
+ *   不能把设备设置写到一半还等着别人去还原。
+ */
+export async function setGlobalNumberSetting(serial, key, value) {
+  assertSerial(serial);
+  const name = assertSettingToken(key, "设置键");
+  const number = Number(value);
+  if (!Number.isInteger(number)) throw new Error("设置取值无效");
+  await ensureServer();
+  const { code } = await adbExecSafe(["-s", serial, "shell", "settings put global", name, String(number)]);
+  return code === 0;
+}
+
+/** `dumpsys power` 里那一行 → 状态名（纯函数）：`mWakefulness=Awake` → `'Awake'`，读不到 → null。 */
+export function parseWakefulness(stdout) {
+  const match = /mWakefulness=([A-Za-z]+)/.exec(String(stdout ?? ""));
+  return match ? match[1] : null;
+}
+
+/**
+ * 设备现在醒还是睡（`dumpsys power` 的 `mWakefulness`：`Awake` / `Dozing` / `Asleep` /
+ * HyperOS 投屏态 `Hangup` …）。只 grep 那一行，别把整份 dumpsys（几百 KB）拖回本机。
+ * @param {string} serial
+ * @returns {Promise<string | null>} null = 读不到
+ */
+export async function getWakefulness(serial) {
+  assertSerial(serial);
+  await ensureServer();
+  const { stdout } = await adbExecSafe([
+    "-s",
+    serial,
+    "shell",
+    "dumpsys power | grep -m1 -oE 'mWakefulness=[A-Za-z]+'",
+  ]);
+  return parseWakefulness(stdout);
+}
+
+/**
+ * 点亮屏幕（`KEYCODE_WAKEUP`=224）：只唤醒、不解密码锁，带锁屏时亮着的是锁屏画面。
+ * **失败要抛** —— 这是用户点「继续使用」的结果，静默失败等于按钮没反应（同「收藏写盘失败必须抛」那条）。
+ * MIUI/HyperOS 上这条吃「USB 调试（安全设置）」那道闸（`INJECT_EVENTS`），被拒时把设备原文带回去。
+ * @param {string} serial
+ */
+export async function wakeDevice(serial) {
+  assertSerial(serial);
+  await ensureServer();
+  const { code, stdout, stderr } = await adbExecSafe(["-s", serial, "shell", "input keyevent 224"]);
+  const output = `${stdout}\n${stderr}`.trim();
+  // 被拒时退出码常常仍是 0，只打印 SecurityException，所以文本也得判。
+  if (code !== 0 || /exception|denied|not permitted|requires/i.test(output)) {
+    throw new Error(output || "唤醒设备失败");
+  }
+  return true;
 }
 
 const videoCodecCapsCache = new Map();
@@ -2039,6 +2140,9 @@ ipcMain.handle(CHANNELS.mirrorAppTask, (_, serial, pkg) => getAppTask(serial, pk
 ipcMain.handle(CHANNELS.mirrorMoveTask, (_, serial, taskId, displayId) =>
   moveAppTaskToDisplay(serial, taskId, displayId),
 );
+// 镜像窗口的「已休眠」横幅：读电源状态判它是不是睡了，点「继续使用」时点亮屏幕。
+ipcMain.handle(CHANNELS.mirrorWakefulness, (_, serial) => getWakefulness(serial));
+ipcMain.handle(CHANNELS.mirrorWake, (_, serial) => wakeDevice(serial));
 ipcMain.handle(CHANNELS.adbClearData, (_, serial, pkg) => clearAppData(serial, pkg));
 ipcMain.handle(CHANNELS.adbUninstallApp, (_, serial, pkg) => uninstallApp(serial, pkg));
 ipcMain.handle(CHANNELS.adbAppInfo, (_, serial, pkg) => getAppInfo(serial, pkg));

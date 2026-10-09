@@ -85,6 +85,9 @@
 | 把任务搬回本窗口显示（**不冷启**） | A：`shell am display move-stack` | `moveAppTaskToDisplay` → `reclaimApp` |
 | 窗口初始形状 | A：`shell wm size` | `getPhysicalScreenSize` |
 | MIUI 息屏仍继续合成 | A：`settings put secure synergy_mode` | `setSecureSetting` + `miProjection.js` |
+| 插电时不休眠（Android 13 及以下那档镜像期间，**开前先读原值、关会话时还原**） | A：`settings get/put global stay_on_while_plugged_in` | `getGlobalNumberSetting` / `setGlobalNumberSetting` + `keepAwake.js` |
+| 设备睡了没有（镜像窗口的「已休眠」横幅） | A：`dumpsys power \| grep -m1 -oE mWakefulness=` | `getWakefulness` + `src/mirror/sleepWatch.js` |
+| 点「继续使用」点亮屏幕 | A：`input keyevent 224`（KEYCODE_WAKEUP，吃 `INJECT_EVENTS`） | `wakeDevice` → `direct-session.js` 的 `wakeScreen` |
 | MIUI/HyperOS 判定 | A：`getprop ro.miui.ui.version.name` | `isMiuiDevice` |
 | 虚拟显示创建/resize | B（scrcpy flex display 控制消息） | `formatNewDisplay` / `resizeDisplay` |
 
@@ -102,6 +105,8 @@ B 路径的 sync 子协议 + `exec:`，全部在 `devfs.js`：`statDevicePath`�
 | 强停 / 清数据 / 卸载任意应用 / 导出 APK | **是** | 无（普通 app 只能操作自己） | 应用管理那一圈右键全空 |
 | 搬移任务回本显示 | **是**（`am display move-stack`） | 无 | 「接回画面」消失 |
 | MIUI 息屏继续合成 | **是**（`WRITE_SECURE_SETTINGS`） | 无 | 息屏卡画面回来 |
+| 镜像期间插电不休眠 | 否（设备侧 helper 持 `WAKE_LOCK` 也行，竞品就走这条） | helper 常驻服务 + `FLAG_KEEP_SCREEN_ON` | adb 这条零安装、零常驻服务，且**能读回原值再还原**；代价是只在插电时成立 |
+| 点亮屏幕（「继续使用」） | **是**（`INJECT_EVENTS`） | 无（普通 app 起不了别人的唤醒） | MIUI 上这条吃「USB 调试（安全设置）」那道闸，被拒时按钮要说清为什么 |
 | 应用列表与图标 | 否 | `QUERY_ALL_PACKAGES` 常驻 app 可列可取图标 | 需要装一个**有权限、常驻**的 app：Android 11+ 权限审查、ROM 后台限制、冷启动要 IPC 握手；与 helper 定位冲突（见 §7） |
 | 存储按卷读数 | 否 | `StorageManager` + `StatFs` | 与手机设置/竞品口径一致性要重新验（`TODO.md` §6.1 F10） |
 | 设备信息面板 | 大部分否 | 同一个常驻 app（battery/meminfo/loadavg/getprop 普通 app 大多读得到） | 个别 ROM 收紧 `/proc`；市场名等字段口径变化 |

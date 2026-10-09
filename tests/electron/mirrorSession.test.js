@@ -65,6 +65,10 @@ const env = vi.hoisted(() => {
     teardownHooks,
     /** `scrcpyServerPath` 收到过的 config 参数（选哪份 server 产物就靠它）。 */
     serverPathArgs: [],
+    /** keepAwake 对设备设置的读写轨迹，与「设备当前值」。 */
+    settingReads: [],
+    settingWrites: [],
+    stayOn: {},
     FakeBrowserWindow,
     ipcMain: {
       handle: (channel, fn) => handlers.set(channel, fn),
@@ -107,6 +111,18 @@ vi.mock('../../electron/adb.js', () => ({
     const match = /sdk(\d+)/.exec(String(serial ?? ''))
     return match ? Number(match[1]) : null
   },
+  // 「插电不休眠」这个设备设置：keepAwake 开之前读原值、最后一个会话关掉时写回。
+  getGlobalNumberSetting: async (_serial, key) => {
+    env.settingReads.push(key)
+    return env.stayOn[key] ?? 0
+  },
+  setGlobalNumberSetting: async (_serial, key, value) => {
+    env.settingWrites.push([key, value])
+    env.stayOn[key] = value
+    return true
+  },
+  getWakefulness: async () => 'Awake',
+  wakeDevice: async () => true,
   onDeviceTeardown: (hook) => {
     env.teardownHooks.push(hook)
     return () => {
@@ -122,7 +138,12 @@ vi.mock('../../electron/adb.js', () => ({
 // 镜像页的 preload 路径按 APP_ROOT 拼，测试里只要求它是个字符串。
 process.env.APP_ROOT = '/tmp/anddrive-test'
 
-const { startMirrorSession } = await import('../../electron/mirror/session.js')
+const { startMirrorSession, stopMirrorSession } = await import('../../electron/mirror/session.js')
+
+/** `keepAwake` 是在会话返回后异步落地的（置位不能拖慢开窗口），测试里把微任务跑干净。 */
+const flush = async () => {
+  for (let i = 0; i < 8; i += 1) await Promise.resolve()
+}
 
 /** 页面拉启动参数：`mirror:initGet` 按 sender 找到它所属的那个会话窗口。 */
 const initFrom = (win) => env.handlers.get(CHANNELS.mirrorInitGet)({ sender: win.webContents })
@@ -228,7 +249,60 @@ describe('Android 13 及以下点应用 = 采主屏', () => {
   })
 })
 
-// 默认模式的虚拟显示尺寸取自「窗口画面区的物理像素」，所以窗口形状必须在建之前就对：
+// 低版本没有 HyperOS 那扇 `Hangup` 门（灭屏仍合成），而这一档镜像的就是手机那块屏 ——
+// 面板灭了就没帧可采。所以开会话时把「插电不休眠」打开，关会话时还原成**它原来的值**。
+describe('Android 13 及以下开会话时 keepAwake', () => {
+  const KEY = 'stay_on_while_plugged_in'
+
+  it('API 33：写 7，用户自己开着的原值（1）在关会话时还回去', async () => {
+    env.settingReads.length = 0
+    env.settingWrites.length = 0
+    env.stayOn[KEY] = 1
+    const started = await startMirrorSession({ serial: 'dev-sdk33-awake', packageName: 'com.example.app' })
+    await flush()
+    expect(env.settingReads).toEqual([KEY])
+    expect(env.settingWrites).toEqual([[KEY, 7]])
+
+    await stopMirrorSession(started.id)
+    expect(env.settingWrites).toEqual([
+      [KEY, 7],
+      [KEY, 1],
+    ])
+  })
+
+  it('API 34 不碰这个设置（那一档灭屏仍合成，不该占用用户的电源偏好）', async () => {
+    env.settingReads.length = 0
+    env.settingWrites.length = 0
+    const started = await startMirrorSession({ serial: 'dev-sdk34-awake', packageName: 'com.example.app' })
+    await flush()
+    expect(env.settingReads).toEqual([])
+    expect(env.settingWrites).toEqual([])
+    await stopMirrorSession(started.id)
+    expect(env.settingWrites).toEqual([])
+  })
+
+  /** 读不到版本 = 不知道版本，那就别动用户设备上的东西。 */
+  it('版本读不到时也不碰', async () => {
+    env.settingReads.length = 0
+    env.settingWrites.length = 0
+    const started = await startMirrorSession({ serial: 'dev-sdk-unknown-awake', packageName: 'com.example.app' })
+    await flush()
+    expect(env.settingWrites).toEqual([])
+    await stopMirrorSession(started.id)
+  })
+
+  it('空包名的整机镜像在 API 33 上同样开（采的都是那块屏）', async () => {
+    env.settingWrites.length = 0
+    env.stayOn[KEY] = 0
+    const started = await startMirrorSession({ serial: 'dev-phone-sdk33', packageName: '' })
+    await flush()
+    expect(env.settingWrites).toEqual([[KEY, 7]])
+    await stopMirrorSession(started.id)
+    expect(env.settingWrites.at(-1)).toEqual([KEY, 0])
+  })
+})
+
+
 // 横窗会开出一块横显示，竖屏 app 立刻换版式（`mirrorWindowBounds` 照设备画面比例 fit 可用区）。
 describe('镜像窗口照设备画面比例开', () => {
   it('竖屏手机 → 等比竖窗，并把设备分辨率透传给镜像页（它据此决定给不给显示尺寸）', async () => {

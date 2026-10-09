@@ -2,6 +2,7 @@ import { CHANNELS } from "../../electron/ipcContract.js";
 import { getServerClient, acquireDeviceAdb, startScrcpy, codecName } from "./connect.js";
 import { computeDisplayMetrics, scaleDisplayDpi } from "../../shared/scrcpyConfig.js";
 import { createDisplayFollower } from "./displayFollow.js";
+import { createSleepWatcher } from "./sleepWatch.js";
 import { probeLocalCodecs } from "../utils/codecCaps.js";
 import { createOpusPlayer } from "./audio.js";
 import { applyControl } from "../../electron/mirror/control.js";
@@ -21,6 +22,8 @@ const current = {
   displayId: null,
   /** 「应用被别的显示拿走」轮询的停止函数。 */
   stopStolenWatch: null,
+  /** 「设备睡下去了」轮询的停止函数。 */
+  stopSleepWatch: null,
 };
 
 /** 当前窗口的 CSS 尺寸（视口）。用 documentElement 而不是 innerWidth：后者含滚动条/边框口径。 */
@@ -104,11 +107,22 @@ function initialDisplay(info) {
  *   onReflowAbort?: () => void,
  *   onReflowSent?: () => void,
  *   onStolen?: (stolen: boolean) => void,
+ *   onSleepChange?: (asleep: boolean) => void,
  * }} handlers
  */
 export async function startSession(
   info,
-  { onMeta, onVideoPacket, onAudioPacket, onEnded, onReflowStart, onReflowAbort, onReflowSent, onStolen },
+  {
+    onMeta,
+    onVideoPacket,
+    onAudioPacket,
+    onEnded,
+    onReflowStart,
+    onReflowAbort,
+    onReflowSent,
+    onStolen,
+    onSleepChange,
+  },
 ) {
   current.info = info;
   const adb = await acquireDeviceAdb(getServerClient(), info.serial);
@@ -206,6 +220,16 @@ export async function startSession(
     void ensureAppHere();
     current.stopStolenWatch = watchAppStolen(onStolen);
   }
+
+  // 设备睡了没有：睡下（`Asleep`/`Dozing`）时页面要亮「已休眠 + 继续使用」。
+  // **这一条不分会话形态**：虚拟显示那档设备睡了同样停帧，而它只是报告 + 等用户点，
+  // 不动设备任何设置（防睡是主进程按版本开的，见 `electron/mirror/keepAwake.js`）。
+  current.stopSleepWatch = createSleepWatcher({
+    read: () => ipcInvoke(CHANNELS.mirrorWakefulness, info.serial),
+    onChange: (asleep) => onSleepChange?.(asleep),
+    // 窗口被最小化/在别的 Space 时不去打扰设备（同「接回」轮询那条）。
+    shouldSkip: () => document.hidden,
+  });
 
   // 虚拟显示跟随窗口（scrcpy `--flex-display` / -x 语义）：**只要这块显示是带着尺寸建的就有 flex**
   // （`buildMirrorOptions` 里 flex 与 `new_display` 一起下发），两种模式都跟随。
@@ -318,6 +342,23 @@ export async function reclaimApp() {
 }
 
 /**
+ * 点亮屏幕（用户点「继续使用」时）。只唤醒、不解密码锁：带锁屏时亮起来的是锁屏画面。
+ * 失败要把原因带回 —— MIUI/HyperOS 上这条吃「USB 调试（安全设置）」那道闸（`INJECT_EVENTS`），
+ * 被拒时按钮不能像没反应一样。设备原文常是多行 Java 栈，只取第一行。
+ */
+export async function wakeScreen() {
+  const info = current.info;
+  if (!info) return { ok: false, message: "会话还没就绪" };
+  try {
+    await ipcInvoke(CHANNELS.mirrorWake, info.serial);
+    return { ok: true };
+  } catch (error) {
+    const firstLine = String(error?.message || "").split("\n")[0].trim();
+    return { ok: false, message: firstLine || "唤醒失败" };
+  }
+}
+
+/**
  * server 的 stdout 是异步到的，刚建会话时显示 id 可能还没解析出来。
  */
 async function waitForDisplayId(timeoutMs = 1500) {
@@ -376,6 +417,10 @@ export function stopSession() {
     current.stopStolenWatch();
     current.stopStolenWatch = null;
   }
+  if (current.stopSleepWatch) {
+    current.stopSleepWatch();
+    current.stopSleepWatch = null;
+  }
   // 虚拟显示随会话一起销毁，设备侧不留任何残留状态。
   if (!current.client) return null;
   const closing = current.client.close?.().catch?.(() => {}) ?? null;
@@ -409,7 +454,7 @@ window.addEventListener("beforeunload", () => stopSession());
  *   hooks: { onMeta?: (meta) => void, onAudioError?: (message: string) => void,
  *            onReflowStart?: (size) => void, onReflowAbort?: () => void,
  *            onReflowSent?: () => void,
- *            onStolen?: (stolen) => void },
+ *            onStolen?: (stolen) => void, onSleepChange?: (asleep) => void },
  * }} apply App 侧管线接线
  */
 export async function bootstrap(apply) {
@@ -433,6 +478,7 @@ export async function bootstrap(apply) {
     onReflowAbort: () => apply.hooks.onReflowAbort?.(),
     onReflowSent: () => apply.hooks.onReflowSent?.(),
     onStolen: (stolen) => apply.hooks.onStolen?.(stolen),
+    onSleepChange: (asleep) => apply.hooks.onSleepChange?.(asleep),
     onEnded: (detail) => {
       // server 端自发退出（设备断开 / server 异常）。
       if (!window.__anddriveMirrorId) return;

@@ -1,7 +1,7 @@
 <script setup>
 import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { useMirrorInput } from './useMirrorInput.js'
-import { bootstrap, dispose as disposeSession, reclaimApp, getSessionInfo, setContentElement } from './direct-session.js'
+import { bootstrap, dispose as disposeSession, reclaimApp, wakeScreen, getSessionInfo, setContentElement } from './direct-session.js'
 import { aspectDiffers, createReflowGate } from './displayFollow.js'
 
 // 镜像窗口（渲染层直连）：adb/scrcpy 全在本进程内由 Tango 官方库建立，
@@ -213,6 +213,26 @@ async function reclaim() {
   }
 }
 
+/**
+ * 设备睡下了（`mWakefulness` = `Asleep`/`Dozing`）：面板灭了就不再有新帧，
+ * 画面定住不是链路坏了。照竞品给一个「继续使用」，点了点亮屏幕；
+ * 醒回来后轮询自己会把横幅撤掉（`onSleepChange(false)`）。
+ */
+const asleep = ref(false)
+const waking = ref(false)
+
+async function continueAfterSleep() {
+  if (waking.value) return
+  waking.value = true
+  try {
+    const result = await wakeScreen()
+    // 失败只回一行文案：MIUI 上这条吃「USB 调试（安全设置）」那道闸，被拒要说清为什么。
+    if (!result?.ok) showNotice(result?.message || '唤醒失败')
+  } finally {
+    waking.value = false
+  }
+}
+
 function syncCanvasBox() {
   const host = canvasHost.value
   const canvas = renderer.value?.canvas
@@ -350,6 +370,9 @@ async function booted() {
         stolen.value = value
         if (value) takeSessionIcon()
       },
+      onSleepChange: (value) => {
+        asleep.value = value
+      },
       onMeta: (info) => {
         meta.value = info
         startDecoder(info)
@@ -426,6 +449,15 @@ onBeforeUnmount(() => {
         </button>
       </div>
       <p v-if="notice" class="mirror-notice">{{ notice }}</p>
+
+      <!-- 设备睡下了：给一个「继续使用」点亮屏幕（照竞品的「已休眠」那一格）。
+           不自动弹醒 —— 手按电源键是用户的决定，程序不该抢。 -->
+      <div v-if="asleep" class="mirror-sleep" style="-webkit-app-region: no-drag">
+        <p class="mirror-sleep__title">已休眠</p>
+        <button type="button" class="mirror-sleep__button" :disabled="waking" @click="continueAfterSleep">
+          {{ waking ? '唤醒中…' : '继续使用' }}
+        </button>
+      </div>
 
       <p v-if="status"
         class="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-[12px] text-white/60">
@@ -659,6 +691,40 @@ onBeforeUnmount(() => {
 }
 
 .mirror-reclaim__button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 设备睡下时的入口：只压一层轻底 + 居中小胶囊，让人看清画面定住的是最后一帧。 */
+.mirror-sleep {
+  position: absolute;
+  inset: 0;
+  z-index: 16;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgb(0 0 0 / 45%);
+}
+
+.mirror-sleep__title {
+  margin: 0;
+  color: rgb(255 255 255 / 82%);
+  font-size: 14px;
+}
+
+.mirror-sleep__button {
+  padding: 7px 16px;
+  border: none;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 94%);
+  color: #101012;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mirror-sleep__button:disabled {
   opacity: 0.6;
   cursor: default;
 }
