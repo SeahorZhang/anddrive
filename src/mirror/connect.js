@@ -43,7 +43,8 @@ export function createScid() {
  * 不等就直接退出 → 所以第二个参数必须显式报 `SCRCPY_SERVER_VERSION`，不能靠库里的默认 "4.1"。
  * 虚拟显示尺寸由调用方算好后传入（`direct-session.js` 是全项目唯一算它的地方），要不要用它拼成
  * 协议字符串由 `buildMirrorOptions` 按「大屏模式」决定 —— 默认（上游原生 server）传空串 = 主屏尺寸。
- * `deviceMirror`（整机镜像）时调用方**不给尺寸**，`buildMirrorOptions` 连 `new_display` 键都不发，
+ * `deviceMirror`（采主屏：整机镜像，或 Android 13 及以下点应用）时调用方**不给尺寸**，
+ * `buildMirrorOptions` 连 `new_display` 键都不发，
  * server 于是采集主屏而不是新建虚拟显示（见那里的注释）。
  * 返回该尺寸供调用方初始化「跟随窗口」的请求合并器，避免启动阶段再下发一条完全相同的 resizeDisplay。
  * @param {{ adb: unknown, serverPath: string, config: unknown,

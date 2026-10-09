@@ -12,6 +12,20 @@ import { normalizeScrcpyConfig, resolveVideoCodec } from "../../shared/scrcpyCon
 const BIT_RATE_UNITS = { K: 1_000, M: 1_000_000, G: 1_000_000_000 };
 const DEFAULT_BIT_RATE = 8_000_000;
 
+/** 「手机屏幕上打开 + 镜像主屏」的版本上限：Android 13 = API 33。 */
+export const MAIN_DISPLAY_MIRROR_MAX_SDK = 33;
+
+/**
+ * 这一档设备上点应用不再建虚拟显示，改成「在手机屏幕上打开它 + 镜像主屏」（用户 2026-10-09 定）。
+ * 14 起 scrcpy 建虚拟显示才会自动补上 `OWN_FOCUS`（`NewDisplayCapture` 里 `SDK_INT >= API_34`
+ * 那一段），13 及以下那块显示拿不到焦点，per-app 镜像的体验不如直接用手机那块屏。
+ * **API 级别读不到（null）回 false**：形态不靠猜，读不到就维持原来的虚拟显示那条路。
+ * @param {number | null | undefined} sdk
+ */
+export function mirrorsMainDisplay(sdk) {
+  return Number.isInteger(sdk) && sdk > 0 && sdk <= MAIN_DISPLAY_MIRROR_MAX_SDK;
+}
+
 /**
  * `24M` / `800K` / `1G` → 比特每秒。非法值回落到官方默认 8Mbps。
  * @param {unknown} value
@@ -97,16 +111,19 @@ export function buildMirrorOptions(input, overrides = {}) {
   // （flex 缺尺寸就撞上上面那条断言）；大屏模式没有尺寸就没有密度口径，宁可抛
   // （2026-09-28「不留兜底默认尺寸」那条教训）。
   //
-  // **整机镜像（`deviceMirror`）走另一条路：连 `new_display` 这个键都不发。**
+  // **采主屏（`deviceMirror`）走另一条路：连 `new_display` 这个键都不发。**
+  // 两种情形到这里合流：整机镜像（包名为空），以及 Android 13 及以下点应用（`mirrorsMainDisplay`）。
   // 上游的分叉点是**这个键在不在**（`Server.java:144-149`：`options.getNewDisplay() != null`
   // → `NewDisplayCapture`，否则 → `ScreenCapture` 采集主屏）。实测随包 5.0.1 官方产物也一致：
   // 不发键 → server stdout `Display: using SurfaceControl API`、没有 `New display: … (id=N)` 那行；
   // 发空串 → 仍新建一块主屏尺寸的虚拟显示（那是「空字符串」这个**值**的语义，不是「没有虚拟显示」）。
   // 于是没有可 resize 的显示（`flex_display` 与「跟随窗口」整块不适用，服务端 `requestResize`
-  // 对非 flex 显示直接抛错）、没有「这块显示上的应用」概念（调用方据此跳过 `startApp` 与接回），
+  // 对非 flex 显示直接抛错）、没有「这块显示上的应用」概念（调用方据此跳过接回），
   // 窗口改大小只是本地缩放主屏画面。`vd_system_decorations` 只作用于新建显示，同样不发。
+  // 带着包名时 `startApp` 照发：服务端 `getStartAppDisplayId()` 在没有新建显示时用 `display_id`
+  // 的缺省值 0，也就是**在手机屏幕上打开这个应用**。
   if (overrides.deviceMirror) {
-    if (overrides.display) throw new Error("整机镜像不建虚拟显示，display 必须为空");
+    if (overrides.display) throw new Error("主屏镜像不建虚拟显示，display 必须为空");
     return options;
   }
 

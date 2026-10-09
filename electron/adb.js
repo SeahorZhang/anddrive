@@ -1566,6 +1566,20 @@ export async function isMiuiDevice(serial) {
 }
 
 /**
+ * 设备 Android 的 API 级别（`ro.build.version.sdk`）。读不到返回 null（= 未知），不猜。
+ * 镜像链路用它决定「点应用是建虚拟显示还是直接在手机屏幕上打开」，见 `mirror/options.js` 的 `mirrorsMainDisplay`。
+ * @param {string} serial
+ * @returns {Promise<number | null>}
+ */
+export async function getDeviceSdk(serial) {
+  assertSerial(serial);
+  await ensureServer();
+  const { code, stdout } = await adbExecSafe(["-s", serial, "shell", "getprop", "ro.build.version.sdk"]);
+  const sdk = Number.parseInt(code === 0 ? stdout.trim() : "", 10);
+  return Number.isFinite(sdk) ? sdk : null;
+}
+
+/**
  * 写一个 Settings.Secure 键。adb shell 自带 WRITE_SECURE_SETTINGS，非 root 也能写；
  * 失败不抛（调用方只把它当作一次尽力而为的设备侧设置）。
  * @param {string} serial @param {string} key @param {string | number} value

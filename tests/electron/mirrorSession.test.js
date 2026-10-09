@@ -63,6 +63,8 @@ const env = vi.hoisted(() => {
     windows,
     handlers,
     teardownHooks,
+    /** `scrcpyServerPath` 收到过的 config 参数（选哪份 server 产物就靠它）。 */
+    serverPathArgs: [],
     FakeBrowserWindow,
     ipcMain: {
       handle: (channel, fn) => handlers.set(channel, fn),
@@ -90,13 +92,21 @@ vi.mock('electron', () => ({
 // 机型判定固定回「非 MIUI」，协同投屏那条分支由 miProjection 自己的单测覆盖。
 vi.mock('../../electron/adb.js', () => ({
   ensureServer: async () => {},
-  scrcpyServerPath: () => '/tmp/scrcpy-server',
+  scrcpyServerPath: (...args) => {
+    env.serverPathArgs.push(args[0])
+    return '/tmp/scrcpy-server'
+  },
   // 设备物理分辨率：默认按 1200x2608 回；serial 带 `unknown` 的模拟 `wm size` 读不到（回 null）。
   getPhysicalScreenSize: async (serial) =>
     String(serial ?? '').includes('unknown') ? null : { width: 1200, height: 2608 },
   // 设备物理密度：flex 显示必须带密度，缺它渲染层就不给显示尺寸。
   getPhysicalScreenDensity: async (serial) =>
     String(serial ?? '').includes('unknown') ? null : 440,
+  // 设备 API 级别：serial 里带 `sdk<数字>` 的按那个数字回，其余模拟读不到（null）。
+  getDeviceSdk: async (serial) => {
+    const match = /sdk(\d+)/.exec(String(serial ?? ''))
+    return match ? Number(match[1]) : null
+  },
   onDeviceTeardown: (hook) => {
     env.teardownHooks.push(hook)
     return () => {
@@ -161,7 +171,7 @@ describe('mirror session 启动参数', () => {
     expect(init.packageName).toBe('')
     expect(init.deviceMirror).toBe(true)
     expect(init.label).toBe('手机镜像')
-    // 单应用会话这一项必须是假，否则渲染层会跳过 startApp，窗口只剩启动器。
+    // 单应用会话（读不到版本 = 按 14+ 处理）这一项必须是假，否则渲染层跳过「接回画面」那条归属逻辑。
     await startMirrorSession({ serial: 'dev-app-mirror', packageName: 'com.example.app' })
     expect(initFrom(env.windows.at(-1)).deviceMirror).toBe(false)
     // 放开空包名不能顺手放开非法包名。
@@ -173,6 +183,48 @@ describe('mirror session 启动参数', () => {
   it('包名只是空白也算整机镜像（trim 之后判空）', async () => {
     await startMirrorSession({ serial: 'dev-blank', packageName: '   ' })
     expect(initFrom(env.windows.at(-1)).deviceMirror).toBe(true)
+  })
+})
+
+// Android 13（API 33）及以下的设备不建虚拟显示：点应用 = 在手机屏幕上打开它 + 镜像这块屏。
+// 分流必须在主进程定一次（渲染层只认 `deviceMirror` 与 `packageName` 两个字段）。
+describe('Android 13 及以下点应用 = 采主屏', () => {
+  const open = async (serial, packageName = 'com.example.app') => {
+    await startMirrorSession({
+      serial,
+      packageName,
+      // 整机镜像那一档不给 label，看它退成什么。
+      label: packageName ? '示例' : undefined,
+    })
+    return initFrom(env.windows.at(-1))
+  }
+
+  it('API 33：deviceMirror 为真，但包名与标签照原样带着（渲染层据此把 app 开到主屏）', async () => {
+    const init = await open('dev-sdk33')
+    expect(init.deviceMirror).toBe(true)
+    expect(init.packageName).toBe('com.example.app')
+    expect(init.label).toBe('示例')
+  })
+
+  it('API 33 走官方那份 server：补丁产物的效果只在建显示上', async () => {
+    await open('dev-sdk33-official')
+    expect(env.serverPathArgs.at(-1)).toEqual({ largeScreenDisplay: false })
+  })
+
+  it('API 34 仍然建虚拟显示（33 是上限，不是「有版本就走主屏」）', async () => {
+    const init = await open('dev-sdk34')
+    expect(init.deviceMirror).toBe(false)
+    expect(env.serverPathArgs.at(-1)).toBeUndefined()
+  })
+
+  it('读不到版本时维持建虚拟显示：形态不靠猜', async () => {
+    expect((await open('dev-sdk-unknown')).deviceMirror).toBe(false)
+  })
+
+  it('空包名不管什么版本都是整机镜像，label 仍退「手机镜像」', async () => {
+    const init = await open('dev-sdk33', '')
+    expect(init.deviceMirror).toBe(true)
+    expect(init.label).toBe('手机镜像')
   })
 })
 

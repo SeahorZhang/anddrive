@@ -3,6 +3,7 @@ import path from "node:path";
 import { CHANNELS } from "../ipcContract.js";
 import {
   ensureServer,
+  getDeviceSdk,
   getDeviceVideoCodecs,
   getPhysicalScreenSize,
   getPhysicalScreenDensity,
@@ -15,7 +16,7 @@ import { sanitizeIcon } from "../iconImage.js";
 import { isValidPackageName, isValidSerial } from "../validators.js";
 import { findAppSession } from "./appSession.js";
 import { startMiProjection } from "./miProjection.js";
-import { mirrorWindowBounds, resolveRuntimePrefs } from "./options.js";
+import { mirrorWindowBounds, mirrorsMainDisplay, resolveRuntimePrefs } from "./options.js";
 
 // ---------------------------------------------------------------------------
 // 自研镜像会话（mirror，渲染层直连形态）
@@ -131,25 +132,29 @@ function notifyExit(payload) {
  * 启动一个原生镜像窗口；连接/解码由渲染层完成，主进程轻手笔画。
  * 同一台设备上的同一个应用只开一个窗口：已经有了就把它唤到前台（见 `appSession.js`）。
  *
- * **`packageName` 留空 = 整机镜像**（采集手机主屏，不建虚拟显示）：那条路上没有「这块显示上的
- * 应用」概念，`startApp`、「接回画面」与「跟随窗口」整块不适用（判据随 `pendingInit.deviceMirror`
- * 带给渲染层），用的也是**官方那份 server**（补丁产物的效果只作用于新建显示）。
+ * **采主屏、不建虚拟显示（`pendingInit.deviceMirror`）有两档**：
+ * - **`packageName` 留空 = 整机镜像**（顶栏「镜像手机」）。
+ * - **Android 13 及以下点应用**（`mirrorsMainDisplay`）：照样带着包名，但 app 是**在手机屏幕上打开**的
+ *   （`startApp` 那条控制消息在没有新建显示时落到 `display_id` 的缺省值 0 = 主屏），窗口看到的是整台手机。
+ *
+ * 这一档没有「这块显示上的应用」概念：「接回画面」与「跟随窗口」整块跳过，用的也是**官方那份 server**
+ * （补丁产物的效果只作用于新建显示）。
  * @param {{ serial: string, packageName?: string, label?: string, config?: unknown,
  *           iconUrl?: string }} request
  */
 export async function startMirrorSession(request) {
   const serial = typeof request?.serial === "string" ? request.serial.trim() : "";
   const packageName = typeof request?.packageName === "string" ? request.packageName.trim() : "";
-  const deviceMirror = !packageName;
+  const wholeDevice = !packageName;
   if (!isValidSerial(serial)) throw new Error("设备序列号无效");
-  if (!deviceMirror && !isValidPackageName(packageName)) throw new Error("应用包名无效");
+  if (!wholeDevice && !isValidPackageName(packageName)) throw new Error("应用包名无效");
   const label =
-    (typeof request?.label === "string" && request.label.trim()) ||
-    (deviceMirror ? "手机镜像" : packageName);
+    (typeof request?.label === "string" && request.label.trim()) || (wholeDevice ? "手机镜像" : packageName);
 
   const existing = findAppSession(sessions.values(), { serial, packageName });
   if (existing) {
-    // 再开一块虚拟显示会把应用从旧显示上搬走（旧窗口只剩启动器），所以这里直接复用。
+    // 虚拟显示那条路再开一块会把应用从旧显示上搬走（旧窗口只剩启动器）；主屏那条路两个窗口
+    // 只是同一条画面的两份拷贝。所以这里直接复用。
     try {
       focusMirrorSession(existing.id);
       return { ...snapshot(existing), reused: true };
@@ -159,17 +164,20 @@ export async function startMirrorSession(request) {
   }
 
   await ensureServer();
-  const serverPath = scrcpyServerPath(deviceMirror ? { largeScreenDisplay: false } : undefined);
   const prefs = resolveRuntimePrefs(request?.config);
   // 窗口照**设备画面比例**开：默认模式的虚拟显示尺寸就取自窗口画面区的物理像素，
   // 窗口形状不对会开出一块错比例的显示（横窗 → 横显示 → 竖屏 app 直接换版式）。
   // 密度也取自设备（`wm density`）：flex 显示必须同时带密度（上游 `NewDisplayCapture.prepare()`
   // 对 `dpi == 0` 的 flex 直接断言），渲染层按主屏长边等比换算它。
   // 任一处读不到就退回既有的 850x600，且渲染层不给显示尺寸（`new_display` 退空串、不开 flex）。
-  const [screenSize, screenDpi] = await Promise.all([
+  // 版本（API 级别）决定点应用要不要改走主屏镜像，与这两趟并列读，不多等一个来回。
+  const [screenSize, screenDpi, sdk] = await Promise.all([
     getPhysicalScreenSize(serial).catch(() => null),
     getPhysicalScreenDensity(serial).catch(() => null),
+    wholeDevice ? Promise.resolve(null) : getDeviceSdk(serial).catch(() => null),
   ]);
+  const deviceMirror = wholeDevice || mirrorsMainDisplay(sdk);
+  const serverPath = scrcpyServerPath(deviceMirror ? { largeScreenDisplay: false } : undefined);
   const bounds = mirrorWindowBounds(screenSize, screen.getPrimaryDisplay().workArea);
   // 设备能编码哪些：给镜像页落地 `auto`，也顺带进 pendingInit（渲染层不再自己查）。
   const deviceEncoders = await getDeviceVideoCodecs(serial).catch(() => null);
@@ -207,8 +215,9 @@ export async function startMirrorSession(request) {
     serial,
     label,
     packageName,
-    // 整机镜像的判据在这里定一次：渲染层拿它跳过 `startApp`、「接回画面」与「跟随窗口」
-    // （那些都需要一块我们建的虚拟显示，这一档没有）。
+    // 采主屏的判据在这里定一次：渲染层拿它跳过「接回画面」与「跟随窗口」
+    // （那些都需要一块我们建的虚拟显示，这一档没有）。`startApp` 不在其列 —— 带着包名时渲染层
+    // 照发，服务端把它开到主屏（= 手机屏幕）上，这一档要的正是「手机上打开这个 app，我们看着」。
     deviceMirror,
     serverPath,
     config: request?.config ?? null,

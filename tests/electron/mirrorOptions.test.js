@@ -13,7 +13,28 @@ const {
   resolveNativeCodec,
   resolveRuntimePrefs,
   mirrorWindowBounds,
+  mirrorsMainDisplay,
 } = await import('../../electron/mirror/options.js')
+
+describe('mirrorsMainDisplay（Android 13 及以下点应用不建虚拟显示）', () => {
+  it('API 33 是上限：33 走主屏，34 起仍然建虚拟显示', () => {
+    expect(mirrorsMainDisplay(33)).toBe(true)
+    expect(mirrorsMainDisplay(34)).toBe(false)
+  })
+
+  it('更老的版本一样走主屏', () => {
+    expect(mirrorsMainDisplay(29)).toBe(true)
+  })
+
+  /** 读不到版本 ≠ 老设备：形态不靠猜，读不到就维持原来的虚拟显示那条路。 */
+  it('版本读不到（null/undefined/非数字）时不走主屏', () => {
+    expect(mirrorsMainDisplay(null)).toBe(false)
+    expect(mirrorsMainDisplay(undefined)).toBe(false)
+    expect(mirrorsMainDisplay(NaN)).toBe(false)
+    expect(mirrorsMainDisplay('33')).toBe(false)
+    expect(mirrorsMainDisplay(0)).toBe(false)
+  })
+})
 
 describe('parseBitRate', () => {
   it('converts decimal suffixes to bits per second', () => {
@@ -69,10 +90,10 @@ describe('buildMirrorOptions', () => {
   })
 
   /**
-   * 整机镜像（「镜像手机」）：上游 `Server.java:144-149` 按**这个键在不在**分叉，
+   * 采主屏（整机镜像，以及 Android 13 及以下点应用）：上游 `Server.java:144-149` 按**这个键在不在**分叉，
    * 不发 `new_display` 才是不建虚拟显示、直接采主屏（发空串仍会新建一块）。
    */
-  it('整机镜像：不发 new_display，flex 与 vd_system_decorations 一起没有', () => {
+  it('采主屏：不发 new_display，flex 与 vd_system_decorations 一起没有', () => {
     const options = buildMirrorOptions(undefined, { videoCodec: 'h265', deviceMirror: true })
     expect(options.newDisplay).toBeUndefined()
     expect(options.flexDisplay).toBeUndefined()

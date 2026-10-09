@@ -83,7 +83,8 @@ function displayFor(css) {
  * 开会话时用的 CSS：主进程建窗口时就已知道内容区尺寸（`initialCss`），直接拿它，
  * 不等渲染层布局。深链冷启动时镜像页可能还没排版完，读 DOM 会得到一个错误的默认值，
  * 开出一块错尺寸的显示（2026-09-28 实测 512x512/480）。
- * **整机镜像不给尺寸**：那条路上 server 采的是主屏、根本不建显示，给了会被 `buildMirrorOptions` 抛。
+ * **采主屏（`deviceMirror`）不给尺寸**：那条路上 server 采的是手机那块屏、根本不建显示，
+ * 给了会被 `buildMirrorOptions` 抛。
  */
 function initialDisplay(info) {
   if (info?.deviceMirror) return undefined;
@@ -190,15 +191,19 @@ export async function startSession(
   void pumpLoop(video.stream, onVideoPacket, (detail) => onEnded(detail));
 
   const controller = client.controller;
-  // 单应用镜像才有的三步：把目标应用拉到**我们这块显示**上，并盯住它被别处搬走。
-  // 整机镜像采的是主屏 —— 没有「这块显示上的应用」这个东西，`startApp` 会把应用从主屏挪到
-  // 一块并不存在的显示上，接回轮询也只会拿到 null，所以整块跳过。
-  if (!info.deviceMirror) {
+  // 拉起目标应用走 scrcpy 的控制消息，服务端把它开到**本次采集的那块显示**上
+  // （`Controller.getStartAppDisplayId()`：有 `--new-display` 时等那块虚拟显示的 id，
+  // 否则用 `display_id` 的缺省值 0 = 手机主屏）。所以「整机镜像」没有包名可发，
+  // 而 Android 13 及以下那档采主屏的会话照发 —— 它就是「在手机屏幕上打开这个 app」。
+  if (info.packageName) {
     await controller?.startApp(info.packageName).catch(() => {});
-    // 应用可能已经挂在别的显示上（被别的投屏软件搬走、或本来就在主屏上用着），那种情况下
-    // `startApp` 只会把它留在原处，本窗口就只剩启动器画面 —— 补一次不重启的搬移。
+  }
+  // 虚拟显示那条路还多出两步「这块显示上的应用」的归属：应用可能已经挂在别的显示上
+  // （被别的投屏软件搬走、或本来就在主屏上用着），那种情况下 `startApp` 只会把它留在原处，
+  // 本窗口就只剩启动器画面 —— 补一次不重启的搬移；之后仍可能被搬走，只负责把接回入口亮出来。
+  // 采主屏时没有这个概念（接回要拿本会话的显示 id 比，这一档没有显示），整块跳过。
+  if (!info.deviceMirror) {
     void ensureAppHere();
-    // 之后应用仍可能被别的投屏软件搬走：只负责把入口亮出来，要不要接回由用户点。
     current.stopStolenWatch = watchAppStolen(onStolen);
   }
 
