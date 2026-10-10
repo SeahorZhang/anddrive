@@ -60,10 +60,16 @@ export const CHANNELS = {
   mirrorAppTask: 'mirror:appTask',
   /** 镜像 → 设备：把应用的任务搬到本窗口的虚拟显示上（不重启应用）。 */
   mirrorMoveTask: 'mirror:moveTask',
-  /** 镜像 → 设备：现在醒着还是睡了（`dumpsys power` 的 `mWakefulness`）。 */
-  mirrorWakefulness: 'mirror:wakefulness',
+  /** 设备电源两条读数：`mWakefulness`（睡没睡，「已休眠」看它）+ SF 的 `powerMode`（面板亮没亮，「关屏使用」那颗看它）。 */
+  mirrorPowerState: 'mirror:powerState',
   /** 镜像 → 设备：点亮屏幕（用户点「继续使用」；只唤醒不解密码锁）。 */
   mirrorWake: 'mirror:wake',
+  /** 主进程 → 镜像窗口：进/出 macOS 全屏（那一屏里长条不再占窗口宽度、红绿灯归系统藏，页面要换排法）。 */
+  mirrorFullscreen: 'mirror:fullscreen',
+  /** 镜像窗口 → 主进程：淡入/收起边框时一起开关红绿灯（透明窗口里浮着的圆点会破坏「就是个手机」的样子）。 */
+  mirrorWindowButtons: 'mirror:windowButtons',
+  /** 镜像窗口 → 主进程：dev 调试边栏要占多少宽（0 = 收起）。主进程把窗口撑宽同样的量，画面那块才不被挤小。 */
+  mirrorWindowHud: 'mirror:windowHud',
 
   /** macOS 系统权限（electron/permissions.js）。 */
   permissionsStatus: 'permissions:getStatus',

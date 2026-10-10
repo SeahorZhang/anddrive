@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 
-const { toTouchMessage, toScrollMessage, toKeyMessage, toMetaState, applyControl } = await import(
-  '../../electron/mirror/control.js'
-)
+const {
+  toTouchMessage,
+  toScrollMessage,
+  toKeyMessage,
+  toMetaState,
+  toScreenPowerMode,
+  applyControl,
+} = await import('../../electron/mirror/control.js')
 
 describe('toTouchMessage', () => {
   it('maps a press with primary button and full pressure', () => {
@@ -59,6 +64,17 @@ describe('toMetaState', () => {
   })
 })
 
+// 「关屏使用」那格按钮（长条最上面那一格）。数值钉死：上游 `AndroidScreenPowerMode` 只有 Off=0 / Normal=2，
+// 写成 1 会被服务端当另一档语义，肉眼看不出问题。
+describe('toScreenPowerMode', () => {
+  it('off = 0，恢复 = 2', () => {
+    expect(toScreenPowerMode({ on: false })).toBe(0)
+    expect(toScreenPowerMode({ on: true })).toBe(2)
+    // 缺省按"关屏"处理不能反过来：漏字段就恢复亮屏 = 用户点关屏结果屏没关，更难查。
+    expect(toScreenPowerMode({})).toBe(0)
+  })
+})
+
 describe('applyControl', () => {
   function fakeController() {
     return {
@@ -66,19 +82,23 @@ describe('applyControl', () => {
       injectScroll: vi.fn().mockResolvedValue(undefined),
       injectKeyCode: vi.fn().mockResolvedValue(undefined),
       injectText: vi.fn().mockResolvedValue(undefined),
+      setDisplayPower: vi.fn().mockResolvedValue(undefined),
     }
   }
 
-  it('dispatches touch, scroll, key and text', async () => {
+  it('dispatches touch, scroll, key, text and screen power', async () => {
     const controller = fakeController()
     await applyControl(controller, { kind: 'touch', action: 'down', x: 1, y: 1, width: 10, height: 10 })
     await applyControl(controller, { kind: 'scroll', x: 1, y: 1, width: 10, height: 10, scrollX: 0, scrollY: 1 })
     await applyControl(controller, { kind: 'key', action: 'down', keyCode: 4 })
     await applyControl(controller, { kind: 'text', text: 'hi' })
+    await applyControl(controller, { kind: 'screen', on: false })
+    await applyControl(controller, { kind: 'screen', on: true })
     expect(controller.injectTouch).toHaveBeenCalledTimes(1)
     expect(controller.injectScroll).toHaveBeenCalledTimes(1)
     expect(controller.injectKeyCode).toHaveBeenCalledTimes(1)
     expect(controller.injectText).toHaveBeenCalledWith('hi')
+    expect(controller.setDisplayPower.mock.calls).toEqual([[0], [2]])
   })
 
   it('rejects unknown messages, including the removed action kind', async () => {

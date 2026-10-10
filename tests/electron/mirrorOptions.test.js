@@ -13,6 +13,9 @@ const {
   resolveNativeCodec,
   resolveRuntimePrefs,
   mirrorWindowBounds,
+  mirrorScreenInsets,
+  mirrorTrafficLightPosition,
+  MIRROR_RAIL,
   mirrorsMainDisplay,
 } = await import('../../electron/mirror/options.js')
 
@@ -227,26 +230,35 @@ describe('resolveRuntimePrefs', () => {
   })
 })
 
-describe('mirrorWindowBounds', () => {
+describe('mirrorWindowBounds（窗口 = 画面 + 那圈常驻黑框）', () => {
   const WORK = { width: 1440, height: 900 }
   const FALLBACK = { width: 850, height: 600 }
+  const insets = mirrorScreenInsets()
+  /** 窗口尺寸 → 画面那块矩形（渲染层真正用来放画面、算虚拟显示的矩形）。 */
+  const screenOf = (b) => ({
+    width: b.width - insets.left - insets.right,
+    height: b.height - insets.top - insets.bottom,
+  })
 
-  it('照设备画面比例等比 fit 进可用区减 80 边距（竖屏手机 → 竖窗，长边先顶满）', () => {
-    // 1080x2340 的手机：可用区 1360x820，高顶满 → 820，宽按比 = 378。
-    expect(mirrorWindowBounds({ width: 1080, height: 2340 }, WORK)).toEqual({
-      width: 378,
-      height: 820,
-    })
+  it('竖屏手机：画面照设备比例把高顶满，窗口再把黑框与右边那条加回来', () => {
+    // 可用区 1440x900 减 80 系统余量，再减内缩（横 4 + (4+86) = 94、纵 4+4 = 8）
+    // → 画面可用 1266x812；1080x2340 由高定：812 → 宽 375。窗口 = 375+94 x 812+8。
+    const bounds = mirrorWindowBounds({ width: 1080, height: 2340 }, WORK)
+    expect(bounds).toEqual({ width: 469, height: 820 })
+    // 关键不变量：**画面**那块才是设备比例。让窗口本身等比（= 不把内缩算进去）
+    // 画面就会比设备比例窄，圆角里露出 letterbox 黑条。
+    expect(screenOf(bounds)).toEqual({ width: 375, height: 812 })
   })
 
   it('横屏设备改用宽为准', () => {
+    // 画面可用 1266x812，2340x1080 由宽定：1266 → 高 584。
     expect(mirrorWindowBounds({ width: 2340, height: 1080 }, WORK)).toEqual({
       width: 1360,
-      height: 628,
+      height: 592,
     })
   })
 
-  it('任何形状都不越出可用区、也不算出 0 边', () => {
+  it('任何形状都不越出可用区、画面不算出 0 边；画面区始终是设备比例', () => {
     for (const size of [
       { width: 1080, height: 2340 },
       { width: 2340, height: 1080 },
@@ -257,8 +269,8 @@ describe('mirrorWindowBounds', () => {
       const bounds = mirrorWindowBounds(size, WORK)
       expect(bounds.width).toBeLessThanOrEqual(WORK.width - 80)
       expect(bounds.height).toBeLessThanOrEqual(WORK.height - 80)
-      expect(bounds.width).toBeGreaterThanOrEqual(1)
-      expect(bounds.height).toBeGreaterThanOrEqual(1)
+      expect(bounds.width - insets.left - insets.right).toBeGreaterThanOrEqual(1)
+      expect(bounds.height - insets.top - insets.bottom).toBeGreaterThanOrEqual(1)
     }
     // 正常比例下等比是准的（极端带鱼屏被 1px 下限收过，不再谈比例）。
     for (const size of [
@@ -266,8 +278,8 @@ describe('mirrorWindowBounds', () => {
       { width: 2340, height: 1080 },
       { width: 1440, height: 900 },
     ]) {
-      const bounds = mirrorWindowBounds(size, WORK)
-      expect(bounds.width / bounds.height).toBeCloseTo(size.width / size.height, 2)
+      const screen = screenOf(mirrorWindowBounds(size, WORK))
+      expect(screen.width / screen.height).toBeCloseTo(size.width / size.height, 2)
     }
   })
 
@@ -286,5 +298,41 @@ describe('mirrorWindowBounds', () => {
     first.width = 1
     first.height = 2
     expect(mirrorWindowBounds(null, WORK)).toEqual(FALLBACK)
+  })
+})
+
+// 红绿灯只能整组平移（间距/大小/横竖都动不了），所以「贴进右侧长条」这件事的全部算术就是这一个落点。
+describe('mirrorTrafficLightPosition（红绿灯贴进右侧长条）', () => {
+  it('基准 = 内容区宽 − 长条宽 + 内缩，算出来正好把整组居中在长条里', () => {
+    // 长条与窗口右边缘齐平（它在画面外面），占 [400−86, 400] = [314, 400]；
+    // 三颗实测约 58 宽 ⇒ 328..386，左右各余 14（= `lightInset`，居中就是它）。
+    expect(mirrorTrafficLightPosition(400)).toEqual({ x: 328, y: MIRROR_RAIL.lightTop })
+    // `lightTop` / `keysTop` 是他在真窗上对着调的手感值（10-10 调过 14→18→30→37→18），
+    // 所以这里**不钉具体数**，只钉那条硬约束：三颗约 14 高，必须整个待在红绿灯那一截里，
+    // 且那一截下面还得留出按键区，否则分隔线会压在圆点上。
+    expect(MIRROR_RAIL.keysTop).toBeGreaterThanOrEqual(MIRROR_RAIL.lightTop + 14 + 4)
+  })
+
+  it('窗口缩到 minWidth 那条下限，整组仍然在长条里（不会被挤到画面上去）', () => {
+    // `createMirrorSession` 那扇窗口 minWidth = 280 ⇒ 长条占 [194, 280]。
+    const band = { left: 280 - MIRROR_RAIL.width, right: 280 }
+    const at280 = mirrorTrafficLightPosition(280)
+    expect(at280.x).toBeGreaterThanOrEqual(band.left)
+    // 整组约 58 宽。
+    expect(at280.x + 58).toBeLessThanOrEqual(band.right)
+  })
+
+  it('落点跟着 `MIRROR_RAIL` 走，改宽度不会留下旧数（长条宽是红绿灯的下限）', () => {
+    // 三颗约 58 宽 + 两侧各 8 内缩 ⇒ 长条不能窄于 74。
+    expect(MIRROR_RAIL.width).toBeGreaterThanOrEqual(58 + 2 * MIRROR_RAIL.lightInset)
+    expect(mirrorTrafficLightPosition(400).x).toBe(400 - MIRROR_RAIL.width + MIRROR_RAIL.lightInset)
+  })
+
+  /** 长条挪到画面外边 ⇒ 它进内缩的**右边**，左边仍只有黑框。这条钉住不对称是有意为之。 */
+  it('内缩右边比左边宽一条长条（画面才等于设备比例，长条才在手机外面）', () => {
+    const insets = mirrorScreenInsets()
+    expect(insets.right - insets.left).toBe(MIRROR_RAIL.width)
+    expect(insets.left).toBe(insets.top)
+    expect(insets.top).toBe(insets.bottom)
   })
 })

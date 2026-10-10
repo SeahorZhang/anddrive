@@ -6,14 +6,21 @@
 // injectScroll/injectKeyCode/injectText 官方方法直用）。数值是稳定的 Android
 // 常量，仅用于单测。
 //
-// 系统动作键（返回/Home/多任务/音量/电源）、旋转、通知栏、息屏亮屏这一整类
-// `kind:'action'` 消息于 2026-09-28 按产品决策删除，**不要再加回来**：镜像窗口
-// 不提供这类入口。息屏亮屏也不再有任何干预（原「启动后息屏」偏好连同
-// `controller.setDisplayPower(false)` 于 2026-09-29 删除）。
+// 系统动作键这一整类 `kind:'action'` 消息于 2026-09-28 按产品决策删除；2026-10-10 用户点名把
+// **返回 / Home / 多任务**三个放回来（右侧悬浮长条上的按键，见 `App.vue` 的 `RAIL_KEYS`），
+// 走的就是这里已有的 `kind:'key'` → `injectKeyCode` 那条路，**不另开 adb 进程**。
+// 同一晚又点名要**关屏使用** ⇒ `kind:'screen'`（`setDisplayPower`）也回来了，同样是用户主动按的按钮。
+// 音量 / 旋转 / 通知栏仍然不提供入口；**自动**的息屏干预依旧不做
+// （原「启动后息屏」偏好连同 `controller.setDisplayPower(false)` 于 2026-09-29 删除，那条"自动"没恢复）。
 // ---------------------------------------------------------------------------
 
 import { KEY_META } from "../../shared/keys.js";
-import { AndroidKeyEventAction, AndroidMotionEventAction, AndroidMotionEventButton } from "@yume-chan/scrcpy";
+import {
+  AndroidKeyEventAction,
+  AndroidMotionEventAction,
+  AndroidMotionEventButton,
+  AndroidScreenPowerMode,
+} from "@yume-chan/scrcpy";
 
 /** 语义动作（组件层事件的小写名）→ Tango 官方 `AndroidMotionEventAction`。 */
 export const TOUCH_ACTION = {
@@ -85,6 +92,15 @@ export function toKeyMessage(message) {
 }
 
 /**
+ * 「关屏使用 / 恢复亮屏」→ `setDisplayPower` 的电源模式。
+ * 上游只有两档：`Off`(0) 把屏关掉、`Normal`(2) 回到系统默认（会按设备的超时再自己睡）。
+ * 走的是 scrcpy 控制消息，**不占 `INJECT_EVENTS`**（不同于 `input keyevent 224` 那条唤醒）。
+ */
+export function toScreenPowerMode(message) {
+  return message.on ? AndroidScreenPowerMode.Normal : AndroidScreenPowerMode.Off;
+}
+
+/**
  * 执行一条控制消息。会 await，调用方可 fire-and-forget。
  * @param {import("@yume-chan/scrcpy").ScrcpyControlMessageWriter} controller
  * @param {Record<string, unknown>} message
@@ -97,6 +113,8 @@ export async function applyControl(controller, message) {
       return controller.injectScroll(toScrollMessage(message));
     case 'key':
       return controller.injectKeyCode(toKeyMessage(message));
+    case 'screen':
+      return controller.setDisplayPower(toScreenPowerMode(message));
     case 'text':
       return controller.injectText(String(message.text ?? ''));
     default:

@@ -1656,21 +1656,69 @@ export function parseWakefulness(stdout) {
 }
 
 /**
- * 设备现在醒还是睡（`dumpsys power` 的 `mWakefulness`：`Awake` / `Dozing` / `Asleep` /
- * HyperOS 投屏态 `Hangup` …）。只 grep 那一行，别把整份 dumpsys（几百 KB）拖回本机。
- * @param {string} serial
- * @returns {Promise<string | null>} null = 读不到
+ * `dumpsys SurfaceFlinger` 里那一行 → 面板状态（纯函数）：`powerMode=On` → `'ON'`，读不到 → null。
+ * 归成大写是为了页面只比一个 `'ON'`（SF 原名是 `On` / `Off` / `Doze` / `DozeSuspend`）。
+ * 取**第一条**命中的：SF 的显示清单按发现顺序排，内置屏在最前，后面才可能是虚拟显示（那些恒为 `On`）。
  */
-export async function getWakefulness(serial) {
+export function parsePanelPower(stdout) {
+  const match = /powerMode=([A-Za-z]+)/.exec(String(stdout ?? ""));
+  return match ? match[1].toUpperCase() : null;
+}
+
+/**
+ * 设备的两条电源读数，**一次 adb 调用一起拿**（每读一次就是一次 execFile，别拆成两条）：
+ * - `wakefulness`：`dumpsys power` 的 `mWakefulness`（`Awake` / `Dozing` / `Asleep` / HyperOS 投屏态 `Hangup`）
+ *   —— 设备睡没睡，镜像窗口的「已休眠」看它（睡了不再出新帧）。
+ * - `screen`：`dumpsys SurfaceFlinger` 的 `powerMode`（`'ON'` / `'OFF'` / `'DOZE'`…）—— **面板亮没亮**。
+ *
+ * 为什么非要有第二条：scrcpy 的 `setDisplayPower(OFF)`（我们的「关屏使用」）**只关面板，设备还是 `Awake`** ——
+ * 只看 `mWakefulness` 就以为屏亮着，那颗按钮翻回「关屏使用」，再点一次还是关屏，永远点不亮
+ * （用户 10-10：「关掉屏幕按钮再点一次要可以点亮」）。
+ *
+ * ⚠️ 面板状态取的是 **SurfaceFlinger 的 `powerMode`，不是 `dumpsys display` 的 `mScreenState`**：
+ * 上游 scrcpy 5.0.1 的 `Device.setDisplayPower()` 走的是 `SurfaceControl.setDisplayPowerMode()`，
+ * **绕过 DisplayManagerService 直接改 SF**，所以 `mScreenState` 有可能一直停在 `ON`（DMS 不知情），
+ * 而 `powerMode` 就是被改的那一个字段。Mi 10 / Android 13 实测：灭屏 → `powerMode=Off`、亮屏 → `On`。
+ * @param {string} serial
+ * @returns {Promise<{ wakefulness: string | null, screen: string | null }>} 单项读不到时该项为 null
+ */
+export async function getPowerState(serial) {
   assertSerial(serial);
   await ensureServer();
+  // `grep -m1` 一收手，dumpsys 会回一句「Failed to write …: Broken pipe」—— 在 stderr 上，解析 stdout 不受影响。
+  // 实测 Mi 10 / Android 13：stdout = `mWakefulness=Awake` + `powerMode=On` 两行。
   const { stdout } = await adbExecSafe([
     "-s",
     serial,
     "shell",
-    "dumpsys power | grep -m1 -oE 'mWakefulness=[A-Za-z]+'",
+    "dumpsys power | grep -m1 -oE 'mWakefulness=[A-Za-z]+'; dumpsys SurfaceFlinger | grep -m1 -oE 'powerMode=[A-Za-z]+'",
   ]);
-  return parseWakefulness(stdout);
+  return { wakefulness: parseWakefulness(stdout), screen: parsePanelPower(stdout) };
+}
+
+/**
+ * 回到桌面（启动 launcher 的 HOME activity）。
+ * **不用 `input keyevent KEYCODE_HOME`**：实测在 Mi 10 / MIUI 14 上按 HOME 键没起作用
+ * （`mFocusedApp` 仍停在原应用，因为当时焦点在 `NotificationShade` 上），而这条走
+ * `startActivity`，既有效也**不占 `INJECT_EVENTS`**（不受「USB 调试（安全设置）」那道闸影响）。
+ * @param {string} serial
+ */
+export async function goHome(serial) {
+  assertSerial(serial);
+  await ensureServer();
+  const { code, stdout, stderr } = await adbExecSafe([
+    "-s",
+    serial,
+    "shell",
+    "am start -a android.intent.action.MAIN -c android.intent.category.HOME",
+  ]);
+  const output = `${stdout}\n${stderr}`.trim();
+  // launcher 已在最前台时设备会回 `Warning: Activity not started, its current task has been brought to the front`
+  // —— 这就是我们想要的结果（已经在桌面了），不能当失败。
+  if (code !== 0 || /error:|exception|does not exist|role not found/i.test(output)) {
+    throw new Error(output || "回到桌面失败");
+  }
+  return true;
 }
 
 /**
@@ -2141,7 +2189,7 @@ ipcMain.handle(CHANNELS.mirrorMoveTask, (_, serial, taskId, displayId) =>
   moveAppTaskToDisplay(serial, taskId, displayId),
 );
 // 镜像窗口的「已休眠」横幅：读电源状态判它是不是睡了，点「继续使用」时点亮屏幕。
-ipcMain.handle(CHANNELS.mirrorWakefulness, (_, serial) => getWakefulness(serial));
+ipcMain.handle(CHANNELS.mirrorPowerState, (_, serial) => getPowerState(serial));
 ipcMain.handle(CHANNELS.mirrorWake, (_, serial) => wakeDevice(serial));
 ipcMain.handle(CHANNELS.adbClearData, (_, serial, pkg) => clearAppData(serial, pkg));
 ipcMain.handle(CHANNELS.adbUninstallApp, (_, serial, pkg) => uninstallApp(serial, pkg));

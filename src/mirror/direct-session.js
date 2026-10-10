@@ -22,8 +22,8 @@ const current = {
   displayId: null,
   /** 「应用被别的显示拿走」轮询的停止函数。 */
   stopStolenWatch: null,
-  /** 「设备睡下去了」轮询的停止函数。 */
-  stopSleepWatch: null,
+  /** 设备电源状态轮询的句柄（`stop` / `kick`）。 */
+  sleepWatch: null,
 };
 
 /** 当前窗口的 CSS 尺寸（视口）。用 documentElement 而不是 innerWidth：后者含滚动条/边框口径。 */
@@ -107,7 +107,7 @@ function initialDisplay(info) {
  *   onReflowAbort?: () => void,
  *   onReflowSent?: () => void,
  *   onStolen?: (stolen: boolean) => void,
- *   onSleepChange?: (asleep: boolean) => void,
+ *   onSleepChange?: (asleep: boolean, state: string) => void,
  * }} handlers
  */
 export async function startSession(
@@ -224,9 +224,9 @@ export async function startSession(
   // 设备睡了没有：睡下（`Asleep`/`Dozing`）时页面要亮「已休眠 + 继续使用」。
   // **这一条不分会话形态**：虚拟显示那档设备睡了同样停帧，而它只是报告 + 等用户点，
   // 不动设备任何设置（防睡是主进程按版本开的，见 `electron/mirror/keepAwake.js`）。
-  current.stopSleepWatch = createSleepWatcher({
-    read: () => ipcInvoke(CHANNELS.mirrorWakefulness, info.serial),
-    onChange: (asleep) => onSleepChange?.(asleep),
+  current.sleepWatch = createSleepWatcher({
+    read: () => ipcInvoke(CHANNELS.mirrorPowerState, info.serial),
+    onChange: (asleep, state) => onSleepChange?.(asleep, state),
     // 窗口被最小化/在别的 Space 时不去打扰设备（同「接回」轮询那条）。
     shouldSkip: () => document.hidden,
   });
@@ -289,6 +289,23 @@ function ipcInvoke(channel, ...args) {
   const renderer = ipc();
   if (!renderer) return Promise.reject(new Error("ipc 不可用"));
   return renderer.invoke(channel, ...args);
+}
+
+/**
+ * 长条显形/收起时把红绿灯一起开关（`hiddenInset` 那三颗圆点是系统画的，CSS 盖不住）。
+ * 不 invoke 只 send：纯表现层，没有要等结果、也没有会失败的地方。
+ */
+export function setWindowButtons(shown) {
+  ipc()?.send?.(CHANNELS.mirrorWindowButtons, shown === true);
+}
+
+
+/**
+ * dev 调试边栏要占多宽（0 = 收起）：主进程把**窗口**撑宽同样的量，画面那块才不被挤小。
+ * @param {number} px
+ */
+export function setHudExtra(px) {
+  ipc()?.send?.(CHANNELS.mirrorWindowHud, px);
 }
 
 /** 通用流泵（Tango 官方流 API）；send 失败只告警。 */
@@ -417,9 +434,9 @@ export function stopSession() {
     current.stopStolenWatch();
     current.stopStolenWatch = null;
   }
-  if (current.stopSleepWatch) {
-    current.stopSleepWatch();
-    current.stopSleepWatch = null;
+  if (current.sleepWatch) {
+    current.sleepWatch.stop();
+    current.sleepWatch = null;
   }
   // 虚拟显示随会话一起销毁，设备侧不留任何残留状态。
   if (!current.client) return null;
@@ -445,6 +462,23 @@ let player = null;
 window.addEventListener("beforeunload", () => stopSession());
 
 /**
+ * 主进程推来的「进/出 macOS 全屏」（`mirror:fullscreen`）。页面据此换排法：那一屏里长条不再占窗口宽度。
+ * 初值直接取启动参数里的 `prefs.fullscreen` —— 「全屏启动」那档一开就是全屏，等第一个事件会晚一拍
+ * （长条先按常态排一遍再跳，看着闪一下）。
+ * `bootstrap()` 可以重复调用（「接回画面」），所以每次都先把上一份监听摘掉。
+ */
+let stopFullscreenWatch = null;
+function watchFullscreen(onFullscreen, initial) {
+  stopFullscreenWatch?.();
+  const renderer = ipc();
+  if (!renderer) return;
+  const listener = (_event, value) => onFullscreen?.(value === true);
+  renderer.on(CHANNELS.mirrorFullscreen, listener);
+  stopFullscreenWatch = () => renderer.removeListener(CHANNELS.mirrorFullscreen, listener);
+  onFullscreen?.(initial === true);
+}
+
+/**
  * App.vue 启动入口：拉取启动参数 → 认领应用归属 → 建立直连会话 → 帧数据送解码管线。
  * 可以重复调用（被顶掉后点「接回」就是再来一次，这次换成我们顶掉别人）。
  * @param {{
@@ -454,13 +488,15 @@ window.addEventListener("beforeunload", () => stopSession());
  *   hooks: { onMeta?: (meta) => void, onAudioError?: (message: string) => void,
  *            onReflowStart?: (size) => void, onReflowAbort?: () => void,
  *            onReflowSent?: () => void,
- *            onStolen?: (stolen) => void, onSleepChange?: (asleep) => void },
+ *            onStolen?: (stolen) => void, onSleepChange?: (asleep, state) => void,
+ *            onFullscreen?: (fullscreen: boolean) => void },
  * }} apply App 侧管线接线
  */
 export async function bootstrap(apply) {
   const info = await ipcInvoke(CHANNELS.mirrorInitGet);
   if (!info) throw new Error("镜像启动参数缺失");
   window.__anddriveMirrorId = info.id;
+  watchFullscreen(apply.hooks.onFullscreen, info.prefs?.fullscreen);
 
   player = createOpusPlayer({
     onStats: (stats) => apply.audioStats?.(stats),
@@ -478,7 +514,7 @@ export async function bootstrap(apply) {
     onReflowAbort: () => apply.hooks.onReflowAbort?.(),
     onReflowSent: () => apply.hooks.onReflowSent?.(),
     onStolen: (stolen) => apply.hooks.onStolen?.(stolen),
-    onSleepChange: (asleep) => apply.hooks.onSleepChange?.(asleep),
+    onSleepChange: (asleep, state) => apply.hooks.onSleepChange?.(asleep, state),
     onEnded: (detail) => {
       // server 端自发退出（设备断开 / server 异常）。
       if (!window.__anddriveMirrorId) return;
@@ -499,6 +535,26 @@ export function sendControl(message) {
   void applyControl(controller, message).catch((error) => {
     console.warn(`[mirror] 控制消息失败（${message?.kind}）：`, error?.message || error);
   });
+}
+
+/**
+ * 关屏使用 / 恢复亮屏（`setDisplayPower`）。**要等结果、失败要抛** —— 这是用户点按钮的直接后果，
+ * 静默失败等于按钮没反应（同「点『继续使用』唤醒失败要说清为什么」那条）。
+ * @param {boolean} on true = 恢复亮屏（回系统默认），false = 关屏
+ */
+export async function setScreenPower(on) {
+  const controller = getController();
+  if (!controller) throw new Error("镜像还没连上");
+  await applyControl(controller, { kind: "screen", on });
+}
+
+/**
+ * 让电源状态**立刻重读一次并快轮询一阵**（用户 10-10「已休眠、点继续使用不灵敏」：
+ * 原来只有慢轮询，点了按钮要等下一拍才撤）。
+ * 用的三个时刻：点了「继续使用」、点了「关屏使用 / 恢复亮屏」、长条刚被唤出来。
+ */
+export function kickSleepWatch() {
+  current.sleepWatch?.kick();
 }
 
 /** 卸载/关窗：释放播放器与 scrcpy client。 */

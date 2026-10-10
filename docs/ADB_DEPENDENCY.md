@@ -86,7 +86,8 @@
 | 窗口初始形状 | A：`shell wm size` | `getPhysicalScreenSize` |
 | MIUI 息屏仍继续合成 | A：`settings put secure synergy_mode` | `setSecureSetting` + `miProjection.js` |
 | 插电时不休眠（Android 13 及以下那档镜像期间，**开前先读原值、关会话时还原**） | A：`settings get/put global stay_on_while_plugged_in` | `getGlobalNumberSetting` / `setGlobalNumberSetting` + `keepAwake.js` |
-| 设备睡了没有（镜像窗口的「已休眠」横幅） | A：`dumpsys power \| grep -m1 -oE mWakefulness=` | `getWakefulness` + `src/mirror/sleepWatch.js` |
+| 设备睡了没有 + 面板亮没亮（镜像窗口的「已休眠」横幅、那颗「关屏使用」图标） | A：`dumpsys power \| grep -m1 -oE mWakefulness=` 与 `dumpsys SurfaceFlinger \| grep -m1 -oE powerMode=`（**一条 shell 里一起发**，一次读只开一个 adb 进程） | `getPowerState` + `src/mirror/sleepWatch.js`（⚠️ 面板那条问 **SurfaceFlinger** 不问 `dumpsys display`：上游 scrcpy 5.0.1 的 `Device.setDisplayPower()` 走 `SurfaceControl.setDisplayPowerMode()`，绕开 DisplayManagerService，它的 `mScreenState` 可能一直停在 `ON`；Mi 10 实测灭屏 → `powerMode=Off`、亮屏 → `On`） |
+| 关镜像后把手机放回桌面 | A：`am start -a android.intent.action.MAIN -c android.intent.category.HOME` | `goHome` ← `stopMirrorSession`（**不用 `input keyevent HOME`**：实测 MIUI 上它没生效，而这条不占 `INJECT_EVENTS`） |
 | 点「继续使用」点亮屏幕 | A：`input keyevent 224`（KEYCODE_WAKEUP，吃 `INJECT_EVENTS`） | `wakeDevice` → `direct-session.js` 的 `wakeScreen` |
 | MIUI/HyperOS 判定 | A：`getprop ro.miui.ui.version.name` | `isMiuiDevice` |
 | 虚拟显示创建/resize | B（scrcpy flex display 控制消息） | `formatNewDisplay` / `resizeDisplay` |

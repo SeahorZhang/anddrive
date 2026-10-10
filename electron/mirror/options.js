@@ -92,7 +92,7 @@ export function buildMirrorOptions(input, overrides = {}) {
   };
   if (options.audio) {
     // scrcpy 4.0 的音频仅支持 Opus（`ScrcpyAudioCodec.Opus`），WebCodecs 可解。
-    options.audioCodec = 'opus';
+    options.audioCodec = "opus";
     // 故意**不**开 audioDup（scrcpy 默认）：服务端给 AudioMix 设的是 ROUTE_FLAG_LOOP_BACK
     // —— 只回环、不在本机渲染，所以投屏期间手机静音、声音只在电脑上出。
     // 代价要知道：会话结束时 AudioPolicy 撤销，手机恢复渲染，正在播的内容会当场出声。
@@ -167,14 +167,91 @@ const MIRROR_WINDOW_FALLBACK_SIZE = { width: 850, height: 600 };
 const MIRROR_WINDOW_MARGIN = 80;
 
 /**
- * 镜像窗口的初始尺寸：照**设备画面比例**等比 fit 进「这块屏的可用区减边距」（2026-10-07 定）。
+ * 贴在屏幕外沿那圈**黑色边框**的厚度（CSS px，逻辑像素）。
+ * 它**常驻**、不随鼠标显隐（用户 2026-10-10：「黑色那一圈边框要永远显示」=「就是个手机样子」），
+ * 但占布局 ⇒ 算进窗口尺寸。
+ *
+ * 2026-10-10 用户把外面那圈**浅色窗口底**（`top 44 / side 16 / bottom 16` + hover 才扩）整块删了，
+ * 换成手机右边外面浮着的一条控制长条（`MIRROR_RAIL`，它占窗口宽度，见 `mirrorScreenInsets()`）。
+ *
+ * **这份数主进程与渲染层共用**：画面那块矩形 = 窗口减掉黑框，而画面矩形是虚拟显示尺寸与触控映射的
+ * 输入，两边各写一套数就会在圆角里露出 letterbox 黑条。
+ */
+export const MIRROR_FRAME = {
+  bezel: 4,
+};
+
+/**
+ * 手机**右边**那条悬浮控制长条（红绿灯 + 返回/Home/多任务，用户 2026-10-10 定）。
+ * 它**占窗口宽度**（用户 10-10 第二次定稿：「任何 UI 都不要在手机里出现，都移到外边」⇒ 只能挤到画面外），
+ * 所以它进 `mirrorScreenInsets()` 的右边：窗口 = 画面 + 黑框 + 这条。
+ * 唯一进主进程的另一件事是红绿灯的落点 —— 那三颗是系统画的，CSS 盖不住。
+ */
+export const MIRROR_RAIL = {
+  /**
+   * 长条格子宽（占布局那一格，面板在它里面左右各留 6px）。
+   * 下限由红绿灯定：三颗**永远横排**、整组实测约 58px 宽（Electron 44，`/tmp` 探针量过）+ 两侧居中留白。
+   */
+  width: 86,
+  /** 红绿灯整组距格子左沿 = `(width − 58) / 2`，也就是让三颗在格子里居中（面板同心中）。 */
+  lightInset: 14,
+  /**
+   * 红绿灯距窗口顶。**这两档（`lightTop` / `keysTop`）是用户自己在真窗上对着调的手感值**，
+   * 不是算出来的不变量 —— 10-10 一路调过 14 → 18 → 30 → 37 → 18（面板从"顶部一小块"改成与手机同高后又调回偏上）。
+   * 唯一的硬约束：三颗约 14 高，必须整个待在红绿灯那一截里（`keysTop` 下面才是按键）。
+   */
+  lightTop: 18,
+  /**
+   * 按键区从这条高度以下开始排（从**窗口顶**算起）。上面那一截归红绿灯 —— 它是系统画的，
+   * CSS 既盖不住也挪不动，我们只能给它留位并在下沿画一条分隔线（`App.vue` 的 `.mirror-rail__lights`）。
+   */
+  keysTop: 50,
+  /**
+   * 淡入 / 淡出各多久（CSS 与「红绿灯延后藏起来」共用这两个数）。
+   * 出去比进来慢一档：出现要跟手，消失要收得干净（用户 10-10「消失的时候感觉不太协调」）。
+   */
+  fadeInMs: 180,
+  fadeOutMs: 260,
+};
+
+/**
+ * 窗口边 → 画面边的总内缩：四边是那圈常驻黑框，**右边再多一条长条宽**。
+ * 右边不对称是故意的：长条在手机右边外面，画面矩形才等于设备比例那块。
+ */
+export function mirrorScreenInsets() {
+  const { bezel } = MIRROR_FRAME;
+  return {
+    top: bezel,
+    bottom: bezel,
+    left: bezel,
+    right: bezel + MIRROR_RAIL.width,
+  };
+}
+
+/**
+ * 红绿灯落点（`BrowserWindow` 的 `trafficLightPosition` / `setWindowButtonPosition` 都吃这个形状）。
+ * 坐标 = 三颗里最左边那颗的左上角，从窗口内容区左上量起；给的是**整组**的位置，间距与大小动不了。
+ * 长条与窗口右边缘齐平（它在画面外面），所以落点 = 内容区宽 − 长条宽 + 内缩，正好把 58px 那组居中。
+ * @param {number} contentWidth 窗口内容区宽（CSS px）
+ * @returns {{ x: number, y: number }}
+ */
+export function mirrorTrafficLightPosition(contentWidth) {
+  const { width, lightInset, lightTop } = MIRROR_RAIL;
+  return { x: Math.round(contentWidth - width + lightInset), y: lightTop };
+}
+
+/**
+ * 镜像窗口的初始尺寸：把**画面**照设备画面比例等比 fit 进「可用区减系统余量减那圈常驻黑框」，
+ * 再把黑框加回窗口上（2026-10-07 定比例、2026-10-10 删掉外扩那一圈后只剩黑框）。
  *
  * 为什么窗口要先照比例开好，而不是先开一块再等第一帧收一次：默认模式的虚拟显示尺寸取自
  * **窗口画面区的物理像素**，窗口是横的就开出一块横显示 —— 竖屏 app 立刻换版式，等第一帧再收
  * 回来等于让人看一次错误形状（那一版当天就被替掉了）。
+ * 为什么黑框要参与计算：窗口 = 画面 + 黑框，画面才正好是设备比例；反过来（窗口照比例开、
+ * 里面再留一圈）画面会比设备比例更窄，圆角里就多出黑条。
  *
- * 读不到设备比例就退回 `850x600`，并且渲染层拿不到比例时**不给显示尺寸**（`new_display` 退空串
- * = 上游默认的主屏尺寸与密度），两边都不自己编数字。
+ * 读不到设备比例就退回 `850x600`（这一档是**窗口**尺寸），并且渲染层拿不到比例时**不给显示尺寸**
+ * （`new_display` 退空串 = 上游默认的主屏尺寸与密度），两边都不自己编数字。
  * @param {{ width: number, height: number } | null} screenSize 设备物理分辨率（`wm size` 的 Physical）
  * @param {{ width: number, height: number } | null} workArea 该屏幕可用区
  * @returns {{ width: number, height: number }}
@@ -182,9 +259,10 @@ const MIRROR_WINDOW_MARGIN = 80;
 export function mirrorWindowBounds(screenSize, workArea) {
   const width = Number(screenSize?.width);
   const height = Number(screenSize?.height);
+  const insets = mirrorScreenInsets();
   const available = {
-    width: Number(workArea?.width) - MIRROR_WINDOW_MARGIN,
-    height: Number(workArea?.height) - MIRROR_WINDOW_MARGIN,
+    width: Number(workArea?.width) - MIRROR_WINDOW_MARGIN - insets.left - insets.right,
+    height: Number(workArea?.height) - MIRROR_WINDOW_MARGIN - insets.top - insets.bottom,
   };
   const ratio = width / height;
   if (!(width > 0) || !(height > 0) || !Number.isFinite(ratio)) {
@@ -197,7 +275,7 @@ export function mirrorWindowBounds(screenSize, workArea) {
   const fittedHeight = Math.min(available.height, available.width / ratio);
   // 极端比例（带鱼屏那类）等比后会算出 0：窗口不能 0 边，留 1px 让 BrowserWindow 的 min 去收。
   return {
-    width: Math.max(1, Math.round(fittedHeight * ratio)),
-    height: Math.max(1, Math.round(fittedHeight)),
+    width: Math.max(1, Math.round(fittedHeight * ratio)) + insets.left + insets.right,
+    height: Math.max(1, Math.round(fittedHeight)) + insets.top + insets.bottom,
   };
 }

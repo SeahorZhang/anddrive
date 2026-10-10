@@ -16,9 +16,23 @@ const env = vi.hoisted(() => {
   class FakeBrowserWindow {
     constructor(options) {
       this.options = options
-      this.webContents = {}
+      this.webContents = {
+        /** 主进程推给页面的事件轨迹（`[channel, payload]`），用来验全屏那一条有没有落地。 */
+        sent: [],
+        send: (channel, payload) => this.webContents.sent.push([channel, payload]),
+      }
       this.listeners = {}
       this.fullscreenCalls = []
+      /** `maximize()` 的调用次数（满屏 = zoom 撑满，不再是 macOS 全屏）。 */
+      this.maximizeCalls = 0
+      /** `setWindowButtonVisibility` 收到过的值（红绿灯的开关轨迹）。 */
+      this.buttonCalls = []
+      /** `setWindowButtonPosition` 收到过的落点（红绿灯贴右侧长条的算术轨迹）。 */
+      this.buttonPositionCalls = []
+      /** 红绿灯两类调用的**先后**轨迹：放出来之后必须紧跟一次设位（见 session.js 那条实测）。 */
+      this.lightTrace = []
+      /** `setContentSize` 收到过的尺寸（dev 调试边栏撑宽/收宽窗口的轨迹）。 */
+      this.sizeCalls = []
       windows.push(this)
     }
     once(event, fn) {
@@ -37,7 +51,39 @@ const env = vi.hoisted(() => {
     setFullScreen(value) {
       this.fullscreenCalls.push(value)
     }
+    maximize() {
+      this.maximizeCalls += 1
+    }
+    /** 真全屏时 dev 调试边栏不撑宽窗口（守卫读的就是这个）。 */
+    isMaximized() {
+      return this.maximized === true
+    }
+    /** macOS 红绿灯：长条收起时要藏起来，否则三颗圆点会浮在透明窗口上。 */
+    setWindowButtonVisibility(value) {
+      this.buttonCalls.push(value)
+      this.lightTrace.push({ kind: 'visibility', value })
+    }
+    /** macOS 红绿灯只能整组平移（间距/大小动不了）。 */
+    setWindowButtonPosition(position) {
+      this.buttonPositionCalls.push(position)
+      this.lightTrace.push({ kind: 'position', value: position })
+    }
+    /** dev 调试边栏撑宽/收宽窗口（`mirror:windowHud`）的调用轨迹。 */
+    setContentSize(width, height) {
+      this.sizeCalls.push([width, height])
+      this.options.width = width
+      this.options.height = height
+    }
+    getContentSize() {
+      return [this.options.width, this.options.height - 28]
+    }
+    isFullScreen() {
+      return this.fullscreen === true
+    }
     focus() {}
+    minimize() {
+      this.minimized = true
+    }
     close() {}
     isDestroyed() {
       return false
@@ -69,6 +115,8 @@ const env = vi.hoisted(() => {
     settingReads: [],
     settingWrites: [],
     stayOn: {},
+    /** 关会话时回过桌面的设备（`goHome` 的调用序列号）。 */
+    homeCalls: [],
     FakeBrowserWindow,
     ipcMain: {
       handle: (channel, fn) => handlers.set(channel, fn),
@@ -121,8 +169,12 @@ vi.mock('../../electron/adb.js', () => ({
     env.stayOn[key] = value
     return true
   },
-  getWakefulness: async () => 'Awake',
+  getPowerState: async () => ({ wakefulness: 'Awake', screen: 'ON' }),
   wakeDevice: async () => true,
+  goHome: async (serial) => {
+    env.homeCalls.push(serial)
+    return true
+  },
   onDeviceTeardown: (hook) => {
     env.teardownHooks.push(hook)
     return () => {
@@ -139,6 +191,11 @@ vi.mock('../../electron/adb.js', () => ({
 process.env.APP_ROOT = '/tmp/anddrive-test'
 
 const { startMirrorSession, stopMirrorSession } = await import('../../electron/mirror/session.js')
+// 黑框与长条那几档数只有一个出处；窗口尺寸、`initialCss`、红绿灯落点都由它推出来，
+// 测试按同一份数算期望（改了 `options.js` 而这里没跟着红，说明断言写死了数、没钉住关系）。
+const { mirrorScreenInsets, mirrorTrafficLightPosition } = await import(
+  '../../electron/mirror/options.js'
+)
 
 /** `keepAwake` 是在会话返回后异步落地的（置位不能拖慢开窗口），测试里把微任务跑干净。 */
 const flush = async () => {
@@ -162,10 +219,11 @@ describe('mirror session 启动参数', () => {
     expect(init.iconUrl).toBe(iconUrl)
     expect(init.label).toBe('示例')
     expect(init.serverPath).toBe('/tmp/scrcpy-server')
-    // 虚拟显示的初始 CSS 来自窗口内容区，不等页面布局。
+    // 虚拟显示的初始 CSS 来自**画面那块矩形**（内容区减掉外扩那一圈），不等页面布局。
+    const insets = mirrorScreenInsets()
     expect(init.initialCss).toEqual({
-      width: win.getContentBounds().width,
-      height: win.getContentBounds().height,
+      width: win.getContentBounds().width - insets.left - insets.right,
+      height: win.getContentBounds().height - insets.top - insets.bottom,
     })
   })
 
@@ -302,15 +360,134 @@ describe('Android 13 及以下开会话时 keepAwake', () => {
   })
 })
 
+// 关掉镜像窗口时把手机放回桌面：只有「app 是我们 startApp 到主屏上」那一档才该动手机。
+describe('关会话回桌面（goHome）', () => {
+  it('Android 13 及以下点应用：关会话时回一次桌面', async () => {
+    env.homeCalls.length = 0
+    const started = await startMirrorSession({
+      serial: 'dev-home-sdk33',
+      packageName: 'com.example.app',
+    })
+    await stopMirrorSession(started.id)
+    expect(env.homeCalls).toEqual(['dev-home-sdk33'])
+  })
+
+  it('Android 14+（app 在我们那块虚拟显示上）不动手机', async () => {
+    env.homeCalls.length = 0
+    const started = await startMirrorSession({
+      serial: 'dev-home-sdk34',
+      packageName: 'com.example.app',
+    })
+    await stopMirrorSession(started.id)
+    expect(env.homeCalls).toEqual([])
+  })
+
+  /** 整机镜像没有「我们打开的 app」—— 手机上停着什么是他自己操作的，别替他回桌面。 */
+  it('整机镜像（空包名）不动手机', async () => {
+    env.homeCalls.length = 0
+    const started = await startMirrorSession({ serial: 'dev-home-sdk33-phone', packageName: '' })
+    await stopMirrorSession(started.id)
+    expect(env.homeCalls).toEqual([])
+  })
+
+  /** 复用旧会话（再点一次同一个 app）只唤前台，不新建登记 ⇒ 关一次只会回一次桌面。 */
+  it('复用旧会话时不会重复回桌面', async () => {
+    env.homeCalls.length = 0
+    const started = await startMirrorSession({
+      serial: 'dev-home-twice-sdk33',
+      packageName: 'com.example.app',
+    })
+    const again = await startMirrorSession({
+      serial: 'dev-home-twice-sdk33',
+      packageName: 'com.example.app',
+    })
+    expect(again.reused).toBe(true)
+    await stopMirrorSession(started.id)
+    expect(env.homeCalls).toEqual(['dev-home-twice-sdk33'])
+  })
+})
+
+// 画面外面平时什么都不画：窗口本体必须透明（否则那是一条不透明的底压在桌面上），红绿灯也得跟着藏 ——
+// 那三颗圆点是系统画的，CSS 盖不住，浮在透明窗口上就不像手机了。
+describe('镜像窗口的透明本体与红绿灯', () => {
+  it('本体透明、底色全透明，建窗口时先把红绿灯藏起来', async () => {
+    await startMirrorSession({ serial: 'dev-transparent', packageName: 'com.example.app' })
+    const win = env.windows.at(-1)
+    expect(win.options.transparent).toBe(true)
+    expect(win.options.backgroundColor).toBe('#00000000')
+    expect(win.buttonCalls).toEqual([false])
+  })
+
+  it('渲染层报「长条显形」时红绿灯放出来，报「收起」时再藏掉', async () => {
+    await startMirrorSession({ serial: 'dev-buttons', packageName: 'com.example.app' })
+    const win = env.windows.at(-1)
+    const handler = env.handlers.get(CHANNELS.mirrorWindowButtons)
+    handler({ sender: win.webContents }, true)
+    handler({ sender: win.webContents }, false)
+    expect(win.buttonCalls).toEqual([false, true, false])
+    // ⚠️ 关键在**顺序**：`setWindowButtonVisibility(true)` 会把三颗打回 AppKit 默认的左上角
+    // （探针窗口实测：藏一次再放出来，构造参数那次 `trafficLightPosition` 就丢了），
+    // 所以放出来之后必须紧跟一次设位 —— 少了这一步就是用户 10-10 报的「彩虹按钮并没有靠右」。
+    expect(win.lightTrace.map((c) => c.kind)).toEqual([
+      'visibility',
+      'visibility',
+      'position',
+      'visibility',
+    ])
+    expect(win.lightTrace[2].value).toEqual(mirrorTrafficLightPosition(win.getContentBounds().width))
+  })
+
+  /** 红绿灯落在右侧长条里：建窗口时就给一次，之后每次 resize 都得按新的窗口宽重算。 */
+  it('红绿灯初始落点在长条里，窗口 resize 后跟着重算（不会留在旧位置）', async () => {
+    await startMirrorSession({ serial: 'dev-lights', packageName: 'com.example.app' })
+    const win = env.windows.at(-1)
+    expect(win.options.trafficLightPosition).toEqual(mirrorTrafficLightPosition(win.options.width))
+    win.options.width = 500
+    win.fire('resize')
+    expect(win.buttonPositionCalls).toEqual([mirrorTrafficLightPosition(500)])
+  })
+})
+
+// dev 调试边栏（`tools` 那一格）展开时撑宽的是**窗口**，不是从画面里切一块 ——
+// 画面尺寸一旦变了就会发 `resizeDisplay`，手机上当场重排一次，那是 dev 面板不该有的副作用。
+describe('调试边栏撑宽窗口（mirror:windowHud）', () => {
+  const open = (win, px) => env.handlers.get(CHANNELS.mirrorWindowHud)({ sender: win.webContents }, px)
+
+  it('展开撑宽同样的量、收起再收回去；重复报同一个值不再动窗口', async () => {
+    await startMirrorSession({ serial: 'dev-hud', packageName: 'com.example.app' })
+    const win = env.windows.at(-1)
+    const base = win.getContentSize()[0]
+    open(win, 240)
+    expect(win.getContentSize()[0]).toBe(base + 240)
+    // 页面 HMR 重载后又报一次 240：状态自己纠正，不该再撑一遍。
+    open(win, 240)
+    expect(win.getContentSize()[0]).toBe(base + 240)
+    open(win, 0)
+    expect(win.getContentSize()[0]).toBe(base)
+    expect(win.sizeCalls.length).toBe(2)
+  })
+
+  it('全屏时不动窗口尺寸；报非法值当没发生', async () => {
+    await startMirrorSession({ serial: 'dev-hud-fs', packageName: 'com.example.app' })
+    const win = env.windows.at(-1)
+    win.fullscreen = true
+    open(win, 240)
+    expect(win.sizeCalls).toEqual([])
+    win.fullscreen = false
+    open(win, 'x')
+    expect(win.sizeCalls).toEqual([])
+  })
+})
 
 // 横窗会开出一块横显示，竖屏 app 立刻换版式（`mirrorWindowBounds` 照设备画面比例 fit 可用区）。
 describe('镜像窗口照设备画面比例开', () => {
   it('竖屏手机 → 等比竖窗，并把设备分辨率透传给镜像页（它据此决定给不给显示尺寸）', async () => {
     await startMirrorSession({ serial: 'dev-shape', packageName: 'com.example.app' })
     const win = env.windows.at(-1)
-    // adb mock 回 1200x2608；可用区 1440x900 减 80 边距 = 1360x820 → 高顶满 820，宽按比 377。
+    // adb mock 回 1200x2608；可用区 1440x900 减 80 系统余量再减内缩（横 4+(4+86)=94、纵 4+4=8）
+    // → 画面可用 1266x812，高顶满 812、宽按比 374；窗口 = 374+94 x 812+8。
     expect({ width: win.options.width, height: win.options.height }).toEqual({
-      width: 377,
+      width: 468,
       height: 820,
     })
     expect(initFrom(win).screenSize).toEqual({ width: 1200, height: 2608 })
@@ -340,24 +517,48 @@ describe('镜像窗口的全屏启动', () => {
 
   it('开着时：先 show，再 setFullScreen(true)', async () => {
     const win = await open('dev-fs-on', { fullscreen: true })
-    // 构造参数里不该再有 `fullscreen`（否则又退回那条在 macOS 上不可靠的路径）。
+    // 构造参数里不该有 `fullscreen`（那条在 macOS 上不可靠）；`fullscreenable` 要**开**着 ——
+    // 用户 10-11 明确「我要的是全屏，不是放大按钮」，zoom 撑满那一版试过并已回退。
     expect('fullscreen' in win.options).toBe(false)
     expect(win.options.fullscreenable).toBe(true)
     win.fire('ready-to-show')
     expect(win.shown).toBe(true)
     expect(win.fullscreenCalls).toEqual([true])
+    expect(win.maximizeCalls).toBe(0)
+    // 页面拿启动参数就能知道自己一开是不是全屏（等事件会晚一拍，长条先按常态排一遍）。
+    expect(initFrom(win).prefs.fullscreen).toBe(true)
+  })
+
+  /**
+   * 全屏那一屏是另一种形态（手机在整块屏幕正中、长条常驻、画面收成手机那块）⇒ 进/出都要推给页面。
+   * ⚠️ 这里**不碰红绿灯**：真全屏里它们归系统收放（顶边浮出），我们钉不住（10-11 四种救法实测都不出），
+   * 也不该藏 —— 用户要「全屏」，那三颗就随系统。
+   */
+  it('进/出全屏各推一条 mirror:fullscreen，并且不动红绿灯', async () => {
+    const win = await open('dev-fs-push', undefined)
+    win.fire('enter-full-screen')
+    expect(win.webContents.sent).toEqual([[CHANNELS.mirrorFullscreen, true]])
+    win.fire('leave-full-screen')
+    expect(win.webContents.sent).toEqual([
+      [CHANNELS.mirrorFullscreen, true],
+      [CHANNELS.mirrorFullscreen, false],
+    ])
+    // 只有建窗口那一次「先藏」—— 多了就是有人又试图去管三颗。
+    expect(win.lightTrace.map((c) => c.kind)).toEqual(['visibility'])
   })
 
   it('关着时：只 show，不碰全屏', async () => {
     const win = await open('dev-fs-off', { fullscreen: false })
     win.fire('ready-to-show')
     expect(win.shown).toBe(true)
+    expect(win.maximizeCalls).toBe(0)
     expect(win.fullscreenCalls).toEqual([])
   })
 
   it('没配置时默认关：不碰全屏', async () => {
     const win = await open('dev-fs-default', undefined)
     win.fire('ready-to-show')
+    expect(win.maximizeCalls).toBe(0)
     expect(win.fullscreenCalls).toEqual([])
   })
 })

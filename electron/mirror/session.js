@@ -8,20 +8,25 @@ import {
   getGlobalNumberSetting,
   getPhysicalScreenSize,
   getPhysicalScreenDensity,
-  getWakefulness,
+  goHome,
   isMiuiDevice,
   onDeviceTeardown,
   scrcpyServerPath,
   setGlobalNumberSetting,
   setSecureSetting,
-  wakeDevice,
 } from "../adb.js";
 import { sanitizeIcon } from "../iconImage.js";
 import { isValidPackageName, isValidSerial } from "../validators.js";
 import { findAppSession } from "./appSession.js";
 import { startKeepAwake } from "./keepAwake.js";
 import { startMiProjection } from "./miProjection.js";
-import { mirrorWindowBounds, mirrorsMainDisplay, resolveRuntimePrefs } from "./options.js";
+import {
+  mirrorScreenInsets,
+  mirrorTrafficLightPosition,
+  mirrorWindowBounds,
+  mirrorsMainDisplay,
+  resolveRuntimePrefs,
+} from "./options.js";
 
 // ---------------------------------------------------------------------------
 // 自研镜像会话（mirror，渲染层直连形态）
@@ -51,6 +56,7 @@ let sessionSeq = 0;
  * @property {Record<string, unknown> | null} pendingInit
  * @property {(() => Promise<void>) | null} miProjectionRestore
  * @property {(() => Promise<void>) | null} keepAwakeRestore
+ * @property {boolean} returnsHome 关会话时要不要把手机放回桌面（见 `stopMirrorSession`）
  */
 
 function loadMirrorPage(win) {
@@ -73,13 +79,24 @@ function createMirrorWindow(session, prefs, bounds) {
     minWidth: 280,
     minHeight: 280,
     titleBarStyle: "hiddenInset",
-    backgroundColor: "#000000",
+    // 红绿灯落在**画面右边缘那条控制长条**里（尺寸与落点见 `MIRROR_RAIL`）：
+    // 三颗是系统画的、CSS 盖不住，只能整组平移，所以长条的宽度下限就是它。
+    trafficLightPosition: mirrorTrafficLightPosition(bounds.width),
+    // **窗口本体透明**（2026-10-09）：平时只看见那块圆角屏幕 + 贴它外沿那圈常驻黑框（「就是个手机样子」）。
+    // 2026-10-10 用户把外面那圈「hover 才往外扩」的浅色窗口底删了，换成右侧那条悬浮长条
+    // （渲染层 `App.vue` 的 `railShown` + `chromeReveal.js`）。长条在手机右边**外面**、占窗口宽度，
+    // 那一格平时是透明的，所以收起时看见的还是「一块圆角屏幕 + 一圈黑框」。
+    // 这里不能再给 `backgroundColor` 上色 —— 铺一层不透明就把透明白开了。
+    transparent: true,
+    backgroundColor: "#00000000",
     show: false,
     alwaysOnTop: prefs.alwaysOnTop,
-    // **不传 `fullscreen`**：macOS 上「构造参数 fullscreen + show:false」常常落不回全屏
-    // （窗口先按普通尺寸显示），要可靠地进全屏得在 show 之后调 `setFullScreen(true)`。
-    // 顺带也不再触发另一个坑：显式传 `fullscreen: false` 会把窗口标成不可全屏，
-    // macOS 绿色按钮随之退化成 zoom —— 这里靠 `fullscreenable` 表达意图。
+    // 真·全屏（macOS 那个独立 Space）。⚠️ 代价实测清楚：这种全屏里系统把红绿灯连标题栏一起收进
+    // 「鼠标移到顶边才浮出」—— 进全屏时 `setWindowButtonVisibility(true)`、动画落定后再调一次、
+    // 落点交回默认、建窗口时压根不藏，四种救法像素扫描命中数全 0（10-11）。
+    // 用户 10-11 明确「我要的是全屏，不是放大按钮」⇒ 保真全屏，那三颗随系统；
+    // 试过的 `fullscreenable: false` + `maximize()`（zoom 撑满）已回退 —— 那只是最大化，不是全屏。
+    // 另一条老坑仍在：构造参数传 `fullscreen:true` + `show:false` 常常进不去 ⇒ 靠 show 之后再调。
     fullscreenable: true,
     // 直连形态：Video/Control/audio 在渲染层直连 adb，需要 node 的 ipc 与
     // 同源 socket；自定义页面无第三方内容，安全边界等同于主进程代码。
@@ -94,9 +111,24 @@ function createMirrorWindow(session, prefs, bounds) {
   });
   win.once("ready-to-show", () => {
     win.show();
-    // 「全屏启动」在 show 之后落地（见上面构造参数那条注释）。
+    // 「全屏启动」在 show 之后落地（构造参数那条路在 macOS 上不可靠，见上面 `fullscreenable` 的注释）。
     if (prefs.fullscreen) win.setFullScreen(true);
   });
+  // 红绿灯是**按窗口宽**贴到右侧长条里的，所以窗口一改大小就得跟着重算落点。
+  win.on("resize", () => {
+    if (win.isDestroyed()) return;
+    win.setWindowButtonPosition?.(mirrorTrafficLightPosition(win.getContentBounds().width));
+  });
+  // 全屏那一屏要单独一种排法：手机得在整块屏幕正中，而常态那 86px 长条是从窗口右边
+  // **挖走一块宽度**的 ⇒ 画面会偏左。把状态推给渲染层，它那一档让长条常驻、画面收成手机那块。
+  // 初值不用推：页面自己从 `pendingInit.prefs.fullscreen` 读（「全屏启动」那条开关）。
+  // ⚠️ 红绿灯**不去动**：真全屏里它们归系统收放（顶边浮出），钉不住也不该藏 —— 浮出来正好落在
+  // 右上角这一格里，与窗口态同一个位置。
+  win.on("enter-full-screen", () => win.webContents.send(CHANNELS.mirrorFullscreen, true));
+  win.on("leave-full-screen", () => win.webContents.send(CHANNELS.mirrorFullscreen, false));
+  // 默认把红绿灯藏起来：窗口本体透明，三颗圆点会浮在桌面上，「就是个手机样子」当场破功。
+  // 渲染层浮出右侧长条时通过 `mirror:windowButtons` 一起放出来（关掉窗口仍要靠它或 ⌘Q）。
+  win.setWindowButtonVisibility?.(false);
   void loadMirrorPage(win);
   win.on("closed", () => void stopMirrorSession(session.id));
 
@@ -203,6 +235,10 @@ export async function startMirrorSession(request) {
     pendingInit: null,
     miProjectionRestore: null,
     keepAwakeRestore: null,
+    // 「采主屏 + 带着包名」= 这个 app 是我们 `startApp` 到手机屏幕上去的（Android 13 及以下那档），
+    // 关掉窗口就该把它放回桌面。虚拟显示那档不动手机（app 在我们那块显示上，会话结束显示就没了）；
+    // 整机镜像没有「我们打开的 app」，所以也不动。
+    returnsHome: !wholeDevice && mirrorsMainDisplay(sdk),
   };
   sessions.set(session.id, session);
 
@@ -214,10 +250,12 @@ export async function startMirrorSession(request) {
   }
 
   // 页面主动 invoke 拉取启动参数（避免 did-finish-load 时序竞态）。
-  // `initialCss` = 窗口内容区尺寸：渲染层拿它算第一块虚拟显示。不能让它读 DOM ——
-  // 深链冷启动时页面还没排版完，`clientWidth` 会读到 Electron 默认的 512x512，
+  // `initialCss` = **画面那块矩形**（窗口内容区减掉那圈常驻黑框，见 `MIRROR_FRAME`）的尺寸：
+  // 渲染层拿它算第一块虚拟显示。黑框只有 6px，但它占着布局，所以不能整窗内容区直接给。
+  // 不能让它读 DOM —— 深链冷启动时页面还没排版完，`clientWidth` 会读到 Electron 默认的 512x512，
   // 于是开出一块和窗口完全不符的显示（2026-09-28 实测）。
   const content = session.win.getContentBounds();
+  const insets = mirrorScreenInsets();
   session.pendingInit = {
     id: session.id,
     serial,
@@ -230,7 +268,10 @@ export async function startMirrorSession(request) {
     serverPath,
     config: request?.config ?? null,
     prefs,
-    initialCss: { width: content.width, height: content.height },
+    initialCss: {
+      width: Math.max(1, content.width - insets.left - insets.right),
+      height: Math.max(1, content.height - insets.top - insets.bottom),
+    },
     // 设备画面比例（`wm size` 的 Physical）：渲染层据此决定要不要给虚拟显示尺寸 ——
     // 拿不到就不给，`new_display` 退空串走上游默认，不自己编一个比例。
     screenSize,
@@ -292,6 +333,9 @@ export async function stopMirrorSession(id) {
     // 渲染层在 beforeunload 里停掉 scrcpy 会话；窗口关闭兜底。
     session.win.close();
   }
+  // 这个 app 是我们 `startApp` 到手机屏幕上去的（13 及以下那档），窗口都关了就把手机放回桌面，
+  // 别让它停在一个没人看的界面上。**尽力而为**：设备已经断开时这条必然失败，不该把关窗流程带崩。
+  if (session.returnsHome) await goHome(session.serial).catch(() => {});
   return true;
 }
 
@@ -339,9 +383,44 @@ ipcMain.handle(CHANNELS.mirrorInitGet, (event) => {
   return null;
 });
 ipcMain.handle(CHANNELS.mirrorList, () => listMirrorSessions());
+
+/**
+ * 渲染层浮出/收起右侧长条时一起开关红绿灯（`hiddenInset` 的三颗圆点是系统画的，CSS 盖不住）。
+ * 用 `on` 不用 `handle`：纯表现层的一刀，没有要等结果的地方。
+ */
+ipcMain.on(CHANNELS.mirrorWindowButtons, (event, shown) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return;
+  const visible = shown === true;
+  win.setWindowButtonVisibility?.(visible);
+  // ⚠️ **放出来之后必须重设落点**：`setWindowButtonVisibility(true)` 会把三颗打回 AppKit 默认的
+  // 左上角，构造参数那次 `trafficLightPosition` 就这么丢了（10-10 探针实测：藏一次再放出来就回左边，
+  // 补一次 `setWindowButtonPosition` 立刻回右侧长条里）。用户看到的就是「彩虹按钮并没有靠右」。
+  if (visible) {
+    win.setWindowButtonPosition?.(mirrorTrafficLightPosition(win.getContentBounds().width));
+  }
+});
 ipcMain.handle(CHANNELS.mirrorStop, (_, id) => stopMirrorSession(id));
 ipcMain.handle(CHANNELS.mirrorStopAll, () => stopAllMirrorSessions());
 ipcMain.handle(CHANNELS.mirrorFocus, (_, id) => focusMirrorSession(id));
+
+/**
+ * dev 调试边栏（`tools` 那一格）展开/收起：边栏是**浮在窗口右边的另一栏**，所以撑宽的是**窗口**，
+ * 不是从画面那块矩形里切 —— 画面尺寸不变 ⇒ 不会发 `resizeDisplay`、手机上不会重排一次。
+ * 渲染层每次只报"现在要占多宽"（0 = 收起），主进程按上一次的量算增量，所以页面重载后
+ * 状态自己会纠正（不会重复撑宽）。全屏时不动窗口尺寸。
+ */
+const hudExtras = new WeakMap();
+ipcMain.on(CHANNELS.mirrorWindowHud, (event, extra) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed() || win.isFullScreen()) return;
+  const next = Math.max(0, Number(extra) || 0);
+  const delta = next - (hudExtras.get(win) ?? 0);
+  if (!delta) return;
+  hudExtras.set(win, next);
+  const [width, height] = win.getContentSize();
+  win.setContentSize(Math.max(1, width + delta), height);
+});
 
 /**
  * 渲染层状态上报：ready（回填快照字段）、exit（意外退出 → 通知主窗口）。

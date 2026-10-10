@@ -10,7 +10,7 @@
 
 1. **§1 已清空**：2026-09-28 一轮修掉 6 条真 bug（B1/B3/B4/O10/D4/D7）、删掉 1 条不要的能力（B2），条目本身已从本文移除。**剩下的全是优化 / 结构 / 功能。**
 2. **画面「卡住」三类根因里，「停合成」那一类（9-28 记作 B2，与本文的 bug 编号 B2 无关）已按设备分两档结案**：MIUI/HyperOS 走 `electron/mirror/miProjection.js` 那条 `synergy_mode` → `Hangup` 门（2026-09-29，真机三种时序都不再定住）；**Android 13 及以下没有那扇门**，改由 `electron/mirror/keepAwake.js` 在会话期间打开「插电不休眠」（`Settings.Global.stay_on_while_plugged_in=7`，关会话原样还原），另外 `src/mirror/sleepWatch.js` 轮询 `mWakefulness`，真睡下去了就在窗口报「已休眠」+「继续使用」（点了才 `input keyevent 224` 点亮，**不自动弹醒**）。**客户端断链与 MIUI 收回窗口两类仍未修**，判据与已判死的救法都在 `NATIVE_MIRROR.md` §排查记录 2026-09-28~29。**自动弹醒（检测到睡就程序叫醒）仍然是不要的**：9-29 否过一次，2026-10-09 照竞品改成「用户点『继续使用』才唤醒」。
-3. **设置页不再有「屏幕策略」**：`keepActive` / `turnOff` / `normal` 三选连同 `setDisplayPower(false)` 那条直调于 2026-09-29 整体删除 —— 我们**不主动关屏幕**。老存盘里残留的 `screenMode` 由 `normalizeScrcpyConfig` 静默丢弃，不需要迁移。⚠️ 口径范围要认清：这条管的是「不熄屏、不代替用户按电源键」，**不等于设备电源偏好一律不碰** —— 13 及以下那档的 keepAwake 是会话期内的临时置位并且会还原（见 §0.2）。
+3. **设置页不再有「屏幕策略」**：`keepActive` / `turnOff` / `normal` 三选连同 `setDisplayPower(false)` 那条直调于 2026-09-29 整体删除 —— **不自动关屏幕**。（2026-10-10 用户点名把「关屏使用」放回来，但那是**右侧长条上他主动按的一格**（`kind:'screen'` → `setDisplayPower`），不是启动时替他就关；那条「自动」的删除没撤销。）老存盘里残留的 `screenMode` 由 `normalizeScrcpyConfig` 静默丢弃，不需要迁移。⚠️ 口径范围要认清：这条管的是「不熄屏、不代替用户按电源键」，**不等于设备电源偏好一律不碰** —— 13 及以下那档的 keepAwake 是会话期内的临时置位并且会还原（见 §0.2）。
 4. **轮询/定时器 15 处**（§5）。可收口的是三条"UI 想知道设备状态"的轮询，以及建了不拆的 mDNS socket。
 5. **按包名/机型的 app 特殊定制在可执行代码里已经清零**（§4）。别再去找"哪里在特判抖音"。
 6. **裁切症状已结案**（用户 2026-09-28：原因他已找到，不用再查；根因未入库）。§3 只剩结构债；本轮收口的「显示像素只有一个主人」与「`newDisplay` 必填、不许有默认尺寸」两条已作为**刻意设计**写进 `ARCHITECTURE.md` §4，不再出现在待办里。
@@ -129,7 +129,7 @@
 | F1 | 一键截图到 Mac（同时进剪贴板） | `exec-out` 通道仓库已在用，`screencap -p` 无需权限 | S | P2-3 |
 | F2 | 文件互传（拖拽 push/pull + 进度） | `adb pull` 已用于导 APK；进度按字节算，别解析 pull 的 stderr | M | P2-2 |
 | F3 | APK 拖拽批量安装 | 安装链路已跑通（`install -r`） | S–M | P2-1 |
-| F4 | ~~镜像里的系统动作键（返回/Home/多任务/音量/电源）~~ | **已结案，2026-09-28 整套删除**（编号保留不重排，见 §8）。原 `D2/B2` 一并关闭 | — | — |
+| F4 | ~~镜像里的系统动作键（返回/Home/多任务/音量/电源）~~ | 2026-09-28 整套删除；**2026-10-10 部分放回**：返回 / Home / 多任务三个进右侧长条（`kind:'key'`），音量 / 电源仍无入口。`kind:'action'` 那层通道没恢复。原 `D2/B2` 一并关闭 | — | — |
 | F5 | 应用元信息增强：标注「固定竖屏 / 不可调整」 | helper 自己拼 JSON，加字段便宜（`helper-app/.../ListMain.java` 的类注释是契约）。正好解释用户常问的"为什么这个 app 投出来中间一条" | S–M | — |
 | F6 | 权限 / appops 面板 | shell uid 有这些权限；MIUI/HyperOS 可能拦，要按 OEM 分支并给失败出口 | S–M | — |
 | F7 | 「把手机带到无线调试二维码页」 | helper 里的 `QrPairActivity`（manifest `:11`）**Mac 侧从来没调用过**；已连接时一条 `am start` 就够。适合放进"添加第二台设备 / 无线调试失效"两个入口 | S | P3-5 |
@@ -346,7 +346,7 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 | P3-4 | 深色模式与 i18n | 深色已上线（`src/styles/index.css` 双主题 token + `composables/useTheme.js`，设置页「深色模式」开关，2026-09-30）；剩**文案抽离**（i18n） |
 | P3-5 | 新手引导与帮助 | 首次启动分步引导（开无线调试 → 扫码 → 浏览/启动）；F7 是它的廉价前半 |
 | 镜像 P0 | **默认路径换产物与换尺寸口径后的真机账**（2026-10-07） | 默认产物 = 上游原生；`new_display` = 窗口画面区的**物理像素**（CSS × DPR）+ `scaleDisplayDpi` 按主屏长边算的密度，**并带 `flex_display`**（与大屏模式一样跟随窗口）。动因是用户反馈「弹幕字体很小」：原默认（主屏 2340 行）被等比塞进 820 CSS 高的窗口 = 0.7×，按 px 写死的控件跟着缩。**设备侧已实测两条**：`SPIKE_FLEX=1 SPIKE_DISPLAY=756x1640/308` → 显示 756x1640、密度 308（长边 852dp ≈ 主屏 851dp）、出帧正常；对照 `SPIKE_DISPLAY=756x1640`（不给密度）→ Android 退成**基准密度 160** ⇒ 长边 1640dp、应用被当成超大屏 —— 这就是密度必须我们自己算的证据（上游只在非 flex 那条路做 `scaleDpi`）。**还没在 UI 上验的**：弹幕实际观感（应约 1/0.7 ≈ 1.4 倍）、拖窗口跟随后长边 dp 漂移好不好受（`resizeDisplay` 不带 dpi）、固定竖屏应用的铺满仍只在**大屏模式**里。A/B 产物用 `SPIKE_SERVER=patched pnpm mirror:spike …` |
-| 镜像 P1 | **全屏启动的真机观感**（2026-10-07） | 默认值**仍是关**（当天试过默认开，用户收回）；这次真正修的是「打开它到底生不生效」：改成 `show()` 之后 `setFullScreen(true)`，构造参数不再传 `fullscreen`。要人看的是：在设置里打开「全屏启动」后起会话是否真进全屏、绿色按钮在没有该开关时仍可全屏（`fullscreenable:true`）。顺带一条已量过的后果：默认模式的显示尺寸跟着窗口，全屏窗口是横的（外接屏实测 `3840x2104`、密度 722、长边仍 851dp）⇒ 固定竖屏的应用在横形显示上走 size-compat |
+| 镜像 P1 | ~~全屏启动的真机观感~~ → **全屏那一屏的形态已落地**（2026-10-10，用户拿 AndroMeld 的截图点单「抄过来」） | 10-07 那条「打开它到底生不生效」同时验完了：CDP 起会话 + `screencapture` 量的，1920x1080 下画面矩形 `x=714 w=492`（中线正落在屏幕正中）、上下各留 12px。排法三条记在 [`ARCHITECTURE.md`](ARCHITECTURE.md) 镜像窗口外观那节新增的子项里。**剩下的已知后果只作用于 14+ 那块虚拟显示**：默认模式的显示尺寸跟着窗口，全屏窗口是横的（外接屏实测 `3840x2104`、密度 722、长边仍 851dp）⇒ 固定竖屏的应用在横形显示上走 size-compat；采主屏那档没这件事（画面比例就是手机那块屏的，全屏只是把它放大到顶天立地）。默认值**仍是关**（10-07 试过默认开，用户当天收回）  **2026-10-11 收尾**：为救「全屏里那三颗红绿灯」试过 `fullscreenable:false` + `maximize()` 的 zoom 撑满（三颗确实常驻，代价是菜单栏与 Dock 仍占一条、ESC 不再退出），用户一句「**我要的是全屏，不是放大按钮**」⇒ 已回退成真全屏：红绿灯随系统（顶边才浮出），并且明确不许我们自绘三颗。四条救法实测像素扫描命中数全 0，**别再往这个方向试**，缘由见 [`ARCHITECTURE.md`](ARCHITECTURE.md)「全屏里那三颗红绿灯」。 |
 | 镜像 P1 | 指针习惯 | 右键→返回、中键→主屏（操作栏已删，鼠标侧手势是主要入口）；多指/捏合（`pointerId` 现在固定 0） || 镜像 P2 | 截图保存、会话列表增强（重开/置顶）、窗口尺寸记忆、断线自动重连（复用 `adb.js` 重连逻辑） | |
 | 镜像 P3 | AV1 验证并移出回落名单、控制错误可见性（现仅 `console.warn`）、消费 `client.output` 把 scrcpy 报错并入异常退出提示、设备侧旋转剩余观感（`--no-vd-system-decorations` 或把启动应用放服务端侧） | |
 
@@ -358,7 +358,7 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 ## 8. 已结案 / 明确不做（避免反复讨论）
 
 - **抖音直播「上下裁」= 镜像侧无解**：裁切发生在抖音内部（播放器 cover 稳态），与显示几何、虚拟性、ISR 无关。必要且充分变量是 `ro.build.characteristics` 含 tablet；改 prop 必须配 `pm clear` 重注册。品牌分发已逆向（小米/Redmi 看 characteristics+isMiui、vivo 看 `FtDeviceInfo`、OPPO 看 feature、其他品牌看 characteristics &&（`screenLayout≥large` 或 xdpi 对角线 ≥7.0″），结果缓存 Keva）；折叠屏走 `FoldIdentifyUtils` **完全不读 characteristics**。非 root 判死（`ro.*`/`persist.sys.*` 是 `system_prop`，adb shell uid 2000 写不动）。唯一出路是换信源（平板 AVD / 真平板 / 折叠机，均已实测同一条 AndDrive 链路版式天然正常）。取证链全文见 `NATIVE_MIRROR.md` §2026-09-27~28。
-- **系统动作键那套能力已整体删除（2026-09-28，B2/D2/F4 结案）**：返回 / Home / 多任务 / 音量 / 电源、旋转、通知栏、以及 `kind:'action'` 消息通道 —— 按决策**不要**，代码已清空，**别再提"接线"**。删除范围：`electron/mirror/control.js` 的 `TAP_ACTIONS` + `applyAction` + `case 'action'`（连带 `KEY_CODES` 再导出）、`shared/keys.js` 里只为它服务的五个键值别名（home / appSwitch / power / volumeUp / volumeDown）。（当时还在的「启动后息屏」走的是另一支直调 Tango `setDisplayPower(false)`，2026-09-29 随屏幕策略一起删除。）回归测试已改成断言 `kind:'action'` 现在抛「未知控制消息」。若将来要做鼠标手势（NATIVE_MIRROR §P1 那条仍然开放），直接给 `controller.injectKeyCode` 传官方键值，不要恢复这层抽象。
+- **系统动作键那套能力曾整体删除（2026-09-28，B2/D2/F4 结案）**：返回 / Home / 多任务 / 音量 / 电源、旋转、通知栏、以及 `kind:'action'` 消息通道。⚠️ **2026-10-10 用户点名放回一部分**：返回 / Home / 多任务三个进右侧长条（走 `kind:'key'` → `injectKeyCode`，不是恢复 `kind:'action'` 那层），同一晚又点名要「关屏使用」（走 `kind:'screen'` → `setDisplayPower`）。**音量 / 电源 / 旋转 / 通知栏仍然没有入口，`kind:'action'` 通道也没恢复** —— 别把这次当成「那套回来了」。删除范围：`electron/mirror/control.js` 的 `TAP_ACTIONS` + `applyAction` + `case 'action'`（连带 `KEY_CODES` 再导出）、`shared/keys.js` 里只为它服务的五个键值别名（home / appSwitch / power / volumeUp / volumeDown）。（当时还在的「启动后息屏」走的是另一支直调 Tango `setDisplayPower(false)`，2026-09-29 随屏幕策略一起删除。）回归测试已改成断言 `kind:'action'` 现在抛「未知控制消息」。若将来要做鼠标手势（NATIVE_MIRROR §P1 那条仍然开放），直接给 `controller.injectKeyCode` 传官方键值，不要恢复这层抽象。
 - **黑边的变量不是比例，是 Android 的 600dp 大屏门槛**（`smallestWidth ≥ 600dp` 时系统忽略 app 方向锁并 letterbox）。比例吸附、600dp dpi 下限、`tablet` 模式、`MAX_DISPLAY_PIXELS` 都已试过并删除。
 - **模糊遮罩挡不住重排闪烁**（透明度低于 ~95% 就看得见），现方案是不透明遮罩 + 等关键帧。
 - **`force-stop` 不是"把应用接回来"**：会冷启。正确做法 `am display move-stack`（真机验证 pid 不变）。「重新启动」按钮当天加了又删 —— 和"接回"并排会误点。

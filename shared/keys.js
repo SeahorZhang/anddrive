@@ -6,11 +6,16 @@ import { AndroidKeyCode, AndroidKeyEventMeta } from "@yume-chan/scrcpy";
 
 /**
  * 常用 android.view.KeyEvent 键值（Tango `AndroidKeyCode` 的应用语义别名）。
- * 只列**真的会发出去**的键：系统动作键（Home / 多任务 / 电源 / 音量）那套
- * 2026-09-28 已按产品决策整体删除，不要为它再加别名。
+ * 只列**真的会发出去**的键。
+ *
+ * ⚠️ `AndroidHome`(3) / `AndroidAppSwitch`(187) 是**系统导航键**，与键盘上的 `Home`(122) 不是一回事，
+ * 别拿错。这两个别名 2026-09-28 随「系统动作键整类删除」一起撤过，2026-10-10 用户点名要右侧长条上的
+ * 返回/Home/多任务三个键 ⇒ 只有这三个回来了，**音量 / 电源 / 旋转 / 通知栏 / 息屏亮屏仍然没有**。
  */
 export const KEY_CODES = {
   back: AndroidKeyCode.AndroidBack,
+  home: AndroidKeyCode.AndroidHome,
+  recents: AndroidKeyCode.AndroidAppSwitch,
   arrowUp: AndroidKeyCode.ArrowUp,
   arrowDown: AndroidKeyCode.ArrowDown,
   arrowLeft: AndroidKeyCode.ArrowLeft,
