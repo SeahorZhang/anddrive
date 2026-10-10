@@ -14,6 +14,8 @@ const {
   resolveRuntimePrefs,
   mirrorWindowBounds,
   mirrorScreenInsets,
+  mirrorContentExtraSize,
+  mirrorAspectRatio,
   mirrorTrafficLightPosition,
   MIRROR_RAIL,
   mirrorsMainDisplay,
@@ -334,5 +336,40 @@ describe('mirrorTrafficLightPosition（红绿灯贴进右侧长条）', () => {
     expect(insets.right - insets.left).toBe(MIRROR_RAIL.width)
     expect(insets.left).toBe(insets.top)
     expect(insets.top).toBe(insets.bottom)
+  })
+})
+
+// 拖拽锁比例（`setAspectRatio`）的两个参数：比例 = 设备画面比例，余量 = 不参与比例的那几截。
+describe('mirrorContentExtraSize / mirrorAspectRatio（只能按手机比例拖）', () => {
+  const insets = mirrorScreenInsets()
+
+  /** 锁的是**画面那块矩形**：窗口多出来的黑框 + 长条必须整截算余量，漏一条就等于把窗口等比锁。 */
+  it('余量就是内缩的横竖总量，且只加在宽上（dev 边栏那一截同属窗口）', () => {
+    expect(mirrorContentExtraSize()).toEqual({
+      width: insets.left + insets.right,
+      height: insets.top + insets.bottom,
+    })
+    expect(mirrorContentExtraSize(240)).toEqual({
+      width: insets.left + insets.right + 240,
+      height: insets.top + insets.bottom,
+    })
+    // 非法/负的宽度不该把余量算小（画面会被挤 = 发一条 resizeDisplay）。
+    expect(mirrorContentExtraSize(-100)).toEqual(mirrorContentExtraSize())
+    expect(mirrorContentExtraSize('x')).toEqual(mirrorContentExtraSize())
+  })
+
+  it('比例取设备画面比例（与 `mirrorWindowBounds` 同一个来源）', () => {
+    expect(mirrorAspectRatio({ width: 1200, height: 2608 })).toBe(1200 / 2608)
+    expect(mirrorAspectRatio({ width: 1080, height: 2340 })).toBe(1080 / 2340)
+  })
+
+  /** 读不到分辨率 = 不锁（0 是上游的「取消比例」），别拿窗口那对数反推一个假比例。 */
+  it('读不到设备分辨率时回 0 = 不锁', () => {
+    expect(mirrorAspectRatio(null)).toBe(0)
+    expect(mirrorAspectRatio(undefined)).toBe(0)
+    expect(mirrorAspectRatio({})).toBe(0)
+    expect(mirrorAspectRatio({ width: 0, height: 2608 })).toBe(0)
+    expect(mirrorAspectRatio({ width: 1200, height: -8 })).toBe(0)
+    expect(mirrorAspectRatio({ width: 'x', height: 2608 })).toBe(0)
   })
 })

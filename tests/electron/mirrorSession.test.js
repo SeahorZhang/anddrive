@@ -33,6 +33,8 @@ const env = vi.hoisted(() => {
       this.lightTrace = []
       /** `setContentSize` 收到过的尺寸（dev 调试边栏撑宽/收宽窗口的轨迹）。 */
       this.sizeCalls = []
+      /** `setAspectRatio` 收到过的 `[比例, 不参与比例的余量]`（拖拽只能按手机比例）。 */
+      this.aspectCalls = []
       windows.push(this)
     }
     once(event, fn) {
@@ -73,6 +75,10 @@ const env = vi.hoisted(() => {
       this.sizeCalls.push([width, height])
       this.options.width = width
       this.options.height = height
+    }
+    /** 拖拽锁比例（= AppKit 的 `contentAspectRatio`）：记 `[比例, 余量]` 两件事。 */
+    setAspectRatio(ratio, extraSize) {
+      this.aspectCalls.push([ratio, extraSize])
     }
     getContentSize() {
       return [this.options.width, this.options.height - 28]
@@ -193,7 +199,7 @@ process.env.APP_ROOT = '/tmp/anddrive-test'
 const { startMirrorSession, stopMirrorSession } = await import('../../electron/mirror/session.js')
 // 黑框与长条那几档数只有一个出处；窗口尺寸、`initialCss`、红绿灯落点都由它推出来，
 // 测试按同一份数算期望（改了 `options.js` 而这里没跟着红，说明断言写死了数、没钉住关系）。
-const { mirrorScreenInsets, mirrorTrafficLightPosition } = await import(
+const { mirrorScreenInsets, mirrorContentExtraSize, mirrorTrafficLightPosition } = await import(
   '../../electron/mirror/options.js'
 )
 
@@ -503,6 +509,37 @@ describe('镜像窗口照设备画面比例开', () => {
     })
     expect(initFrom(win).screenSize).toBeNull()
     expect(initFrom(win).screenDpi).toBeNull()
+  })
+})
+
+// 用户 2026-10-11：「不可以随意更改，只能按手机比例拖拽宽度和高度」⇒ 建窗口就向上游要一个
+// `setAspectRatio`（AppKit 自己锁拖拽）。锁的是**画面那块矩形**，黑框 + 长条走 `extraSize`。
+describe('镜像窗口按手机比例锁住拖拽', () => {
+  it('建窗口就按设备画面比例锁，不参与比例的余量 = 黑框 + 右侧长条', async () => {
+    await startMirrorSession({ serial: 'dev-ratio', packageName: 'com.example.app' })
+    // adb mock 回 1200x2608。
+    expect(env.windows.at(-1).aspectCalls).toEqual([[1200 / 2608, mirrorContentExtraSize()]])
+  })
+
+  it('读不到设备分辨率时不锁（不自己编一个比例）', async () => {
+    await startMirrorSession({ serial: 'dev-ratio-unknown', packageName: 'com.example.app' })
+    expect(env.windows.at(-1).aspectCalls).toEqual([])
+  })
+
+  /** dev 边栏撑宽的是窗口：那一截不进画面，所以必须算成余量，否则拖一次边就把边栏挤没。 */
+  it('dev 边栏开合会把那一截算进余量', async () => {
+    await startMirrorSession({ serial: 'dev-ratio-hud', packageName: 'com.example.app' })
+    const win = env.windows.at(-1)
+    const hud = (px) => env.handlers.get(CHANNELS.mirrorWindowHud)({ sender: win.webContents }, px)
+    hud(240)
+    hud(0)
+    expect(win.aspectCalls.map((c) => c[1])).toEqual([
+      mirrorContentExtraSize(),
+      mirrorContentExtraSize(240),
+      mirrorContentExtraSize(0),
+    ])
+    // 比例始终是画面那一个，不随边栏变。
+    expect(win.aspectCalls.map((c) => c[0])).toEqual([1200 / 2608, 1200 / 2608, 1200 / 2608])
   })
 })
 

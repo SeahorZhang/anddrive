@@ -229,6 +229,33 @@ export function mirrorScreenInsets() {
 }
 
 /**
+ * 拖拽锁比例时**不参与比例**的那一圈固定余量（`BrowserWindow.setAspectRatio` 的第二个参数）。
+ *
+ * 锁的是**画面那块矩形**（= 内容区减掉 `mirrorScreenInsets()`），因为手机比例说的是画面，不是窗口：
+ * 窗口比画面多出四边的黑框与右边那条长条，这些宽度是写死的、不随窗口缩放。
+ * dev 调试边栏撑宽的也是窗口而不是画面，所以调用方把那一截作为 `extraWidth` 加进来。
+ */
+export function mirrorContentExtraSize(extraWidth = 0) {
+  const { left, right, top, bottom } = mirrorScreenInsets();
+  const extra = Number(extraWidth) || 0;
+  return { width: left + right + Math.max(0, extra), height: top + bottom };
+}
+
+/**
+ * 设备画面比例（`wm size` 的 Physical）。读不到就返回 0 = **不锁比例**
+ * （`setAspectRatio(0)` 是上游给的「取消比例」那档），不自己编一个比例。
+ * @param {{ width?: number, height?: number } | null} screenSize
+ * @returns {number}
+ */
+export function mirrorAspectRatio(screenSize) {
+  const width = Number(screenSize?.width);
+  const height = Number(screenSize?.height);
+  if (!(width > 0) || !(height > 0)) return 0;
+  const ratio = width / height;
+  return Number.isFinite(ratio) ? ratio : 0;
+}
+
+/**
  * 红绿灯落点（`BrowserWindow` 的 `trafficLightPosition` / `setWindowButtonPosition` 都吃这个形状）。
  * 坐标 = 三颗里最左边那颗的左上角，从窗口内容区左上量起；给的是**整组**的位置，间距与大小动不了。
  * 长条与窗口右边缘齐平（它在画面外面），所以落点 = 内容区宽 − 长条宽 + 内缩，正好把 58px 那组居中。

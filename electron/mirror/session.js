@@ -21,6 +21,8 @@ import { findAppSession } from "./appSession.js";
 import { startKeepAwake } from "./keepAwake.js";
 import { startMiProjection } from "./miProjection.js";
 import {
+  mirrorAspectRatio,
+  mirrorContentExtraSize,
   mirrorScreenInsets,
   mirrorTrafficLightPosition,
   mirrorWindowBounds,
@@ -69,7 +71,13 @@ function preloadPath() {
   return path.join(process.env.APP_ROOT, "dist-electron/preload.mjs");
 }
 
-function createMirrorWindow(session, prefs, bounds) {
+/**
+ * 每扇镜像窗口锁定的**画面比例**（0 = 读不到设备比例，不锁）。
+ * dev 调试边栏会把窗口撑宽一截不参与比例的余量，所以那一格开合时要按新余量重设一次。
+ */
+const aspectRatios = new WeakMap();
+
+function createMirrorWindow(session, prefs, bounds, ratio) {
   const win = new BrowserWindow({
     title: session.label || session.packageName,
     // 初始形状跟设备屏幕一致（用户 2026-09-19 要求）：pad 状态下的 app 在竖形显示上排双列、
@@ -109,6 +117,11 @@ function createMirrorWindow(session, prefs, bounds) {
       backgroundThrottling: false,
     },
   });
+  // 只能按手机比例拖（用户 2026-10-11：「不可以随意更改，只能按手机比例拖拽宽度和高度」）。
+  // 用上游的 `setAspectRatio`（= AppKit 的 `contentAspectRatio`，拖哪条边都系统自己锁），
+  // 锁的是**画面那块矩形**：窗口比它多出的黑框与右边长条走 `extraSize` 那参数。
+  aspectRatios.set(win, ratio);
+  if (ratio) win.setAspectRatio?.(ratio, mirrorContentExtraSize());
   win.once("ready-to-show", () => {
     win.show();
     // 「全屏启动」在 show 之后落地（构造参数那条路在 macOS 上不可靠，见上面 `fullscreenable` 的注释）。
@@ -218,6 +231,8 @@ export async function startMirrorSession(request) {
   const deviceMirror = wholeDevice || mirrorsMainDisplay(sdk);
   const serverPath = scrcpyServerPath(deviceMirror ? { largeScreenDisplay: false } : undefined);
   const bounds = mirrorWindowBounds(screenSize, screen.getPrimaryDisplay().workArea);
+  // 拖拽锁比例用的画面比例：与上面的初始尺寸同源（同一个 `screenSize`），两处各读一次会打架。
+  const ratio = mirrorAspectRatio(screenSize);
   // 设备能编码哪些：给镜像页落地 `auto`，也顺带进 pendingInit（渲染层不再自己查）。
   const deviceEncoders = await getDeviceVideoCodecs(serial).catch(() => null);
 
@@ -243,7 +258,7 @@ export async function startMirrorSession(request) {
   sessions.set(session.id, session);
 
   try {
-    session.win = createMirrorWindow(session, prefs, bounds);
+    session.win = createMirrorWindow(session, prefs, bounds, ratio);
   } catch (error) {
     sessions.delete(session.id);
     throw error;
@@ -420,6 +435,10 @@ ipcMain.on(CHANNELS.mirrorWindowHud, (event, extra) => {
   hudExtras.set(win, next);
   const [width, height] = win.getContentSize();
   win.setContentSize(Math.max(1, width + delta), height);
+  // 边栏这一截是**窗口**多出来的、不参与比例的余量（跟黑框与长条同一类）：不重设的话，
+  // 撑宽之后再拖一次边，系统会按老余量把窗口收回去 —— 边栏那一格当场被挤没。
+  const ratio = aspectRatios.get(win) ?? 0;
+  if (ratio) win.setAspectRatio?.(ratio, mirrorContentExtraSize(next));
 });
 
 /**

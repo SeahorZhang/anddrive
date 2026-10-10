@@ -891,6 +891,15 @@ onBeforeUnmount(() => {
   width: auto;
   max-width: 100%;
   aspect-ratio: var(--screen-ratio);
+  /* ⚠️ 这一档黑框**不再用 `border`**：`aspect-ratio` 管的是**含边框那个盒**（全局 `box-sizing: border-box`），
+     边框吃掉的 4px 让里面那块内容盒比视频窄一圈（实测内容盒 442x968 = 0.4566，视频 1080x2340 = 0.4615）
+     ⇒ contain 之后上下各露 ~5px 黑（用户 10-11「全屏画面有点黑边」）。改成往外画的 `box-shadow` 那一圈
+     不吃布局，盒本身正好等于视频比例。窗口态照旧用 `border`（那边的内容盒由主进程按
+     `mirrorScreenInsets()` 定死，正好等于画面矩形，没有这个问题）。
+     圆角这里只写内圈 `--radius`：阴影沿元素圆角往外扩 `--bezel` ⇒ 外沿自动是 `radius + bezel`，与窗口态同心。 */
+  border: none;
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 var(--bezel) #0b0b0d;
 }
 
 /* 满屏里没用的两样一起撤：拖窗条（那一屏没人会去拖它，留着只压在画面顶上），
