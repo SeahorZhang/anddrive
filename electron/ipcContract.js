@@ -13,7 +13,6 @@ export const CHANNELS = {
   adbListConnectDevices: 'adb:listConnectDevices',
   adbGetConnectedDevice: 'adb:getConnectedDevice',
   adbGetDeviceState: 'adb:getDeviceState',
-  adbReconnect: 'adb:reconnect',
   adbInstallHelper: 'adb:installHelper',
   adbUninstallHelper: 'adb:uninstallHelper',
   adbLoadInstalledApps: 'adb:loadInstalledApps',

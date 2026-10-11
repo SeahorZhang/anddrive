@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createChromeReveal, isOutsideRect, RAIL_HIDE_DELAY_MS } from '../../src/mirror/chromeReveal.js'
+import { createChromeReveal, rightEdgeZone, RAIL_HIDE_DELAY_MS } from '../../src/mirror/chromeReveal.js'
 
 // 「往外扩那一圈」的显隐判据（用户 2026-10-10 第三次改）：**进到悬浮栏就出，离开它 1 秒后才收**。
 // 之前两版都作废过：「停手 1.5s 自动淡出」（在栏里不动也会收）与「只有移出窗口才收」（回到画面上还杵着）。
@@ -175,22 +175,31 @@ describe('createChromeReveal 的常驻开关', () => {
 
 // 「鼠标在栏里移动就展示/隐藏来回抖」的回归判据：面板显形会盖到触发格上面，命中层一变
 // 浏览器就补发一次 pointerleave，坐标其实还在格子里 —— 所以收起必须先过这道几何关。
-describe('isOutsideRect（什么才算真的移出悬浮栏）', () => {
-  // 镜像窗里那一格的形状：右边 86px 宽、整扇高。
-  const slot = { left: 436, top: 0, right: 522, bottom: 755 }
+describe('rightEdgeZone（满屏那一档的触发，进出一条线、中间迟滞）', () => {
+  const W = 1600
+  const ENTER = 86
+  const EXIT = 206 // 86 + 120：多给的那一截留给按钮左边的 tooltip
 
-  it('坐标还在格子里就不算移出（补发的那次 leave 就是这种）', () => {
-    expect(isOutsideRect({ clientX: 521, clientY: 754 }, slot)).toBe(false)
-    expect(isOutsideRect({ clientX: 437, clientY: 1 }, slot)).toBe(false)
-    expect(isOutsideRect({ clientX: 479, clientY: 400 }, slot)).toBe(false)
+  it('进 86px 以内 = enter（条自己的那一格）', () => {
+    expect(rightEdgeZone({ clientX: 1599 }, W, ENTER, EXIT)).toBe('enter')
+    expect(rightEdgeZone({ clientX: 1515 }, W, ENTER, EXIT)).toBe('enter')
+    expect(rightEdgeZone({ clientX: 1514 }, W, ENTER, EXIT)).toBe('enter') // 正好压在进线
   })
 
-  it('四条边出界都算：往画面那侧、往窗口外、上下出去', () => {
-    expect(isOutsideRect({ clientX: 436, clientY: 400 }, slot)).toBe(true) // 贴左沿（画面那侧）
-    expect(isOutsideRect({ clientX: 400, clientY: 400 }, slot)).toBe(true)
-    expect(isOutsideRect({ clientX: 522, clientY: 400 }, slot)).toBe(true)
-    expect(isOutsideRect({ clientX: 479, clientY: 0 }, slot)).toBe(true)
-    expect(isOutsideRect({ clientX: 479, clientY: 755 }, slot)).toBe(true)
-    expect(isOutsideRect({ clientX: 479, clientY: -1 }, slot)).toBe(true)
+  it('出 206px 以外才算 leave', () => {
+    expect(rightEdgeZone({ clientX: 1393 }, W, ENTER, EXIT)).toBe('leave') // 1600-207
+    expect(rightEdgeZone({ clientX: 800 }, W, ENTER, EXIT)).toBe('leave')
+    expect(rightEdgeZone({ clientX: 0 }, W, ENTER, EXIT)).toBe('leave')
+  })
+
+  it('中间那一圈是 hold：既不出也不收 —— 鼠标停在按钮左沿外或压在 tooltip 上时不该闪', () => {
+    expect(rightEdgeZone({ clientX: 1513 }, W, ENTER, EXIT)).toBe('hold') // 刚出进线
+    expect(rightEdgeZone({ clientX: 1450 }, W, ENTER, EXIT)).toBe('hold') // tooltip 那一截
+    expect(rightEdgeZone({ clientX: 1394 }, W, ENTER, EXIT)).toBe('hold') // 正好压出线
+  })
+
+  it('只按横坐标判：满屏里任何高度贴右边缘都该能浮出（不然顶/底要精确贴边）', () => {
+    expect(rightEdgeZone({ clientX: 1550, clientY: 0 }, W, ENTER, EXIT)).toBe('enter')
+    expect(rightEdgeZone({ clientX: 1550, clientY: 100000 }, W, ENTER, EXIT)).toBe('enter')
   })
 })

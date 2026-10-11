@@ -675,23 +675,36 @@ describe('镜像窗口照设备画面比例开', () => {
   })
 })
 
-// 用户 2026-10-11：「不可以随意更改，只能按手机比例拖拽宽度和高度」⇒ 建窗口就向上游要一个
-// `setAspectRatio`（AppKit 自己锁拖拽）。锁的是**画面那块矩形**，黑框 + 长条走 `extraSize`。
-describe('镜像窗口按手机比例锁住拖拽', () => {
-  it('建窗口就按设备画面比例锁，不参与比例的余量 = 黑框 + 右侧长条', async () => {
-    await startMirrorSession({ serial: 'dev-ratio', packageName: 'com.example.app' })
+// 拖拽锁不锁**按那一档分流**（用户 2026-10-11 两条点单）：
+// - 采主屏那档（整机镜像 / 13 及以下点应用）：「不可以随意更改，只能按手机比例拖拽宽度和高度」⇒ 锁。
+// - 桌面模式那档（点应用建的 flex 显示）：「宽度高度可以自定义拖拽」⇒ 不锁，画面区一变走
+//   `resizeDisplay`，设备重排出那个形状。
+describe('镜像窗口的拖拽比例：采主屏锁、桌面模式放开', () => {
+  /** 采主屏那档：包名为空 = 整机镜像。 */
+  it('整机镜像：建窗口就按设备画面比例锁，不参与比例的余量 = 黑框 + 右侧长条', async () => {
+    await startMirrorSession({ serial: 'dev-ratio', packageName: '' })
     // adb mock 回 1200x2608。
     expect(env.windows.at(-1).aspectCalls).toEqual([[1200 / 2608, mirrorContentExtraSize()]])
   })
 
+  it('13 及以下点应用也采主屏 ⇒ 一样锁', async () => {
+    await startMirrorSession({ serial: 'dev-ratio-sdk33', packageName: 'com.example.app' })
+    expect(env.windows.at(-1).aspectCalls).toEqual([[1200 / 2608, mirrorContentExtraSize()]])
+  })
+
+  it('桌面模式那档（14+ 点应用建虚拟显示）**不锁**，宽高随意拖', async () => {
+    await startMirrorSession({ serial: 'dev-ratio-sdk34', packageName: 'com.example.app' })
+    expect(env.windows.at(-1).aspectCalls).toEqual([])
+  })
+
   it('读不到设备分辨率时不锁（不自己编一个比例）', async () => {
-    await startMirrorSession({ serial: 'dev-ratio-unknown', packageName: 'com.example.app' })
+    await startMirrorSession({ serial: 'dev-ratio-unknown', packageName: '' })
     expect(env.windows.at(-1).aspectCalls).toEqual([])
   })
 
   /** dev 边栏撑宽的是窗口：那一截不进画面，所以必须算成余量，否则拖一次边就把边栏挤没。 */
-  it('dev 边栏开合会把那一截算进余量', async () => {
-    await startMirrorSession({ serial: 'dev-ratio-hud', packageName: 'com.example.app' })
+  it('dev 边栏开合会把那一截算进余量（锁着的那档）', async () => {
+    await startMirrorSession({ serial: 'dev-ratio-hud', packageName: '' })
     const win = env.windows.at(-1)
     const hud = (px) => env.handlers.get(CHANNELS.mirrorWindowHud)({ sender: win.webContents }, px)
     hud(240)

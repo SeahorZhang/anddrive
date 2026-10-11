@@ -26,8 +26,6 @@ export const getConnectedDeviceApi = adb.getConnectedDevice;
 
 export const getDeviceStateApi = adb.getDeviceState;
 
-// 设备在线时幂等返回，否则解析 mDNS 地址后重连
-export const reconnectApi = adb.reconnect;
 
 export const installHelperApi = adb.installHelper;
 

@@ -592,7 +592,7 @@ export async function getDeviceState(serial) {
 }
 
 /**
- * 从 mDNS 连接服务里解析设备当前可用的 `host:port`，供断线重连使用。
+ * 从 mDNS 连接服务里解析设备当前可用的 `host:port`，供快捷方式 / 深链唤起时连回设备用。
  * @param {string} serial
  * @returns {Promise<string | null>}
  */
@@ -610,9 +610,10 @@ async function resolveReconnectAddress(serial) {
 }
 
 /**
- * 尝试恢复与某台设备的连接。设备已在线时直接返回；无线设备解析可用地址后
- * 重新 `adb connect`。与 disconnectTransport 一致，「已经断开」走幂等成功路径，
- * 由调用方重新读取当前设备。
+ * 尝试恢复与某台设备的连接。设备已在线时直接返回；无线设备解析可用地址后重新 `adb connect`。
+ * 与 disconnectTransport 一致，「已经断开」走幂等成功路径，由调用方重新读取当前设备。
+ * ⚠️ **只有一个调用方**：`.adr` / 深链唤起镜像时设备不在（`electron/main.js`）。
+ * 心跳发现掉线**不再**走这里（用户 2026-10-11：「断了就不管了」，见 `src/App.vue` 的 `handleConnectionLost`）。
  *
  * USB 没有地址可 connect：不在列表里就是被拔了（等重新插入），还在列表里但
  * offline / 未授权则踢一次 host 侧连接，让 adb 重新枚举它。
@@ -2180,8 +2181,6 @@ ipcMain.handle(CHANNELS.adbGetConnectedDevice, getConnectedDevice);
 // 连接健康检查：读取单台设备的实时状态（device / offline / unauthorized / absent）
 ipcMain.handle(CHANNELS.adbGetDeviceState, (_, serial) => getDeviceState(serial));
 
-// 断线重连：设备在线幂等返回，否则解析 mDNS 地址后重新 adb connect
-ipcMain.handle(CHANNELS.adbReconnect, (_, serial) => reconnectDevice(serial));
 
 // 配对设备
 ipcMain.handle(CHANNELS.adbPair, async (_, device, password) => {

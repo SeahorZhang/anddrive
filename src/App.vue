@@ -8,7 +8,6 @@ import {
   releaseDeviceApi,
   listConnectDevicesApi,
   getConnectedDeviceApi,
-  reconnectApi,
   onMirrorResultApi,
   onMirrorExitApi,
   startMirrorApi,
@@ -24,7 +23,6 @@ import {
   pickAdoptableDevice,
 } from "@/utils/deviceState";
 import { notify, notifyError } from "@/composables/useNotifications";
-import { autoReconnect } from "@/composables/useConnectionPreferences";
 import { scrcpyConfig } from "@/composables/useScrcpyPreferences";
 import { isDark } from "@/composables/useTheme";
 import {
@@ -36,10 +34,6 @@ import {
 const DISCOVERY_INTERVAL_MS = 1000;
 /** 连接健康检查间隔 */
 const HEARTBEAT_INTERVAL_MS = 5000;
-/** 自动重连尝试间隔 */
-const RECONNECT_INTERVAL_MS = 3000;
-/** 自动重连最大尝试次数（约 30s），失败后回落到添加设备页继续发现 */
-const MAX_RECONNECT_ATTEMPTS = 10;
 /** 连接状态通知的固定 key，用于原地更新同一条 toast */
 const CONNECTION_TOAST_KEY = "connection";
 
@@ -65,8 +59,6 @@ const activeDevice = computed(() => {
   return row ? { ...row, address: current.address, transport: current.transport } : current;
 });
 
-/** 断线后记住的设备，供自动重连使用 */
-let lostDevice = null;
 /** 启动后若发现已有连接则自动接管；用户主动断开后不再自动接管 */
 let autoAdopt = true;
 /** 快捷方式唤起投屏结果的取消订阅函数 */
@@ -97,7 +89,7 @@ function notifyNewDevices(devices) {
 }
 
 let healthRunning = false;
-/** 心跳：设备已连接时轮询其 adb 状态，掉线后进入重连或离线分支 */
+/** 心跳：设备已连接时轮询其 adb 状态，掉线就走离线分支 */
 async function healthLoop() {
   if (healthRunning) return;
   healthRunning = true;
@@ -140,8 +132,6 @@ function handleConnectionLost(target, state) {
   device.value = null;
   // 设备没了就没有「这台能编什么」可问，设置页不许停留在无设备状态（入口也只在首页给）。
   if (pageType.value === "settings") pageType.value = "addDevice";
-  lostDevice = target;
-  const label = target.label || target.name || "设备";
   const usb = target.transport === "usb";
   const offline = ["offline", "unauthorized", "authorizing"].includes(state);
   const title = offline ? "设备离线" : "连接已断开";
@@ -150,89 +140,12 @@ function handleConnectionLost(target, state) {
     : "设备暂时无法访问，请检查网络后重试";
   const lostHint = usb ? "USB 连接已断开，请检查数据线" : "与设备的无线连接已断开";
 
-  if (autoReconnect.value && autoAdopt) {
-    notify.loading(`正在尝试恢复与 ${label} 的连接…`, {
-      key: CONNECTION_TOAST_KEY,
-      title,
-    });
-    pageType.value = "loading";
-    startRecovery(target);
-    return;
-  }
-
-  notify.error(offline ? offlineHint : lostHint, {
-    key: CONNECTION_TOAST_KEY,
-    title,
-    action: {
-      label: "重新连接",
-      handler: () => {
-        autoAdopt = true;
-        pageType.value = "loading";
-        notify.loading(`正在尝试恢复与 ${label} 的连接…`, {
-          key: CONNECTION_TOAST_KEY,
-          title: "重新连接",
-        });
-        startRecovery(target);
-      },
-    },
-  });
+  // **断了就不管**（用户 2026-10-11：「正在尝试恢复与 xxx 的连接的功能去掉」）：不发 `adb connect`、
+  // 不弹「正在尝试恢复」，只说一句掉线并回到添加设备页继续发现。设备自己回到 adb 列表时，
+  // 由发现循环那条**自动接管**接上（`autoAdopt`，与重连不是一回事）。
+  notify.error(offline ? offlineHint : lostHint, { key: CONNECTION_TOAST_KEY, title });
   pageType.value = "addDevice";
   discoverLoop();
-}
-
-// ---------------------------------------------------------------------------
-// 自动重连
-// ---------------------------------------------------------------------------
-
-let recoveryRunning = false;
-async function startRecovery(target) {
-  if (recoveryRunning) return;
-  recoveryRunning = true;
-  for (let attempt = 0; attempt < MAX_RECONNECT_ATTEMPTS && !device.value; attempt += 1) {
-    if (!autoReconnect.value) break;
-
-    // 其他工具可能已经连上，直接接管 —— 但只接管**丢的那台**。
-    // 曾经这里无条件 adopt，结果 USB 一抖就 adopt 到列表里另一台无线的手机上。
-    const existing = await getConnectedDeviceApi().catch(() => null);
-    if (existing && sameDevice(existing, target)) {
-      adoptDevice(existing);
-      notify.success("已重新连接设备", { key: CONNECTION_TOAST_KEY, title: "连接已恢复" });
-      break;
-    }
-
-    // 主动 adb connect，成功后重新读取设备（connect 后 serial 会变成 host:port）
-    const result = await reconnectApi(target?.address).catch(() => null);
-    if (result?.online) {
-      const fresh = await getConnectedDeviceApi().catch(() => null);
-      adoptDevice(fresh || target);
-      notify.success("已重新连接设备", { key: CONNECTION_TOAST_KEY, title: "连接已恢复" });
-      break;
-    }
-    await sleep(RECONNECT_INTERVAL_MS);
-  }
-  recoveryRunning = false;
-
-  if (!device.value) {
-    if (autoReconnect.value) {
-      notify.error("自动重连失败，请手动连接设备", {
-        key: CONNECTION_TOAST_KEY,
-        title: "重连失败",
-        action: {
-          label: "重试",
-          handler: () => {
-            autoAdopt = true;
-            pageType.value = "loading";
-            startRecovery(lostDevice);
-          },
-        },
-      });
-    } else {
-      notify.dismiss(CONNECTION_TOAST_KEY);
-    }
-    pageType.value = "addDevice";
-    autoAdopt = true;
-    discoverLoop();
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +159,6 @@ function adoptDevice(target) {
   // 下次多台同时在线时静默接管的就是这一台。
   if (target.stableId) scrcpyConfig.lastDeviceStableId = target.stableId;
   deviceDialogVisible.value = false;
-  lostDevice = null;
   autoAdopt = true;
   // 接管这一台之前列表里就有的其他设备不算「新出现」，别在进首页那一秒弹提醒。
   // 种子必须含这台自己：扫码页只把扫码那条写进列表，USB 那台往往不在里面。
@@ -411,7 +323,6 @@ async function disconnect() {
   try {
     await disconnectApi(device.value.address);
     device.value = null;
-    lostDevice = null;
     autoAdopt = false;
     notify.dismiss(CONNECTION_TOAST_KEY);
     pageType.value = "addDevice";

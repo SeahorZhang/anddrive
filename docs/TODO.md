@@ -32,7 +32,7 @@
 
 ## 2. 工程优化与文档事实
 
-- **O1 拆 `electron/adb.js`（8 职责挤在一个文件，全仓最大）**：adb 执行与错误归一 / 输出解析 / mDNS 发现与设备名 / 健康与重连 / 应用缓存与图标 / 稳定标识别名 / 应用操作 / 设备信息 / IPC 注册（这文件自己就注册二十多个 handler）。`tests/electron/` 已按这些主题分文件，主进程按同一刀切最自然；拆的时候要把测试里的 `await import("../../electron/adb.js")` 一起改指向。**L**
+- **O1 拆 `electron/adb.js`（8 职责挤在一个文件，全仓最大）**：adb 执行与错误归一 / 输出解析 / mDNS 发现与设备名 / 健康检查与快捷方式唤起时的重连 / 应用缓存与图标 / 稳定标识别名 / 应用操作 / 设备信息 / IPC 注册（这文件自己就注册二十多个 handler）。`tests/electron/` 已按这些主题分文件，主进程按同一刀切最自然；拆的时候要把测试里的 `await import("../../electron/adb.js")` 一起改指向。**L**
 - **O5 应用列表 300+ 应用时的成本**：没虚拟化（每格一套 ContextMenu/Portal，`AppList.vue:460-537`）、`patchIcons` 整数组替换（`:81-89`）→ 每 20 个图标全表重排、`sections` 过滤两遍（`:68-78`）、搜索无 debounce（`:58-62`）。顺序：debounce + `sections` 合成一遍 → 真要扛 1000 个再上虚拟化。**M**
 - ⚠️ **图标有效期有两个主人**（2026-09-28 我把图标拆成文件时**自己造的**债）：主进程 `electron/adb.js` 的 `ICON_TTL_MS`（决定文件还给不给）与渲染层 `src/components/home/AppList.vue` 的 `ICON_REFRESH_MS`（决定要不要再要一批），两者都是 7 天但**没有共同来源**，改一个忘一个的后果是"每次都重拉"或"过期了还不重拉"。收成一个（渲染层只信主进程：它不给就是缺）。**S**
 - **O9 对话框是手搓的 Motion div**（`AppInfoDialog.vue`）：无焦点陷阱、无 Esc、无 dialog 角色；reka-ui 已在依赖里且已用其 Dialog/ContextMenu，换过去白拿可达性（`AddDeviceDialog` 2026-09-30 已换，照它抄）。**S**
@@ -42,7 +42,7 @@
 - **O12 没有 CI**：`.github/` 不存在。本地门已齐（`typecheck` + `lint` + `test` + `format:check` + `verify-resources`），先串成一条 `pnpm verify` 再上 Actions。**S**
 - **O13 渲染层零测试**：`tests/` 只覆盖 electron 与 mirror 纯逻辑。`useFavorites` 回滚、`needsIcon`/`patchIcons` 合并、`sections` 分组、`readableError` 都是纯函数，成本极低。**S–M**
 - ⚠️ **我原先那句「关闭类按钮有 取消/关闭/断开 三种 = 不一致」是错的，撤回**：核对后它们是三种职责 ——「取消」关确认框、「关闭」关信息框（`AppInfoDialog`）、「断开」是确认框里的**肯定动作**（`confirm-label="断开"`）。同屏不会出现两个都表示关掉的词，不该强行统一。
-- 「多设备不得静默降级」已落地到**启动与重连**（2026-09-30）：见 `ARCHITECTURE.md` §4 多设备那段。
+- 「多设备不得静默降级」已落地到**启动与掉线后的接管**（2026-09-30；主动重连于 2026-10-11 删除）：见 `ARCHITECTURE.md` §4 多设备那段。
 - 文档引用**改用符号锚点**（`waitForMdnsService`、`COVER_*`、`TEARDOWN_TIMEOUT_MS`…）：删代码会让行号集体漂移，2026-09-28 就漂了一次，换算时还发现两处**本来就错**的范围（`options.js` 的 bounds 常量、`mirror/session.js` 的调用入口）。新写条目请沿用符号锚点。
 
 ---
@@ -88,7 +88,7 @@
 
 | 位置 | 周期 | 做什么 | 判断 |
 | --- | --- | --- | --- |
-| `src/App.vue` 顶部的 `*_INTERVAL_MS` 三个常量 | 1s / 5s / 3s×10 | 发现 / 心跳 / 重连三个魔数 | 至少提成常量组；`healthLoop` 里切设备时 `continue` **不 sleep 就重查**，有 busy-spin 风险 → **该修** |
+| `src/App.vue` 顶部的 `*_INTERVAL_MS` 两个常量 | 1s / 5s | 发现 / 心跳两个魔数（重连那个 3s×10 随功能一起删了）| 至少提成常量组；`healthLoop` 里切设备时 `continue` **不 sleep 就重查**，有 busy-spin 风险 → **该修** |
 | `src/App.vue` 的 `discoverLoop` | 1s | `discoverLoop` 被 **4 个调用点**重启（`connect` / `handleConnectionLost` / `startRecovery` / `disconnect`） | 收成单入口 |
 | `src/composables/useScrcpySessions.js` 的 `POLL_INTERVAL_MS` | 2000ms | 会话列表轮询 | **三条状态类轮询合成一条主进程事件推送** |
 | `src/mirror/direct-session.js` 的 `watchAppStolen` | 2500ms | `watchAppStolen` → 每次设备侧 `dumpsys window \| grep -A4 \| grep -oE`（`adb.js` 的 `getAppTask`） | = **D8**：改成 focus / `visibilitychange` 时查一次；`decoder.sizeChanged` 是免费事件源 |
@@ -333,7 +333,7 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 | # | 项 | 状态与备注 |
 | --- | --- | --- |
 | P0-3 | 操作进行态与进度反馈 | Helper 安装/升级分阶段、图标补取 `已完成/总数`、禁用重复触发并暴露取消重试 |
-| P0-4 | 设置持久化 | ~~上次设备~~（已做：`lastDeviceStableId`，见 `ARCHITECTURE.md` §4）、scrcpy 默认参数（已做）；剩 **窗口几何**、**自动重连开关**（`useConnectionPreferences.autoReconnect` 目前只是会话内的 ref，重启就回到默认开） |
+| P0-4 | 设置持久化 | ~~上次设备~~（已做：`lastDeviceStableId`，见 `ARCHITECTURE.md` §4）、scrcpy 默认参数（已做）；剩 **窗口几何**（自动重连开关随该功能于 2026-10-11 一起删除，不再是待办） |
 | P0-5 | 列表刷新与失败重试 | 刷新入口、图标批次指数退避（当前失败只记录）、区分「无应用」与「读取失败」空态 |
 | P0-6 | 测试与 CI | = O12 + O13 |
 | P1-1 | 搜索/排序 | 拼音首字母搜索、名称/安装时间排序、MRU（依赖 P1-4）。注意现状**根本没有 MRU**（`ARCHITECTURE.md` §3） |
@@ -350,7 +350,7 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 | 镜像 P1 | 指针习惯 | 右键→返回、中键→主屏（操作栏已删，鼠标侧手势是主要入口）；多指/捏合（`pointerId` 现在固定 0） || 镜像 P2 | 截图保存、会话列表增强（重开/置顶）、窗口尺寸记忆、断线自动重连（复用 `adb.js` 重连逻辑） | |
 | 镜像 P3 | AV1 验证并移出回落名单、控制错误可见性（现仅 `console.warn`）、消费 `client.output` 把 scrcpy 报错并入异常退出提示、设备侧旋转剩余观感（`--no-vd-system-decorations` 或把启动应用放服务端侧） | |
 
-**里程碑**：M1 = P0 全（反馈/重连已交，剩进度/持久化/CI）；M2 = P1 全；M3 = P2 全；M4 = P3 全（多设备与自动更新不确定性最高）。
+**里程碑**：M1 = P0 全（反馈已交；心跳重连于 2026-10-11 按用户口径整块删除，剩进度/持久化/CI）；M2 = P1 全；M3 = P2 全；M4 = P3 全（多设备与自动更新不确定性最高）。
 **风险**：OEM ROM 差异（保持解析容错、留原始 stderr）、自签名分发限制（更新走手动）、scrcpy 进程泄漏（会话集中管理 + 退出统一 teardown）、多设备并发写缓存（已按稳定标识隔离 + 原子写，可复用）。
 
 ---
@@ -391,6 +391,6 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 - **安全边界已处理好**：包名进设备 shell 前有正则+长度校验（统一谓词在 `electron/validators.js`，各入口自己决定抛错/回 null），`moveAppTaskToDisplay` 只接受校验过的整数；serial 走 `execFile` 参数数组而非拼 shell；dev launcher 脚本路径经 `shellQuote`（`shortcut.js:144`）；osascript 只接 argv（`iconImage.js:81`）；`.adr` 内容经 `URLSearchParams` 编解码并在读取时重新校验（`shortcutCore.js:67-93`）。
 - **§5.2 原先列的「空 catch」已盘点（2026-10-01）**：`adb.js`、`iconImage.js`、`favorites.js`、`direct-session.js` 的每一处都有明确语义（返回值代答「没有」、或注释说明为什么可以吞），不是静默吞异常，不改。
 - **并发与原子性已有守卫**：稳定标识解析有 in-flight 去重、缓存写 tmp+rename 原子、发现循环令牌化。**2026-09-28 补上第四、五、六道**：应用缓存的读-改-写按设备文件串行（`mutateAppCache`）；图标改成每包一个文件，一批只写自己的 png，不再参与快照的合并（图标批次之间已无共享可变状态）；`deleteAppCache` 走同一把锁（清除不会与在途写入互相覆盖）。注意锁守的是「同一台设备的多个批次」，不是「多台设备」。
-- **反馈链路**：P0-1（`useNotifications` + 列表/图标/Helper 失败提示）与 P0-2（心跳 + 退避重连）确实交付了。仍漏的死角只剩 `src/composables/useScrcpyPreferences.js` 里保存参数那条 `.catch(() => {})` 把失败吞干净了。⚠️ 配对弹窗那次的**根因仍在**：主进程 `waitForMdnsService` 不返回、被取代时返回永不 settle 的 Promise（= **D9**），弹窗侧只是自卫；真修要按 §5.1 改事件驱动。
+- **反馈链路**：P0-1（`useNotifications` + 列表/图标/Helper 失败提示）与 P0-2（心跳）确实交付了（同批的退避重连 2026-10-11 删了：「断了就不管了」）。仍漏的死角只剩 `src/composables/useScrcpyPreferences.js` 里保存参数那条 `.catch(() => {})` 把失败吞干净了。⚠️ 配对弹窗那次的**根因仍在**：主进程 `waitForMdnsService` 不返回、被取代时返回永不 settle 的 Promise（= **D9**），弹窗侧只是自卫；真修要按 §5.1 改事件驱动。
 - **当前基线**：`adbExec` / `adbExecSafe` 每次调用都带超时（默认 15s、connect/pair 45s、安装卸载拉文件 5min），超时统一报「设备无响应」，`getDeviceState` 把超时归为 `offline`；`CHANNELS` 是唯一通道来源并有唯一性单测守着。**2026-09-28 复跑**：`typecheck` 通过、`test` **209 passed / 1 skipped / 21 文件**（净变化：动作键用例 -2、D4 串行 +1、D7 命名与择优 +7、图标落盘与冷启动 +5、删重复的 `scrcpy.test.js` 套件 -4、删老兼容 -6、`deleteAppCache` 补锁 +1、`newDisplay` 必填与 `formatNewDisplay` +2、启动参数带图标的新套件 +3）、`oxlint` 0 错、`eslint` 0 错（原体检里的 **O0「lint 门是红的」确已修掉**，故不再列为待办）。
 - ⚠️ **`pnpm format:check` 现在是红的（56 个文件），与本轮改动无关**：拿未被触碰的 HEAD 版 `src/App.vue` 单独跑 `oxfmt --check` 同样报错 —— 是 `oxfmt` 升版（0.67 → 0.70，见 `9e3bfca`）后想重排全仓。**但它就是 O12 上 CI 的第一颗雷**：要么先单独跑一次 `pnpm format` 生成一个巨型重排提交（推荐单独一刀，别混在功能改动里），要么 CI 先不挂 `format:check`。

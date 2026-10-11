@@ -37,7 +37,6 @@ expose("electronAPI", {
     listConnectDevices: () => invoke(CHANNELS.adbListConnectDevices),
     getConnectedDevice: () => invoke(CHANNELS.adbGetConnectedDevice),
     getDeviceState: (serial) => invoke(CHANNELS.adbGetDeviceState, serial),
-    reconnect: (serial) => invoke(CHANNELS.adbReconnect, serial),
     installHelper: (address) => invoke(CHANNELS.adbInstallHelper, address),
     loadInstalledApps: (address) => invoke(CHANNELS.adbLoadInstalledApps, address),
     getCachedApps: (address) => invoke(CHANNELS.adbGetCachedApps, address),

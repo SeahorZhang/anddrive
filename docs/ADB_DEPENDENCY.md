@@ -30,7 +30,7 @@
 | --- | --- | --- | --- |
 | 起守护进程 | `adb start-server` | `ensureServer`（并发共用一次启动） | 所有链路的前置 |
 | 配对 | `adb pair <host:port> <code>` | `CHANNELS.adbPair` | 扫码配对页 |
-| 连接 / 断开 | `adb connect` / `disconnect` / `reconnect` | `adbConnect` handler、`disconnectTransport`、`reconnectDevice` | 「连接」「断开」、心跳重连 |
+| 连接 / 断开 | `adb connect` / `disconnect` / `reconnect` | `adbConnect` handler、`disconnectTransport`、`reconnectDevice` | 「连接」「断开」、`.adr` / 深链唤起时连回设备（**心跳不再触发重连**，2026-10-11） |
 | 设备列表 | `adb devices` | `parseAdbDevices` / `listConnectDevices` / `getConnectedDevice` / `getDeviceState` | 右上角设备列表、状态标记（`device`/`offline`/`unauthorized`）、启动接管 |
 | 无线服务发现 | `adb mdns services` | `waitForMdnsService` / `connectServicesBySerial` / `resolveReconnectAddress` | 配对时锁定同一台、重连时找回新端口 |
 

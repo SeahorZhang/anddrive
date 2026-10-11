@@ -8,7 +8,6 @@ import {
   openPermissionSettingsApi,
 } from '@/api'
 import { notifyError } from '@/composables/useNotifications'
-import { autoReconnect } from '@/composables/useConnectionPreferences'
 import { theme } from '@/composables/useTheme'
 import { scrcpyConfig, resetScrcpyConfig } from '@/composables/useScrcpyPreferences'
 import { useDeviceCodecs, useLocalCodecs } from '@/composables/useCodecCaps'
@@ -61,13 +60,6 @@ const STATUS_TEXT = {
 
 const permissionStatus = ref({})
 const busyId = ref('')
-
-const autoReconnectModel = computed({
-  get: () => autoReconnect.value,
-  set: (value) => {
-    autoReconnect.value = value
-  },
-})
 
 const darkModeModel = computed({
   get: () => theme.value === 'dark',
@@ -137,24 +129,6 @@ onMounted(refreshPermissions)
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto px-6 pb-5">
-    <section>
-      <div class="mb-1.5 flex items-center justify-between px-1">
-        <span class="text-[11px] font-medium text-ink-3">连接</span>
-      </div>
-      <div
-        class="divide-y divide-line overflow-hidden rounded-[12px] border border-line bg-surface-2/70 shadow-[0_1px_2px_rgba(0,0,0,0.04)] backdrop-blur"
-      >
-        <div class="flex items-center gap-3 px-4 py-3">
-          <div class="min-w-0 flex-1">
-            <div class="text-[13px] text-ink-2">自动重连</div>
-            <div class="mt-1 text-[11px] text-ink-3">
-              连接中断或设备离线后，自动尝试恢复与设备的连接
-            </div>
-          </div>
-          <SwitchToggle v-model="autoReconnectModel" />
-        </div>
-      </div>
-    </section>
 
     <section>
       <div class="mb-1.5 flex items-center justify-between px-1">

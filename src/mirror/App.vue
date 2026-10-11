@@ -8,7 +8,8 @@ import { caretRectToAnchor, clientToDevice, deviceToScreen, emSizePx, estimateAd
 import { capsuleBox, capsuleRect, macTextCapsule } from './macTextCapsule.js'
 import { scaleDisplayDpi } from '../../shared/scrcpyConfig.js'
 import { aspectDiffers, createReflowGate } from './displayFollow.js'
-import { createChromeReveal, isOutsideRect } from './chromeReveal.js'
+import { createChromeReveal, rightEdgeZone } from './chromeReveal.js'
+import { clampRailTop } from './railDock.js'
 import { FROZEN_STATES, needsRealWake, panelIsOff } from './sleepWatch.js'
 import { KEY_CODES } from '../../shared/keys.js'
 import { MIRROR_FRAME, MIRROR_RAIL } from '../../electron/mirror/options.js'
@@ -54,6 +55,48 @@ watch(showHud, (open) => setHudExtra(open ? HUD_WIDTH : 0))
  * 排法全在 CSS（`.mirror-window.is-fullscreen` 那一组）。
  */
 const fullscreen = ref(false)
+/**
+ * 这一档有没有**我们自己建的那块 flex 显示**（桌面模式 / 首页点应用 = 真；整机镜像与 13 及以下
+ * 点应用 = 假，那档采的是手机主屏）。只有它有形状可改 —— 尺寸归 `resizeDisplay` 说话。
+ */
+const virtualDisplay = ref(false)
+/**
+ * 「桌面模式的全屏」那一屏（用户 2026-10-11：「只把视频全屏，其他什么东西都不要有，
+ * 镜像比例跟显示器一样」）= 满屏 **且** 这一块显示是我们建的。
+ *
+ * 排法见下面 CSS 的 `.is-edge-to-edge` 那一组：画面铺满整屏、黑框/亮底/圆角全去掉。
+ * 「比例跟显示器一样」不是把画面拉伸，而是画面区铺满之后 `contentCss()` 就是整屏，
+ * 现有那条 ResizeObserver ⇒ `displayFollower` ⇒ `resizeDisplay` 会把虚拟显示**重排成显示器的形状**
+ * （退出全屏时同一条路再排回手机形状）。拉伸与裁切都不做 —— 那两条用户 10-10 明确否过。
+ */
+const edgeToEdge = computed(() => fullscreen.value && virtualDisplay.value)
+/**
+ * 长条的触发**只有一条路**：监听挂在 **window** 上，按坐标判进出。
+ *
+ * 为什么不是「挂在长条自己那一格 + 按格子矩形判移出」（2026-10-11 之前的写法，两条都作废）：
+ * - 满屏那一档长条浮在画面上，格子若吃事件就把画面右缘 86px 的点按抢走了；
+ * - 格子矩形只到面板那么高（约 361px），而想摸条的人是从**任意高度**贴过来的 ⇒ 顺着边缘往下挪一点
+ *   就被判「移出格子」，条当场收 —— 用户报的「移过去显示后立马消失」；
+ * - 事件挂在格子上还会漏：tooltip portal 到 body，指针压到它上面时事件不经过那棵树 ⇒ 「移几次才出得来」。
+ *
+ * 判据带**迟滞**（`rightEdgeZone`）：进 86px 才显形，出 206px 才算离开，中间那一圈保持现状。
+ * 多给那 120px 是给按钮左边那截 tooltip 与「往左一点去按画面」留的余量 —— 只有一条线时鼠标停在
+ * 按钮上或稍挪一点就当场收一半再弹回，就是「一闪一闪」。
+ */
+const RAIL_EXIT_ZONE_PX = MIRROR_RAIL.width + 120
+function onScreenPointerMove(event) {
+  const zone = rightEdgeZone(event, window.innerWidth, MIRROR_RAIL.width, RAIL_EXIT_ZONE_PX)
+  if (zone === 'enter') reveal.poke()
+  else if (zone === 'leave') reveal.leave()
+}
+/**
+ * 指针**离开窗口**（`relatedTarget` 为空 = 不是移到窗口里另一个元素上）：窗口态那 86px 就贴着窗口右沿，
+ * 手一快就滑出去了，之后不会再有任何 `pointermove` ⇒ 必须在这里补一次收线，否则条会永远挂着。
+ */
+function onScreenPointerOut(event) {
+  if (event.relatedTarget) return
+  reveal.leave()
+}
 const railShown = ref(false)
 /**
  * 长条**常驻**（2026-10-11，用户：「侧边悬浮按钮栏加一个始终显示悬浮的按钮」）。
@@ -67,7 +110,9 @@ const reveal = createChromeReveal({
   onShow: (shown) => {
     railShown.value = shown
     if (shown) {
-      setWindowButtons(true)
+      // 红绿灯只跟**窗口态**的显隐：真全屏里那三颗归系统收放（顶边才浮出），我们既钉不住也不该抢
+      // （10-11 四种救法像素扫描命中数全 0，见 `electron/mirror/session.js` 的 `fullscreenable`）。
+      if (!fullscreen.value) setWindowButtons(true)
       // 他把鼠标移进来就是要看那颗「关屏 / 恢复亮屏」，此刻读一次真状态最划算（顺带快轮询一阵）。
       kickSleepWatch()
       return
@@ -75,33 +120,59 @@ const reveal = createChromeReveal({
     // 红绿灯是系统画的，**没有淡出可跟**：原来条还在半透明、三颗已经「啪」地没了（用户 10-10
     // 「消失的时候感觉不太协调」）⇒ 让面板把淡出跑完再藏它们。期间若又显形就别补这一刀。
     setTimeout(() => {
-      // 满屏那一屏长条是常驻的（CSS 直接显形，`railShown` 可能仍是 false）⇒ 三颗也别跟着收。
+      // 同上：满屏那一屏压根没放出来过，也就没有"跟着收"这一说。
       if (!railShown.value && !fullscreen.value) setWindowButtons(false)
     }, MIRROR_RAIL.fadeOutMs)
   },
 })
 /**
- * 收起判据：**坐标真的出了那一格的矩形**才算「移出悬浮栏」（用户 2026-10-10：移出悬浮栏 1 秒后才消失）。
- * 不能直接收 `pointerleave` —— 面板显形那一刻它会盖到触发格上面、命中层一变浏览器就补发一次 leave，
- * 坐标其实还在格里，那样就是「鼠标在条里移动 = 展示/隐藏来回抖」（10-10 报的循环）。
- * 过了这道关才交给状态机延 `RAIL_HIDE_DELAY_MS` 收，期间鼠标再进来会撤掉计时。
- */
-const railSlot = ref(null)
-function onRailLeave(event) {
-  const el = railSlot.value
-  if (!el) return
-  const box = el.getBoundingClientRect()
-  if (isOutsideRect(event, { left: box.left, top: box.top, right: box.right, bottom: box.bottom }))
-    reveal.leave()
-}
-/**
  * 长条上那颗「一直显示」按钮。常驻交给状态机（`setPinned`），这里只镜像一份给模板。
  *
- * ⚠️ 取消常驻要**看指针在哪**：状态机解除"不许收"之后并不会自己排收回计时（点这颗按钮时
- * 指针必然在条上，那条路径靠下一次 `pointerleave` 收）。但键盘触发（焦点在按钮上按回车）
- * 时指针可能压根不在条上 —— 那条路径上**不会再有 `pointerleave`**，不补这一下条就一直挂着。
+ * ⚠️ 取消常驻要**看指针在哪**：状态机解除"不许收"之后并不会自己排收回计时（鼠标真在条上时，
+ * 下一次 `pointermove` 会 poke 回来）。但键盘触发（焦点在按钮上按回车）时指针可能压根不在条上
+ * —— 那条路径上**不会再有 `pointermove`**，不补这一下条就一直挂着。
  * `matches(':hover')` 是这里唯一能同步问到"指针在不在这个元素上"的办法。
  */
+/**
+ * 长条的**纵向落点**（可拖，用户 10-11：「加个可以拖拽功能」）。0 = 现在的位置（贴窗口顶）。
+ *
+ * 只给纵向，横向永远钉在窗口右边缘那一格：窗口态那格在**画面外面**（10-10 定稿「任何 UI 都不
+ * 要在手机里出现」），满屏态拖横向就等于把条摆到手机画面中间盖住内容。
+ * 位移用 `translate` 表达 —— 它不吃布局，画面那块矩形一寸不动，不会白发一条 `resizeDisplay`
+ * 让手机重排（判据与夹取见 `railDock.js`）。
+ */
+const railTop = ref(0)
+const railPanel = ref(null)
+/** 一次拖拽的现场：按下点的 y、当时的落点、面板高（拖拽期间不变）。 */
+let railDrag = null
+function onRailHandleDown(event) {
+  const panel = railPanel.value
+  if (!panel) return
+  // 先记现场再谈捕获：`setPointerCapture` 对某些来源的事件会抛（指针 id 不在当前文档的活跃指针表里），
+  // 放在前面一抛就把这次拖拽整个吞掉 —— 表现是"按住把手拖不动"。
+  railDrag = { pointerId: event.pointerId, fromY: event.clientY, top: railTop.value, panelHeight: panel.offsetHeight }
+  event.preventDefault()
+  try {
+    // 捕获：鼠标滑出把手那一格也继续跟手，不会拖到一半脱手。
+    event.target.setPointerCapture?.(event.pointerId)
+  } catch {
+    // 捕获不上也能拖，只是滑出把手就得靠下面的 move 继续跟
+  }
+}
+function onRailHandleMove(event) {
+  if (!railDrag || event.pointerId !== railDrag.pointerId) return
+  railTop.value = clampRailTop(railDrag.top + (event.clientY - railDrag.fromY), railDrag.panelHeight, window.innerHeight)
+}
+function onRailHandleUp(event) {
+  if (railDrag && event.pointerId === railDrag.pointerId) railDrag = null
+}
+/** 窗口改大小 / 进全屏后面板可能比窗口还高：把落点重新夹回可落区间，别把条丢到抓不回来的地方。 */
+function clampRailTopToViewport() {
+  const panel = railPanel.value
+  if (panel) railTop.value = clampRailTop(railTop.value, panel.offsetHeight, window.innerHeight)
+}
+
+const railSlot = ref(null)
 function toggleRailPinned() {
   const next = !railPinned.value
   railPinned.value = next
@@ -197,6 +268,12 @@ async function toggleScreenPower() {
  * 首帧之前它是 `auto`（等于不套比例，黑框先按窗口铺），量到真实尺寸那一拍会自动翻过来。
  */
 const screenRatio = ref('auto')
+/**
+ * 同一个比例的**数值**写法（`宽 / 高`），给全屏那一档算 `min()` 用 ——
+ * `aspect-ratio` 吃的是比例表达式，而 `calc(可用高 × 比例)` 必须是数，两者不能共用一个变量。
+ * 首帧之前取 1（正方形，反正那时没有画面），`syncCanvasBox()` 量到真实尺寸那一拍覆盖掉。
+ */
+const screenRatioN = ref(1)
 /** CSS 变量：黑框厚度与长条那两档数只有一个出处（`options.js`）。 */
 const windowStyle = computed(() => ({
   '--bezel': `${MIRROR_FRAME.bezel}px`,
@@ -205,6 +282,8 @@ const windowStyle = computed(() => ({
   '--rail-fade-in': `${MIRROR_RAIL.fadeInMs}ms`,
   '--rail-fade-out': `${MIRROR_RAIL.fadeOutMs}ms`,
   '--screen-ratio': screenRatio.value,
+  '--screen-ratio-n': String(screenRatioN.value),
+  '--rail-top': `${railTop.value}px`,
 }))
 /** 字节数 → 人类可读（HUD 显示用，保留一位小数）。 */
 function bytesText(bytes) {
@@ -807,6 +886,7 @@ function syncCanvasBox() {
     frameRatio = size.width / size.height
     // 全屏那一屏的黑框按这个比例收（见上面 `screenRatio` 那条为什么不能取 meta）。
     screenRatio.value = `${size.width} / ${size.height}`
+    screenRatioN.value = frameRatio
   }
   hud.win = `${host.clientWidth}x${host.clientHeight}`
   hud.vid = size ? `${size.width}x${size.height}` : '-'
@@ -966,6 +1046,9 @@ async function booted() {
     status.value = ''
     // 启动参数到手才知道那颗「桌面模式」该不该出（主进程判好了，见 `desktopModeAvailable`）。
     desktopModeAvailable.value = getSessionInfo()?.desktopModeAvailable === true
+    // 这一档是不是**我们自己建的那块 flex 显示**（桌面模式 / 首页点应用）：只有它有形状可改，
+    // 采主屏那档（整机镜像、13 及以下点应用）形状归手机，全屏只能收着（见 `edgeToEdge`）。
+    virtualDisplay.value = getSessionInfo()?.deviceMirror === false
   }).catch((error) => {
     status.value = `镜像连接失败：${error?.message || error}`
   })
@@ -984,6 +1067,10 @@ onMounted(() => {
   // 退格只走按键那条路（`kind:'key'`），收字字段的 `input` 事件里 `data` 是 null，翻不成文本 ——
   // 所以光标账要在这里跟着记，不然退几个字之后候选窗就停在原地了。
   window.addEventListener('keydown', onMacTextKeyDown)
+  // 满屏那一档的长条触发（挂在 window 上，理由见 `onScreenPointerMove`）。
+  window.addEventListener('pointermove', onScreenPointerMove, { passive: true })
+  window.addEventListener('pointerout', onScreenPointerOut, { passive: true })
+  window.addEventListener('resize', clampRailTopToViewport)
   // 设备侧报来的**手机光标矩形**（Slice 4c）：有它候选窗就贴真实光标，没有才退回上面那套估计。
   disposeMacCaret = onMacKeyboardCaret((rect) => {
     macTextDeviceCaret.value = rect
@@ -998,6 +1085,9 @@ onBeforeUnmount(() => {
   if (statsTimer) clearInterval(statsTimer)
   hostResize?.disconnect()
   window.removeEventListener('keydown', onMacTextKeyDown)
+  window.removeEventListener('pointermove', onScreenPointerMove)
+  window.removeEventListener('pointerout', onScreenPointerOut)
+  window.removeEventListener('resize', clampRailTopToViewport)
   disposeMacCaret?.()
   disposeSizeChanged?.()
   disposeRendererType?.()
@@ -1013,7 +1103,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="h-full mirror-window text-white" :class="{ 'is-fullscreen': fullscreen }" :style="windowStyle">
+  <div class="h-full mirror-window text-white" :class="{ 'is-fullscreen': fullscreen, 'is-edge-to-edge': edgeToEdge }"
+    :style="windowStyle">
     <!-- 画面区：dev 时右侧让出一条 HUD 边栏（`aside` 与它左右排），画面上的覆盖层（遮罩/接回/提示/
          长条）都只盖画面那一块，这样调试信息永远不被盖住，也不会压在镜像画面上。 -->
     <div class="mirror-main">
@@ -1101,10 +1192,15 @@ onBeforeUnmount(() => {
            它自己不画东西，只负责收 poke —— 鼠标一进这一格就弹，不用按坐标筛。
            poke 挂在格子上而不是面板上：面板收起时 `pointer-events: none`，显形时又盖住格子，
            挂格子上两种状态都由同一条 `pointermove`（冒泡上来）接住。 -->
-      <div class="mirror-rail" ref="railSlot" @pointermove="reveal.poke()" @pointerleave="onRailLeave($event)">
+      <div class="mirror-rail" ref="railSlot">
         <!-- 面板：顶部那条 `--rail-keys-top` 以下才排按键 —— 上面那截是红绿灯的位置
              （系统画的，CSS 盖不住，落点由主进程按 `MIRROR_RAIL` 贴进来）。 -->
-        <div class="mirror-rail__panel" :class="{ 'is-shown': railShown }">
+        <div ref="railPanel" class="mirror-rail__panel" :class="{ 'is-shown': railShown }">
+          <!-- 拖拽把手：只有这一格能拖（按在按钮上是点按钮，不该顺手把条拖走）。
+               按住走 pointer capture ⇒ 鼠标滑出把手也继续跟，不会拖到一半脱手。 -->
+          <div class="mirror-rail__handle" aria-label="上下拖动这条" role="separator"
+            @pointerdown="onRailHandleDown" @pointermove="onRailHandleMove" @pointerup="onRailHandleUp"
+            @pointercancel="onRailHandleUp"></div>
           <!-- 顶部这一截是红绿灯的地盘：窗口态那三颗是系统画的（CSS 盖不住，落点由主进程按
                `MIRROR_RAIL` 贴进来）。**全屏里它们钉不住**（实测见 `session.js` 的 `enter-full-screen`）
                ⇒ 这一档改由我们自己画三颗一样的，主进程同时把系统那三颗关掉，免得鼠标移到顶边时两套重叠。 -->
@@ -1449,7 +1545,40 @@ onBeforeUnmount(() => {
   pointer-events: none;
   /* 收得比出来慢一档（用户 10-10「消失的时候感觉不太协调」）：进来跟手，出去收干净。
      红绿灯那边另有 `MIRROR_RAIL.fadeOutMs` 的延后藏起来，两边共用这一个数。 */
+  /* 拖出来的纵向落点（`--rail-top`，见 `railDock.js`）。translate 不吃布局 ⇒ 画面那块矩形不动。 */
+  translate: 0 var(--rail-top, 0px);
   transition: opacity var(--rail-fade-out) ease-in;
+}
+
+/* 把手**只在满屏那一档画**（`.is-edge-to-edge` 下面那条）：窗口态的面板与手机同高、整格占满，
+   纵向没有任何可落区间（`clampRailTop` 只会回 0），画个把手就是骗人抓的假开关。
+   把手：面板顶上那一小格，画一条灰杠暗示"这里能拖"。它不是按钮，不接 :hover 高亮。 */
+.mirror-rail__handle {
+  display: none;
+  width: 34px;
+  height: 14px;
+  margin-top: 8px;
+  cursor: grab;
+  /* 触摸板上拖拽会被当成滚动手势吞掉，必须自己接管。 */
+  touch-action: none;
+}
+
+.mirror-window.is-edge-to-edge .mirror-rail__handle {
+  display: block;
+}
+
+.mirror-rail__handle::after {
+  content: "";
+  display: block;
+  width: 22px;
+  height: 3px;
+  margin: 6px auto 0;
+  border-radius: 2px;
+  background: rgb(0 0 0 / 16%);
+}
+
+.mirror-rail__handle:active {
+  cursor: grabbing;
 }
 
 .mirror-rail__panel.is-shown {
@@ -1468,10 +1597,7 @@ onBeforeUnmount(() => {
 
 
 /* ── 全屏那一屏（`.is-fullscreen`，判据由主进程 `mirror:fullscreen` 推过来）────────────────
-   照 AndroMeld 那个样子：一块明亮的底、手机在正中央、右侧那条常驻。
-   常态那 86px 长条是**从窗口右边挖走一块宽度**的（画面那块矩形才等于设备比例），放到满屏里它把画面
-   顶得偏左半条 ⇒ 这一档让长条与画面**同格叠放**（还是 grid 那套，不写 `position`）：格子收到面板
-   自己那一小块、贴右上角。 */
+   照 AndroMeld 那个样子：一块明亮的底、手机在一格、右侧那条常驻在另一格。 */
 .mirror-window.is-fullscreen {
   /* ⚠️ macOS 全屏那一屏背后**不是桌面**：窗口本体透明，在那儿就是一块黑（用户 10-10「背景不要黑色」）。
      所以这一档自己铺亮底，数取竞品那张图四周那圈浅薄荷（在它截图上多点采样 = `#d1e4e4`）。
@@ -1480,43 +1606,55 @@ onBeforeUnmount(() => {
 }
 
 .mirror-window.is-fullscreen .mirror-main {
+  /* **两格**：画面一格（1fr）+ 长条一格（它自己的 86px）。
+     之前让两者同格叠放（画面铺满整屏、长条浮在画面右上），代价是横屏时那块黑框一直顶到窗口右沿，
+     按钮就压在画面上（用户 10-11「不要覆盖掉右侧操作按钮」）⇒ 现在长条占一格，画面永远不进那一截。
+     代价要说清：画面因此居中在「整屏减掉长条那一格」的区域里，中线比屏幕正中左移半条（43px）。 */
   display: grid;
-  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
-  /* 顶天立地会贴住屏幕上下沿，留一点呼吸。 */
-  padding: 12px;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr) auto;
+  /* 顶天立地会贴住屏幕上下沿，留一点呼吸。这一截同时是画面与长条之间的间隔（`--fs-pad`，一个数）。 */
+  --fs-pad: 12px;
+  padding: var(--fs-pad);
+  /* 让 `100cq*` 可用：黑框的尺寸要按**这一格真正能用多大**来算（见下面 `.mirror-frame`）。
+     `size` 那档要求本元素尺寸不靠内容定 —— 它是 `.mirror-window`（h-full）里 `flex: 1` 的一格，本来就定得死。 */
+  container-type: size;
 }
 
 .mirror-window.is-fullscreen .mirror-main>* {
-  grid-area: 1 / 1;
   min-width: 0;
   min-height: 0;
 }
 
-.mirror-window.is-fullscreen .mirror-rail {
-  justify-self: end;
-  align-self: start;
-}
-
-/* 黑框要**跟着画面收成手机那一块**：常态下窗口本身就是手机形状（`.mirror-frame` 铺满 = 手机），
-   满屏时窗口是横的，铺满就成一块 16:9 的黑板 —— 竞品那张图四周露的是桌面，差的就是这一步。
-   比例用视频自己的（`--screen-ratio`，由 `syncCanvasBox` 量到真实尺寸那一拍喂进来）：按高铺满、宽由比例定 ⇒ 顶天立地的一块手机。
-   横屏视频会撞上 `max-width:100%`，那时退回铺满、画面在里面 letterbox，不会溢出。 */
 .mirror-window.is-fullscreen .mirror-frame {
+  grid-area: 1 / 1;
   justify-self: center;
   align-self: center;
-  height: 100%;
-  width: auto;
-  max-width: 100%;
+  /* 黑框要**跟着画面收成手机那一块**：常态下窗口本身就是手机形状（`.mirror-frame` 铺满 = 手机），
+     满屏时窗口是横的，铺满就成一块 16:9 的黑板。
+     ⚠️ 尺寸必须**两个方向一起判**，不能像之前那样「按高铺满 + `max-width: 100%`」：那条写法在横屏时
+     被 `max-width` 掐掉宽度、高度却仍按 100% —— 盒子的比例就不等于视频了（实测 1920x1080 屏上横屏
+     视频 2340x1080：盒子 1824x1056 = 1.73，视频 = 2.17），画布在里面 contain ⇒ 上下各一条黑边（用户 10-11
+     「全屏横屏画面出现了黑边」）。取「可用宽」与「可用高 × 比例」里小的那个，竖屏落到按高铺满、
+     横屏落到按宽铺满，两种都让盒子**正好等于视频比例** ⇒ 画布铺满那一格，不留黑边。
+     比例用视频自己的（`--screen-ratio` / 数值那份 `--screen-ratio-n`，都由 `syncCanvasBox` 量到真实尺寸
+     那一拍喂进来）。`100cq*` 量的是这一格的可用尺寸（已减 `padding`，但**没减**右边那格），
+     所以长条那一格 `--rail-w` 与一格呼吸位 `--fs-pad` 要自己扣掉。 */
+  width: min(calc(100cqw - var(--rail-w) - var(--fs-pad)), calc(100cqh * var(--screen-ratio-n)));
   aspect-ratio: var(--screen-ratio);
+  height: auto;
   /* ⚠️ 这一档黑框**不再用 `border`**：`aspect-ratio` 管的是**含边框那个盒**（全局 `box-sizing: border-box`），
      边框吃掉的 4px 让里面那块内容盒比视频窄一圈（实测内容盒 442x968 = 0.4566，视频 1080x2340 = 0.4615）
-     ⇒ contain 之后上下各露 ~5px 黑（用户 10-11「全屏画面有点黑边」）。改成往外画的 `box-shadow` 那一圈
-     不吃布局，盒本身正好等于视频比例。窗口态照旧用 `border`（那边的内容盒由主进程按
-     `mirrorScreenInsets()` 定死，正好等于画面矩形，没有这个问题）。
+     ⇒ contain 之后上下各露 ~5px 黑。改成往外画的 `box-shadow` 那一圈不吃布局，盒本身正好等于视频比例。
+     窗口态照旧用 `border`（那边的内容盒由主进程按 `mirrorScreenInsets()` 定死，正好等于画面矩形，没有这个问题）。
      圆角这里只写内圈 `--radius`：阴影沿元素圆角往外扩 `--bezel` ⇒ 外沿自动是 `radius + bezel`，与窗口态同心。 */
   border: none;
   border-radius: var(--radius);
   box-shadow: 0 0 0 var(--bezel) #0b0b0d;
+}
+
+.mirror-window.is-fullscreen .mirror-rail {
+  grid-area: 1 / 2;
+  align-self: start;
 }
 
 /* 满屏里没用的两样一起撤：拖窗条（那一屏没人会去拖它，留着只压在画面顶上），
@@ -1529,11 +1667,62 @@ onBeforeUnmount(() => {
 
 /* 右侧长条**一直显示**（用户 10-10）：hover 那套显隐只在窗口态有意义。
    特异度高于 `.mirror-rail__panel.is-shown` ⇒ 不用管 JS 那个类，也不用改 `chromeReveal` 的状态机。
-   `padding-top` 补回红绿灯那一截撤掉后缺的顶边留白。 */
-.mirror-window.is-fullscreen .mirror-rail__panel {
+   `padding-top` 补回红绿灯那一截撤掉后缺的顶边留白。
+   ⚠️ **桌面模式那一屏除外**（`:not(.is-edge-to-edge)`）：那一屏要「什么都不要有」⇒ 长条回到
+   hover 显隐，触发按坐标判（见 `onScreenPointerMove`）。 */
+.mirror-window.is-fullscreen:not(.is-edge-to-edge) .mirror-rail__panel {
   padding-top: 10px;
   opacity: 1;
   pointer-events: auto;
+}
+
+/* ── 桌面模式那一屏（`.is-edge-to-edge` = 满屏 + 这块显示是我们建的）──────────────────
+   用户 2026-10-11：「只把视频全屏，其他什么东西都不要有，镜像比例跟显示器一样」。
+   所以这一组只做两件事：① 画面那一格**铺满整屏**（黑框 / 亮底 / 圆角 / 内缩全部撤掉），
+   ② 长条**浮在画面右上**、平时不画，指针进右边缘那一条才淡入（离开 1 秒后收，同一套状态机）。
+   比例不是拉伸出来的：画面区铺满 ⇒ `contentCss()` = 整屏 ⇒ 现有那条 ResizeObserver 走
+   `displayFollower` 发 `resizeDisplay`，**设备把这块显示重排成显示器的形状**；退出全屏同一条路排回去。 */
+.mirror-window.is-edge-to-edge {
+  /* 全屏那一屏背后不是桌面，透明=黑；重排落地前那一瞬露的也是黑，比亮薄荷底更像「只有视频」。 */
+  background: #000;
+}
+
+.mirror-window.is-edge-to-edge .mirror-main {
+  /* 回到单格：长条与画面同格叠放（画面铺满，长条浮在上面）。 */
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  padding: 0;
+}
+
+.mirror-window.is-edge-to-edge .mirror-main>* {
+  grid-area: 1 / 1;
+}
+
+.mirror-window.is-edge-to-edge .mirror-frame {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: auto;
+  justify-self: stretch;
+  align-self: stretch;
+  box-shadow: none;
+  border: none;
+  border-radius: 0;
+}
+
+.mirror-window.is-edge-to-edge .mirror-screen {
+  border-radius: 0;
+}
+
+/* 浮在画面上那一格：① 不吃点按（否则画面右缘 86px 的触控全没了），只有显形的面板接；
+   ② **必须自己也是定位元素**才画得到视频上面 —— `.mirror-screen` 带 `position: relative`（收字字段的定位祖先），
+     定位元素在同一个层叠上下文里排在静态兄弟**之后** ⇒ 长条作为静态兄弟被视频整个盖住：
+     DOM 查出来 `opacity:1`、矩形也对（1840,0,74x361），屏幕上却什么都没有（2026-10-11 截图实锤）。
+     给它 `position: relative` 后两个都是 z-index:auto 的定位元素 ⇒ 按 DOM 顺序，后面的长条压在视频上，
+     不用写一个 z-index。 */
+.mirror-window.is-edge-to-edge .mirror-rail {
+  position: relative;
+  justify-self: end;
+  align-self: start;
+  pointer-events: none;
 }
 
 /* 长条上的按键：浅底 ⇒ 图标要压深，不然看不见。 */

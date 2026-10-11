@@ -123,8 +123,8 @@ function createMirrorWindow(session, prefs, bounds, ratio) {
       backgroundThrottling: false,
     },
   });
-  // 只能按手机比例拖（用户 2026-10-11：「不可以随意更改，只能按手机比例拖拽宽度和高度」）。
-  // 用上游的 `setAspectRatio`（= AppKit 的 `contentAspectRatio`，拖哪条边都系统自己锁），
+  // 见上面 `ratio` 那条：采主屏那档按手机比例锁，桌面模式那档给 0 = 不锁（可自定义拖宽高）。
+  // 锁用的是上游 `setAspectRatio`（= AppKit 的 `contentAspectRatio`，拖哪条边都系统自己锁），
   // 锁的是**画面那块矩形**：窗口比它多出的黑框与右边长条走 `extraSize` 那参数。
   aspectRatios.set(win, ratio);
   if (ratio) win.setAspectRatio?.(ratio, mirrorContentExtraSize());
@@ -238,7 +238,12 @@ export async function startMirrorSession(request) {
   const serverPath = scrcpyServerPath(deviceMirror ? { largeScreenDisplay: false } : undefined);
   const bounds = mirrorWindowBounds(screenSize, screen.getPrimaryDisplay().workArea);
   // 拖拽锁比例用的画面比例：与上面的初始尺寸同源（同一个 `screenSize`），两处各读一次会打架。
-  const ratio = mirrorAspectRatio(screenSize);
+  // ⚠️ **只有采主屏那一档锁**（整机镜像、13 及以下点应用）：那块屏的形状归手机，窗口拖成别的比例
+  // 只会露黑边或裁切（用户 10-11：「不可以随意更改，只能按手机比例拖拽宽度和高度」）。
+  // **桌面模式那档不锁**（用户 10-11 追一条：「桌面模式宽度高度可以自定义拖拽」）：那是我们自己建的
+  // flex 显示，画面区一变就走 `resizeDisplay`（见 `src/mirror/direct-session.js` 的 follower），
+  // 拖成什么形状设备就重排出什么形状 —— 锁住反而做不成"桌面窗口"。0 = 不锁（上游那档取消）。
+  const ratio = deviceMirror ? mirrorAspectRatio(screenSize) : 0;
   // 设备能编码哪些：给镜像页落地 `auto`，也顺带进 pendingInit（渲染层不再自己查）。
   const deviceEncoders = await getDeviceVideoCodecs(serial).catch(() => null);
 

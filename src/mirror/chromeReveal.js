@@ -1,26 +1,13 @@
-/**
- * 指针坐标是否落在某个矩形之外。
- *
- * 「移出悬浮栏」不能直接信 `pointerleave`：面板显形那一刻它会盖到触发格上面，命中层一变浏览器就
- * 补发一次 leave，坐标其实还在格里（用户 2026-10-10 报的「展示/隐藏来回抖」）。先过这道几何关。
- *
- * @param {{ clientX: number, clientY: number }} point
- * @param {{ left: number, top: number, right: number, bottom: number }} rect
- */
-export function isOutsideRect({ clientX, clientY }, rect) {
-  return clientX <= rect.left || clientY <= rect.top || clientX >= rect.right || clientY >= rect.bottom;
-}
-
 /** 鼠标离开悬浮栏多久之后才收回（用户 2026-10-10：「鼠标只要移出悬浮栏 1 秒后才消失」）。 */
 export const RAIL_HIDE_DELAY_MS = 1000;
 
 /**
  * 右侧悬浮长条的显隐状态机（纯逻辑，便于单测）。
  *
- * 规则（2026-10-10 第三次改）：**进到那一格就显形；离开那一格后隔 `hideAfterMs` 才收回**，
+ * 规则（2026-10-10 第三次改）：**进到触发区就显形；离开后隔 `hideAfterMs` 才收回**，
  * 期间再进来就把计时撤掉。取代之前两版 —— 「停手 1.5s 自动淡出」（作废）与
  * 「只有鼠标移出窗口才收」（也作废，收得太晚，鼠标回到画面上那条还杵着）。
- * `poke` 挂在 pointermove 上每帧都调 ⇒ 必须幂等，不能每次都发一遍开关红绿灯的 IPC。
+ * `poke` / `leave` 由 window 上的 pointermove 每帧调 ⇒ 必须幂等，不能每次都发一遍开关红绿灯的 IPC。
  *
  * **常驻**（2026-10-11 加，长条上那颗"一直显示"的按钮）：`setPinned(true)` 之后 `leave` 不再收
  * —— 用户按下去就是"这条别再自己躲起来"，此时鼠标在哪都不该把它收掉。取消常驻只是把
@@ -56,7 +43,7 @@ export function createChromeReveal({ onShow, hideAfterMs = RAIL_HIDE_DELAY_MS })
       cancelHide();
       apply(true);
     },
-    /** 鼠标离开那一格（坐标真的出了格子矩形才算，见 `isOutsideRect`）。 */
+    /** 鼠标离开触发区（由调用方按 `rightEdgeZone` 判，格子矩形那套已废）。 */
     leave() {
       // 常驻时不收，也不排到期时间：排了就会在"取消常驻"那一刻冒出一个陈旧的计时。
       if (!shown || pinned || timer) return;
@@ -75,4 +62,30 @@ export function createChromeReveal({ onShow, hideAfterMs = RAIL_HIDE_DELAY_MS })
       apply(true);
     },
   };
+}
+
+/**
+ * 满屏那一档（桌面模式）「指针进没进右边缘那一条」的判据，返回三态而不是布尔：
+ * **进出的线不是同一条**（迟滞）。
+ *
+ * 为什么必须两条线：只有一条 86px 的线时，鼠标停在按钮上、或往左挪一点点去看浮出的 tooltip
+ * （它 portal 到 body，在条的左边）就会立刻算「离开」⇒ 条收一半又弹回来，用户看到的就是
+ * 「一闪一闪、而且常常要移几次才出得来」（2026-10-11）。所以：
+ * - 进 `enterPx` 以内算 `enter`（显形）；
+ * - 出 `exitPx` 以外算 `leave`（交给状态机延 `hideAfterMs` 收）；
+ * - 中间那一圈 `hold` —— **什么都不做**，保持现在的样子。
+ *
+ * 只按横坐标判：满屏里贴任何高度都该能浮出条，不然顶部/底部要精确贴边才出得来。
+ *
+ * @param {{ clientX: number }} point
+ * @param {number} windowWidth 窗口宽（CSS px）
+ * @param {number} enterPx 进来算触发的宽度（= 长条格子宽）
+ * @param {number} exitPx 离开算收线的宽度（比 `enterPx` 宽，构成迟滞）
+ * @returns {'enter' | 'hold' | 'leave'}
+ */
+export function rightEdgeZone({ clientX }, windowWidth, enterPx, exitPx) {
+  const fromRight = windowWidth - clientX;
+  if (fromRight <= enterPx) return 'enter';
+  if (fromRight > exitPx) return 'leave';
+  return 'hold';
 }
