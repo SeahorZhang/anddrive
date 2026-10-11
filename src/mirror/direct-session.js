@@ -3,6 +3,7 @@ import { getServerClient, acquireDeviceAdb, startScrcpy, codecName } from "./con
 import { computeDisplayMetrics, scaleDisplayDpi } from "../../shared/scrcpyConfig.js";
 import { createDisplayFollower } from "./displayFollow.js";
 import { createSleepWatcher } from "./sleepWatch.js";
+import { createMacKeyboardBridge } from "./macBridge.js";
 import { probeLocalCodecs } from "../utils/codecCaps.js";
 import { createOpusPlayer } from "./audio.js";
 import { applyControl } from "../../electron/mirror/control.js";
@@ -15,6 +16,8 @@ import { applyControl } from "../../electron/mirror/control.js";
 const current = {
   client: null,
   info: null,
+  /** 本窗口的 adb（Mac 键盘那条桥要拿它连设备上的抽象 socket）。 */
+  adb: null,
   resizeObserver: null,
   follower: null,
   stopping: false,
@@ -25,6 +28,12 @@ const current = {
   /** 设备电源状态轮询的句柄（`stop` / `kick`）。 */
   sleepWatch: null,
 };
+
+/** 设备侧送回执/坏消息时的出口，由 `App.vue` 挂进来（它才知道该往哪句提示上放）。 */
+let notifyMacKeyboard = null;
+export function onMacKeyboardFeedback(handler) {
+  notifyMacKeyboard = typeof handler === "function" ? handler : null;
+}
 
 /** 当前窗口的 CSS 尺寸（视口）。用 documentElement 而不是 innerWidth：后者含滚动条/边框口径。 */
 function cssViewport() {
@@ -126,6 +135,7 @@ export async function startSession(
 ) {
   current.info = info;
   const adb = await acquireDeviceAdb(getServerClient(), info.serial);
+  current.adb = adb;
   const { client, display: createdDisplay } = await startScrcpy({
     adb,
     serverPath: info.serverPath,
@@ -308,6 +318,106 @@ export function setHudExtra(px) {
   ipc()?.send?.(CHANNELS.mirrorWindowHud, px);
 }
 
+/**
+ * 长条那颗「使用 Mac 键盘」：`on` 把设备默认输入法抢过来、`off` 还原、`state` 只问一句当前归属。
+ * 回的是主进程那份状态机的状态（`active` / `switched_away` / `unavailable` / `off`），
+ * 开关画什么由它说了算 —— 页面自己猜会和夺回循环打架。
+ * @param {"on" | "off" | "state"} action
+ * @returns {Promise<string>}
+ */
+export async function setMacKeyboard(action) {
+  return ipcInvoke(CHANNELS.mirrorMacKeyboard, action);
+}
+
+/**
+ * 订阅归属状态变化（主进程那边抢回来或停手时推过来）。`bootstrap()` 可以重复调用，
+ * 所以每次都先把上一份监听摘掉（同 `watchFullscreen` 那条理由）。
+ * @param {(state: string) => void} onState
+ */
+export function watchMacKeyboardState(onState) {
+  stopMacKeyboardWatch?.();
+  const renderer = ipc();
+  if (!renderer) return;
+  // 原样传：Slice 3 起主进程推的是 `{state, token, socket}` 对象，
+  // 这里再 `String()` 一次就把状态压成 "[object Object]"，页面一律读成 off（10-11 的 × 不生效就是它）。
+  const listener = (_event, payload) => onState?.(payload);
+  renderer.on(CHANNELS.mirrorMacKeyboardState, listener);
+  stopMacKeyboardWatch = () => renderer.removeListener(CHANNELS.mirrorMacKeyboardState, listener);
+}
+let stopMacKeyboardWatch = null;
+
+/**
+ * Mac 键盘那条桥（Slice 3）：跟着归属状态对表 —— `active` / `parked` 时保持连着（让出只是不再送字，
+ * 输入法还是我们的，连接不必断），`off` / 拿不到 token 时断开。
+ * token 每次开启都换 ⇒ 看到新 token 就重建一条桥（旧连接的暗号已经作废）。
+ */
+let macBridge = null;
+let macBridgeToken = null;
+
+/** @param {{ state?: string, token?: string | null, socket?: string } | null} payload */
+export function syncMacKeyboard(payload) {
+  const state = payload?.state;
+  const wantsBridge = (state === "active" || state === "parked") && payload.token && payload.socket;
+  if (!wantsBridge) {
+    macBridge?.stop();
+    macBridge = null;
+    macBridgeToken = null;
+    return;
+  }
+  if (macBridge && macBridgeToken === payload.token) return;
+  macBridge?.stop();
+  macBridge = createMacKeyboardBridge({
+    getAdb: () => current.adb,
+    socketName: payload.socket,
+    token: payload.token,
+    // 用户在手机上按了胶囊的 × → 转告主进程去 parked（它此后不再抢、也不再送字）。
+    onYield: () => ipc()?.send?.(CHANNELS.mirrorMacKeyboardYield),
+    onNack: (reason) => current.info && notifyMacKeyboard?.({ kind: "nack", reason }),
+    // 手机光标的屏幕矩形（设备侧 `CursorAnchorInfo` 的插入点）→ 页面据此把候选窗锚到真实光标上。
+    onCaret: (rect) => caretListener?.(rect),
+  });
+  macBridgeToken = payload.token;
+  macBridge.start();
+}
+
+/**
+ * 合成中的拼音经桥送给输入法（那边 `setComposingText`，光标处带下划线）。
+ *
+ * ⚠️ **当前 UI 没有调用它**（10-11）：合成串改成只在 Mac 上画（`.mirror-mactext-capsule`），
+ * 手机上不再显示，否则同一串会出现两次。这条 op 与设备侧实现**都还在**（是桥的能力，
+ * 不是死代码）—— 真要恢复"手机上跟着显示拼音"就把它接回 `App.vue` 的 `compose` 里。
+ * 决定不再需要时，连同 `MirrorBridge` / `MirrorInputMethodService` 那边一起删（要抬 APK 版本）。
+ * @param {string} text
+ */
+export function composeViaMacKeyboard(text) {
+  return macBridge?.compose(text) === true;
+}
+
+/** 光标矩形的订阅者（页面那一个）。设备侧随时可能报新的，所以存一份而不是每次传。 */
+let caretListener = null;
+
+/**
+ * 订阅设备报来的**手机光标矩形**（屏幕坐标、设备 px；null = 现在没有光标）。
+ * 这是候选窗能贴住真实光标的唯一数据源 —— 见 `macTextAnchor.js` 的 `caretRectToAnchor`。
+ * @param {(rect: { x: number, top: number, bottom: number } | null) => void} listener
+ * @returns {() => void} 退订
+ */
+export function onMacKeyboardCaret(listener) {
+  caretListener = listener;
+  return () => {
+    if (caretListener === listener) caretListener = null;
+  };
+}
+
+/**
+ * 把一段文本经桥送给输入法（输入法那边 `InputConnection.commitText` 整串落地）。
+ * @param {string} text
+ * @returns {boolean} 有没有真的送出去（没连着就是 false，调用方决定要不要提示）
+ */
+export function commitViaMacKeyboard(text) {
+  return macBridge?.commit(text) === true;
+}
+
 /** 通用流泵（Tango 官方流 API）；send 失败只告警。 */
 async function pumpLoop(stream, send, onDone) {
   const reader = stream.getReader();
@@ -422,6 +532,8 @@ function watchAppStolen(onStolen) {
 /** 关闭当前 scrcpy client（窗口 beforeunload / 主进程 stop 时调用）。 */
 export function stopSession() {
   current.stopping = true;
+  // Mac 键盘那条桥挂在 adb 上，会话收摊时一起断（归属由主进程在最后一个会话关掉时还原）。
+  syncMacKeyboard(null);
   if (current.resizeObserver) {
     current.resizeObserver.disconnect();
     current.resizeObserver = null;

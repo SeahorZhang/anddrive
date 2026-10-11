@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- ListMain 仍是 app_process 纯代码容器；下面是扫码配对的桌面快捷入口。 -->
+    <!-- ListMain 仍是 app_process 纯代码容器；下面是扫码配对的桌面快捷入口，
+         与 Mac 键盘的输入法服务（`:ime` 独立进程，由系统按焦点拉起）。 -->
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
@@ -16,5 +17,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Mac 键盘的落点。跑在 `:ime` 独立进程里：输入法由系统按焦点拉起/回收，
+             不能跟一次性 `app_process` 那条流程共用生命周期。 -->
+        <service
+            android:name=".MirrorInputMethodService"
+            android:exported="true"
+            android:label="@string/mirror_ime_name"
+            android:permission="android.permission.BIND_INPUT_METHOD"
+            android:process=":ime">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/mirror_input_method" />
+        </service>
     </application>
 </manifest>

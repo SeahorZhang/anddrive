@@ -1601,6 +1601,34 @@ export async function setSecureSetting(serial, key, value) {
 }
 
 /**
+ * `settings get secure <key>`。**读不到（命令失败）与「没设过」（设备回字面量 `null`）都回 null**：
+ * 调用方必须在拿到非空值时才继续往下写 —— 不知道原值就写新值，等于把用户的设置丢在我们手里。
+ * @param {string} serial @param {string} key
+ * @returns {Promise<string | null>}
+ */
+export async function getSecureSetting(serial, key) {
+  assertSerial(serial);
+  await ensureServer();
+  const { code, stdout } = await adbExecSafe(["-s", serial, "shell", "settings", "get", "secure", key]);
+  if (code !== 0) return null;
+  const value = String(stdout).trim();
+  return !value || value === "null" ? null : value;
+}
+
+/**
+ * 在设备 shell 里跑一条我们自己拼好的命令（Mac 键盘那边要 `ime enable` 与读写那份 stash 文件）。
+ * ⚠️ 命令是拼出来的：**不许**把未校验的外部输入放进来（输入法 id 那一路由 `isSafeImeId` 卡死字符集）。
+ * @param {string} serial @param {string} command
+ * @returns {Promise<{ ok: boolean, stdout: string }>}
+ */
+export async function runDeviceShell(serial, command) {
+  assertSerial(serial);
+  await ensureServer();
+  const { code, stdout } = await adbExecSafe(["-s", serial, "shell", command]);
+  return { ok: code === 0, stdout };
+}
+
+/**
  * `settings get global <key>` 的输出 → 数字（纯函数，便于单测）。
  * 两条必须分得开：**没设过**（设备回字面量 `null`）= 该键的默认值 0（这条不是猜，AOSP 默认就是 0），
  * 而**命令失败** = 读不到（null）—— 后者被读成 0 的话，还原时会把用户自己开的设置抹掉。

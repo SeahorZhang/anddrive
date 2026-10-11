@@ -123,6 +123,11 @@ const env = vi.hoisted(() => {
     stayOn: {},
     /** 关会话时回过桌面的设备（`goHome` 的调用序列号）。 */
     homeCalls: [],
+    /** 设备 secure 设置（Mac 键盘要抢要还的那一格）与设备 shell 调用轨迹。 */
+    secure: { default_input_method: 'com.sohu.inputmethod.sogou.xiaomi/.SogouIME' },
+    shellCalls: [],
+    /** `/data/local/tmp/` 里那份「用户原输入法」备份文件的内容（`echo`/`rm -f` 会改它）。 */
+    stash: '',
     FakeBrowserWindow,
     ipcMain: {
       handle: (channel, fn) => handlers.set(channel, fn),
@@ -190,7 +195,21 @@ vi.mock('../../electron/adb.js', () => ({
   },
   isMiuiDevice: async () => false,
   getDeviceVideoCodecs: async () => ({ h264: true, h265: true, av1: false }),
-  setSecureSetting: async () => {},
+  setSecureSetting: async (_serial, key, value) => {
+    env.secure[key] = value
+    env.settingWrites.push(['secure', key, value])
+    return { code: 0, stdout: '', stderr: '' }
+  },
+  // Mac 键盘那三条设备操作：读 secure 设置、跑我们拼好的 shell（`ime enable` 与那份 stash 文件）。
+  getSecureSetting: async (_serial, key) => env.secure[key] ?? null,
+  runDeviceShell: async (_serial, command) => {
+    env.shellCalls.push(command)
+    if (command.startsWith('cat ')) return { ok: true, stdout: env.stash }
+    const echo = /^echo (\S+) > \S+$/.exec(command)
+    if (echo) env.stash = echo[1]
+    if (command.startsWith('rm -f')) env.stash = ''
+    return { ok: true, stdout: '' }
+  },
 }))
 
 // 镜像页的 preload 路径按 APP_ROOT 拼，测试里只要求它是个字符串。
@@ -202,6 +221,7 @@ const { startMirrorSession, stopMirrorSession } = await import('../../electron/m
 const { mirrorScreenInsets, mirrorContentExtraSize, mirrorTrafficLightPosition } = await import(
   '../../electron/mirror/options.js'
 )
+const { MAC_KEYBOARD_IME } = await import('../../electron/mirror/macKeyboard.js')
 
 /** `keepAwake` 是在会话返回后异步落地的（置位不能拖慢开窗口），测试里把微任务跑干净。 */
 const flush = async () => {
@@ -633,5 +653,47 @@ describe('设备清理与已开镜像', () => {
     await runTeardown('dev-a')
     expect(closeA).toHaveBeenCalledTimes(1)
     expect(closeB).not.toHaveBeenCalled()
+  })
+})
+
+// Mac 键盘（G1）：长条那颗开关走 `mirror:macKeyboard`，主进程那份归属状态机决定一切。
+// 判据钉的是「抢得过来、还得回去、别替用户把键盘丢了」，状态机本身的分支在
+// `tests/electron/macKeyboard.test.js` 里逐条覆盖。
+describe('Mac 键盘开关（mirror:macKeyboard）', () => {
+  const toggle = (win, action) =>
+    env.handlers.get(CHANNELS.mirrorMacKeyboard)({ sender: win.webContents }, action)
+
+  it('开着：抢成我们的输入法、原值存进设备侧那份；关掉时原样还回去', async () => {
+    await startMirrorSession({ serial: 'dev-mk', packageName: 'com.example.app' })
+    const win = env.windows.at(-1)
+    expect((await toggle(win, 'state')).state).toBe('off')
+    expect((await toggle(win, 'on')).state).toBe('active')
+    expect(env.secure.default_input_method).toBe(MAC_KEYBOARD_IME)
+    expect(env.stash).toBe('com.sohu.inputmethod.sogou.xiaomi/.SogouIME')
+    expect((await toggle(win, 'state')).state).toBe('active')
+    expect((await toggle(win, 'off')).state).toBe('off')
+    expect(env.secure.default_input_method).toBe('com.sohu.inputmethod.sogou.xiaomi/.SogouIME')
+    expect(env.stash).toBe('')
+  })
+
+  /** 用户不该因为我们没退干净就丢掉自己的键盘：最后一个窗口关掉即还原。 */
+  it('最后一个镜像窗口关掉时自动还原', async () => {
+    const { id } = await startMirrorSession({ serial: 'dev-mk-stop', packageName: 'com.example.app' })
+    await toggle(env.windows.at(-1), 'on')
+    expect(env.secure.default_input_method).toBe(MAC_KEYBOARD_IME)
+    await stopMirrorSession(id)
+    expect(env.secure.default_input_method).toBe('com.sohu.inputmethod.sogou.xiaomi/.SogouIME')
+  })
+
+  /** 输入法是**设备级**的：一台手机一份归属，第二个窗口不该再抢一遍、更不该把我们的 id 当原值存下来。 */
+  it('同一台设备第二个窗口复用同一份归属，不重复夺回', async () => {
+    await startMirrorSession({ serial: 'dev-mk-two', packageName: 'com.example.a' })
+    const first = env.windows.at(-1)
+    await startMirrorSession({ serial: 'dev-mk-two', packageName: 'com.example.b' })
+    const second = env.windows.at(-1)
+    await toggle(first, 'on')
+    const stashes = env.shellCalls.filter((c) => c.startsWith('echo ')).length
+    expect((await toggle(second, 'state')).state).toBe('active')
+    expect(env.shellCalls.filter((c) => c.startsWith('echo ')).length).toBe(stashes)
   })
 })

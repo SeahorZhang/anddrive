@@ -308,13 +308,13 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
   真正的解法是**按偏移记账的稀疏物化**（把已经流过给客户端的字节顺手落进 `.part`，缺口事后再补），
   现在不做是因为最狠的那条（2 MB 下限 = 16 倍放大）已经单独改掉了，剩下的重叠只是常数倍。
 
-### 6.2 需要 helper 变厚（先决策：helper 定位是「零权限、零后台组件的代码容器」）
+### 6.2 需要 helper 变厚（helper 定位已在 2026-10-11 被用户改口：允许带常驻组件，见 G1）
 
 | # | 功能 | 卡点 | 规模 |
 | --- | --- | --- | --- |
-| G1 | Mac 中文输入法直投 | `ime enable/set` shell 合法，但 helper 得提供 `InputMethodService`，且**会临时顶掉用户键盘**，会话结束必须还原；打破 helper 定位 | M |
+| G1 | Mac 中文输入法直投 —— **`[~]` 进行中（2026-10-11 用户点单：照竞品抄，形状定 b2）** | 上游 `injectText` **送不了中文**（真机两组单变量实测，与设备上装哪个输入法无关）、`adb shell input text` 在 MIUI 14 直接 NPE ⇒ 只能让 helper 提供 `InputMethodService`。切换机制已实测：**`ime set` 会报成功而值没变，直写 `settings put secure default_input_method` 才有效，且能在竞品同场镜像时守住**。**Slice 1/2/3/4 已真机验收**（输入法+胶囊、归属与还原、抽象 socket 桥 + token 握手 + × 让出、真键盘打拼音上屏、合成态 `setComposingText` 同步到光标），并修掉「关不掉」= 归属只活在内存里 ⇒ 现在 `state` 查询会 `adopt()` 认领残留。剩：nack 的真人演示、用户自己再打一次中文确认、以及 **候选窗锚点**：Slice 4b 已真机两轮（收字字段绝对定位到「点画面那个点」⇒ 候选窗位置确实变了，机制成立，但**不精确**：跟的是鼠标点、不是手机真实光标）；**Slice 4c 抄竞品已真机验完并启用**（设备侧 `requestCursorUpdates(CURSOR_UPDATE_MONITOR)` → `onUpdateCursorAnchorInfo` 读 `getInsertionMarker*` **再过 `getMatrix().mapPoints()`** → 桥报 `{op:'caret'}` → 渲染层 `TRUST_DEVICE_CARET = true` 采信）：链路通、坐标正确。**关键坑**：`getInsertionMarker*` 报的是**编辑器本地坐标**，官方类摘要那句 "in the screen coordinates" 说的是过矩阵之后的结果，漏了 `getMatrix()` 会把坐标锚到画面原点附近。补上后两类编辑器都精确吻合（MIUI 原生 EditText 矩阵=纯平移=控件屏幕原点；Chromium WebView 矩阵=缩放 2.75 + Y 平移 244）。**跨应用一致性已补测**：5 个应用 / 4 类输入面（MIUI 原生 `EditText`、AOSP Settings `EditText`、Chromium 原生地址栏、Chromium `WebView` 正文）上报坐标**全部落在控件真实边界内**，且打字时 `x` 随插入点单调推进、纵向不动；三个"纯平移"编辑器若跳过 `getMatrix()` 会整体抬高 101–112px（约两个行高）⇒ **矩阵那一步每例都必需**。5 应用对照表见 `NATIVE_MIRROR.md` §G1 切片。**10-11 又修掉一个真 bug**：中文输入法**选候选的空格/回车**被当普通按键又给手机转发了一遍 ⇒ 手机上多一个空格/换行（`' '` 就在 `KEYBOARD_KEYS` 里，而 `onKeyDown` 在查到 keyCode 时就提前 `return`，绕过了"Mac 键盘在收字就别再发"那道闸）—— 已把按键归属抽成 `src/mirror/keyRouting.js`，把"输入法正在消化这个键（`isComposing` / `keyCode 229`）"排到查表**之前**，并补 14 条单测（`tests/mirror/keyRouting.test.js`）。**Slice 4d 已落地（10-11）**：用户拿竞品截图点单「可以做成竞品的样子吗」⇒ 拆图后确认「候选条 = macOS 系统候选窗（我们本来就有，4c 把位置定对即可）」+「拼音胶囊 = 竞品自己画的」两块，只补后者：新增 `src/mirror/macTextCapsule.js` + `App.vue` 的 `.mirror-mactext-capsule` 覆盖层，把正在输入的拼音（下划线 + 光标）画在 Mac 上光标那一行，macOS 候选窗自然落在它下面。**同日第二轮**：用户拿我们那版截图说「不对」= 拼音显示了两次（手机上 `setComposingText` 一遍 + 胶囊一遍）⇒ 照竞品改成**合成串只画在 Mac 上、不送手机**（桥的 `{op:'compose'}` 与设备侧实现保留为能力，未删）；顺带修掉「Esc 取消合成时胶囊挂着」（`onCompositionEnd` 现在一定补发空串）。剩：真人在真实场景里打一次字确认观感。**同日第三轮**：用户贴竞品图说「对比一下，还是有差距」⇒ 逐像素量了两张图（竞品 560×248 / 我们 816×242），差距是**结构性的**：竞品是「正文行 → 胶囊 → 候选条」**三层**，我们是「正文行（胶囊骑在上面）→ 候选条」**两层**（胶囊高/正文墨高：竞品 2.0× vs 我们 1.3×）。改法 = 把**交给 macOS 的 caret 矩形**从「正文行那一格」换成**胶囊那一格**（新增 `capsuleRect()`：纵向 `top + height`、高 `× 1.3`；字号比 `0.48`，换算回行高仍是 0.62 ⇒ 拼音没变大、变大的是胶囊壳），去掉 `translateY(-50%)`；系统候选条随之落在胶囊下面。取舍：矩形不再与手机光标那一行重合（唯一用途是给 macOS 摆候选条，4c 的锚点不受影响），dev 探针判据改成"与胶囊重合"。细节与根因见 `NATIVE_MIRROR.md` §G1 切片。**同日第四轮**：用户「拼音框不要无限长，固定宽度，而且不要超出屏幕」⇒ 胶囊改**固定宽度 + 夹在画面内**。宽度取值从竞品图量出来（胶囊外框 192×56 ⇒ 宽/高 ≈3.43；且它**不裹文字** —— 墨迹只占 108、左边距 24 / 右边距 60，右边那截是预留）⇒ 新增 `CAPSULE_WIDTH_RATIO = 3.4`；`capsuleRect(css, screenWidth)` 多返回 `width` 并把 `left` 夹进 `0 … screenWidth − width`（画面宽未知则不夹）。⚠️ 夹的是**同一个矩形**，所以字段位置与胶囊一起夹（两层同源这条不变量守住）；代价是靠近右缘打字时矩形整体左移、候选窗与手机光标错开最多一个胶囊宽。CSS：胶囊 `inline-flex → flex` + `overflow: hidden`，文字段 `flex: 0 1 auto; min-width: 0; direction: rtl`（装不下时从**头部**裁、保住光标那端），光标段 `flex: none`。⚠️ 未真机验证 | M–L |
 | G2 | 通知同步到 Mac + 回复 + 验证码复制 | adb 走不到，需真 `NotificationListenerService` + 用户手动开一次开关。可以不做弹权限，但要做"一键跳到那个开关" | M–L |
-| G3 | 剪贴板双向同步 —— **已放弃，见 §8** | 若重启：正解是 helper 出借前台焦点的 `ReadClipboardActivity`，用广播里带的 Binder 回传（参照 app 就这么做，日志 tag 还叫 `AndDriveReadClipboard`） | M–L |
+| G3 | 剪贴板双向同步 —— **2026-10-11 重启**（用户定：**双向 + 复制即同步 + 文本/图片/文件**） | ⚠️ 原先记的"已放弃"理由**已失效**（见 §8 那条的更正）：**文本这一档根本不需要 helper** —— 上游 scrcpy 自带双向（`ScrcpyOptions3_2.clipboardAutosync` → `client.clipboard` 是一条 `ReadableStream<string>`；反向 `controller.setClipboard({sequence, paste, content})` 带 ACK_CLIPBOARD），server 以 **shell uid** 读剪贴板，天然绕开当年"要前台焦点"那个死结。**图片**：输入法是设备上天然的免焦点剪贴板读者，所以也只需要 G1 那条通道，不需要常驻进程。**文件**：剪贴板里只有 `content://` URI，字节必须走仓库已有的文件链路（`StorageMain` / WebDAV / `exec-out`），**别把文件塞进剪贴板协议** —— 这一条与"手机文件拖到 Mac"是同一根主干。要新增的只有 Mac 侧：轮询 `clipboard` 的 `changeCount`（Electron 没有 pasteboard 事件）+ 双向的**断循环**（内容指纹 + 来源标记，否则 A→B→A 无限回环）。第一步判定实测：开 `clipboardAutosync` 后在真机复制一段文字，看 `client.clipboard` 推不推（**没跑过，别当已知**） | S（文本）+ M（图片/断循环） |
 
 ### 6.3 差异化（AndroMeld 没有的）
 
@@ -362,12 +362,12 @@ com.apple.fileprovider-nonui`）是个 **macOS FileProvider 扩展**，「挂载
 - **黑边的变量不是比例，是 Android 的 600dp 大屏门槛**（`smallestWidth ≥ 600dp` 时系统忽略 app 方向锁并 letterbox）。比例吸附、600dp dpi 下限、`tablet` 模式、`MAX_DISPLAY_PIXELS` 都已试过并删除。
 - **模糊遮罩挡不住重排闪烁**（透明度低于 ~95% 就看得见），现方案是不透明遮罩 + 等关键帧。
 - **`force-stop` 不是"把应用接回来"**：会冷启。正确做法 `am display move-stack`（真机验证 pid 不变）。「重新启动」按钮当天加了又删 —— 和"接回"并排会误点。
-- **剪贴板同步 G3 = 已放弃**：服务端写完同进程回读拿到 `null`，这一条判据分不清「读被挡」与「写没落地」，**不足以下"ROM 挡剪贴板"的结论**（曾据此断言过，被驳回，记录在此免得重犯）。也别动 appop（`READ_CLIPBOARD` 本来就 allow）。
+- **剪贴板同步 G3：当年"已放弃"的理由作废**（2026-10-11 更正，条目本体已移回 §6.2 并重启）。两件事分开看：① 仍然成立的 —— 当年那句"服务端写完同进程回读拿到 `null`"**不足以下"ROM 挡剪贴板"的结论**（分不清"读被挡"与"写没落地"，曾据此断言过并被驳回），也别去动 appop（`READ_CLIPBOARD` 本来就 allow）；② 已经失效的 —— 由①推出的"这条做不了、要靠 helper 出借前台焦点的 `ReadClipboardActivity`"**不必成立**：上游 scrcpy 的 clipboard 通道由 server 以 shell uid 读写，压根不需要前台焦点，而且**双向都是现成的**。教训记在这里：判据分不清两种解释时，别拿它去否掉整条功能。
 - **采集别人的虚拟显示可以，resize 与销毁不行**（`VirtualDisplay` 与创建它的进程绑死）。多窗口共览一块显示需要一个常驻持有者，这一档暂不做。
 - **不要用 `audioDup`**（会让手机出声，与"投屏时手机静音"的要求相反）。
 - **`wm size` / `wm density` 改物理屏、compat 强制平板那套** —— 已删，别再碰；真横屏走「大屏模式」那份补丁产物（`VirtualDisplayConfig.setIgnoreActivitySizeRestrictions`），**默认路径没有这个效果**（2026-10-07 改：默认产物 = 上游原生、显示 = 主屏尺寸与密度）。唯一还挂着的一条未验路子：那排抖音 tab 也可能是按**物理屏 density**（恒 480）算而非真写死，若是，临时抬 `wm density` 能两全 —— 但设备有锁屏密码，测不了。
 - **不做老用户兼容（2026-09-28 决定，迁移代码已全删）**：收藏的传输地址桶、`scrcpyConfig` 的 localStorage 旧参数、快照里的内联图标迁移、`stored` 标志 —— 一律不再写"升级一次"的适配，代价见 §1 那条。**默认别再提议加迁移**；真要发布时靠一次性手动清缓存解决。（别名表 `device-aliases.json` 不是兼容代码，是运行时必需，留着。）
-- **非目标**：Windows/Linux、账号与云同步、遥测/崩溃上报（若引入必须 opt-in 且可离线）、删除设备端配对记录（断开只移 transport）、把 helper 改成常驻后台/监听端口的服务。
+- **非目标**：Windows/Linux、账号与云同步、遥测/崩溃上报（若引入必须 opt-in 且可离线）、删除设备端配对记录（断开只移 transport）、把 helper 改成常驻后台/监听端口的服务。（2026-10-11 因 G1 一度挂起，**当天已解除**：用户拍板走 b2 —— 输入法自己当客户端连 `adb forward` 的本地 socket，不需要设备端常驻进程，这条非目标原样有效。）
 - **待决策**：自动更新方案、拼音搜索是否引依赖（建议预生成索引）、录屏是否带音频（建议先做无音频）。
 
 ---

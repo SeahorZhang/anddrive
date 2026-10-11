@@ -8,9 +8,11 @@ import {
   getGlobalNumberSetting,
   getPhysicalScreenSize,
   getPhysicalScreenDensity,
+  getSecureSetting,
   goHome,
   isMiuiDevice,
   onDeviceTeardown,
+  runDeviceShell,
   scrcpyServerPath,
   setGlobalNumberSetting,
   setSecureSetting,
@@ -19,6 +21,7 @@ import { sanitizeIcon } from "../iconImage.js";
 import { isValidPackageName, isValidSerial } from "../validators.js";
 import { findAppSession } from "./appSession.js";
 import { startKeepAwake } from "./keepAwake.js";
+import { BRIDGE_SOCKET, createMacKeyboard, SETTING_DEFAULT_IME } from "./macKeyboard.js";
 import { startMiProjection } from "./miProjection.js";
 import {
   mirrorAspectRatio,
@@ -344,6 +347,8 @@ export async function stopMirrorSession(id) {
   const restoreKeepAwake = session.keepAwakeRestore;
   session.keepAwakeRestore = null;
   if (restoreKeepAwake) await restoreKeepAwake().catch(() => {});
+  // Mac 键盘是设备级的：这台设备最后一个窗口关掉时才还原用户的输入法。
+  await releaseMacKeyboard(session.serial);
   if (session.win && !session.win.isDestroyed()) {
     // 渲染层在 beforeunload 里停掉 scrcpy 会话；窗口关闭兜底。
     session.win.close();
@@ -387,6 +392,53 @@ export function focusMirrorSession(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Mac 键盘（G1）：把设备输入法切到我们那条，并盯着归属
+// ---------------------------------------------------------------------------
+
+/**
+ * 每台设备一份归属管理器。输入法是**设备级**的（一块屏只有一个默认输入法），
+ * 而一台设备可以开好几个镜像窗口 ⇒ 不能按窗口一份，否则两个窗口互相夺回。
+ * @type {Map<string, ReturnType<typeof createMacKeyboard>>}
+ */
+const macKeyboards = new Map();
+
+/** @param {string} serial */
+function macKeyboardFor(serial) {
+  let owner = macKeyboards.get(serial);
+  if (owner) return owner;
+  owner = createMacKeyboard({
+    readIme: () => getSecureSetting(serial, SETTING_DEFAULT_IME),
+    writeIme: async (value) => {
+      const result = await setSecureSetting(serial, SETTING_DEFAULT_IME, value);
+      return result.code === 0;
+    },
+    runShell: (command) => runDeviceShell(serial, command),
+    // 状态一变就推给这台设备上的所有镜像窗口（那颗开关要跟着亮/灭，横幅要跟着出）。
+    // 一起带上 token 与 socket 名：镜像页重载（HMR / 接回）后得重新连桥，暗号只有这里知道。
+    onState: (state) => {
+      const payload = { state, token: owner.getToken(), socket: BRIDGE_SOCKET };
+      for (const session of sessions.values()) {
+        if (session.serial !== serial || !session.win || session.win.isDestroyed()) continue;
+        session.win.webContents.send(CHANNELS.mirrorMacKeyboardState, payload);
+      }
+    },
+  });
+  macKeyboards.set(serial, owner);
+  return owner;
+}
+
+/** 这台设备最后一个镜像窗口关掉时：还原输入法并撤掉那份管理器（含它的定时器）。 */
+async function releaseMacKeyboard(serial) {
+  for (const session of sessions.values()) {
+    if (session.serial === serial) return;
+  }
+  const owner = macKeyboards.get(serial);
+  if (!owner) return;
+  macKeyboards.delete(serial);
+  await owner.disable().catch(() => {});
+}
+
+// ---------------------------------------------------------------------------
 // IPC handlers
 // ---------------------------------------------------------------------------
 
@@ -415,6 +467,35 @@ ipcMain.on(CHANNELS.mirrorWindowButtons, (event, shown) => {
     win.setWindowButtonPosition?.(mirrorTrafficLightPosition(win.getContentBounds().width));
   }
 });
+/**
+ * 长条上那颗「使用 Mac 键盘」：`on` 把设备输入法抢过来、`off` 还原、`state` 只是问一句
+ * （镜像页重载后要知道当前状态，别把开关画反）。回的是归属状态，见 `macKeyboard.js`。
+ */
+ipcMain.handle(CHANNELS.mirrorMacKeyboard, async (event, action) => {
+  const owner = macKeyboardOfEvent(event);
+  let state;
+  if (action === "on") state = await owner.enable();
+  else if (action === "off") state = await owner.disable();
+  else state = await owner.adopt();   // 顺带认领上一任没还原的残留（见 `adopt`）
+  // 一起回 token 与 socket 名：渲染层连那条抽象 socket 要用的暗号只有这里知道，
+  // 镜像页重载（HMR / 接回）后靠它重连。
+  return { state, token: owner.getToken(), socket: BRIDGE_SOCKET };
+});
+
+/** 设备侧按了胶囊上的 ×（渲染层的桥收到 `yield` 转过来）：让出，不再抢也不再送字。 */
+ipcMain.on(CHANNELS.mirrorMacKeyboardYield, (event) => {
+  macKeyboardOfEvent(event).park();
+});
+
+/** IPC 事件 → 这台设备那份归属管理器。发起方一定是镜像窗口，找不到就是编程错误。 */
+function macKeyboardOfEvent(event) {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) throw new Error("镜像窗口已关闭");
+  const session = [...sessions.values()].find((item) => item.win === win);
+  if (!session) throw new Error("镜像会话不存在");
+  return macKeyboardFor(session.serial);
+}
+
 ipcMain.handle(CHANNELS.mirrorStop, (_, id) => stopMirrorSession(id));
 ipcMain.handle(CHANNELS.mirrorStopAll, () => stopAllMirrorSessions());
 ipcMain.handle(CHANNELS.mirrorFocus, (_, id) => focusMirrorSession(id));

@@ -2,7 +2,11 @@
 import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { Icon } from '@iconify/vue'
 import { useMirrorInput } from './useMirrorInput.js'
-import { bootstrap, dispose as disposeSession, reclaimApp, wakeScreen, setWindowButtons, setHudExtra, getSessionInfo, setContentElement, sendControl, setScreenPower, kickSleepWatch } from './direct-session.js'
+import { bootstrap, dispose as disposeSession, reclaimApp, wakeScreen, setWindowButtons, setHudExtra, getSessionInfo, setContentElement, sendControl, setScreenPower, kickSleepWatch, setMacKeyboard, watchMacKeyboardState, syncMacKeyboard, commitViaMacKeyboard, onMacKeyboardFeedback, onMacKeyboardCaret } from './direct-session.js'
+import { createMacTextSink } from './macTextSink.js'
+import { caretRectToAnchor, clientToDevice, deviceToScreen, emSizePx, estimateAdvancePx, LINE_HEIGHT_RATIO } from './macTextAnchor.js'
+import { capsuleBox, capsuleRect, macTextCapsule } from './macTextCapsule.js'
+import { scaleDisplayDpi } from '../../shared/scrcpyConfig.js'
 import { aspectDiffers, createReflowGate } from './displayFollow.js'
 import { createChromeReveal, isOutsideRect } from './chromeReveal.js'
 import { FROZEN_STATES, panelIsOff } from './sleepWatch.js'
@@ -204,6 +208,7 @@ const decoder = shallowRef(null)
 let writer = null
 let disposeRendererType = null
 let disposeSizeChanged = null
+let disposeMacCaret = null
 let hostResize = null
 let statsTimer = null
 
@@ -216,8 +221,357 @@ function getVideoSize() {
   return { width: canvas.width, height: canvas.height }
 }
 
+/**
+ * 「使用 Mac 键盘」（G1）：设备默认输入法归谁管，是**主进程那份状态机**说了算，页面不自己猜
+ * —— 它每 2 秒对账一次，抢回来或停手都会推过来（`mirror:macKeyboardState`）。
+ * 三条反馈文案照竞品 `mirror.ime.feedback.*`。
+ * ⚠️ 输入法是设备级的：同一台手机的多个镜像窗口共用同一份归属，所以这颗开关亮灭不代表"这个窗口"，
+ * 代表"这台手机现在用我们的输入法"。
+ */
+const macKeyboard = ref('off')
+/** 用户**想要**的状态，与"实际归属"分开记：抢不过时归属是 `switched_away`，但用户仍然想开着，
+ *  这时再点一次是"关掉"，不是"再试一次"——两个都塞进一个布尔里就会点一下变成重试。 */
+const macKeyboardWanted = ref(false)
+const macKeyboardBusy = ref(false)
+const MAC_KEYBOARD_TIPS = {
+  off: '用 Mac 键盘给手机打字',
+  active: 'Mac 键盘输入中（点一下交还手机输入法）',
+  switched_away: '设备已切换至其他输入法（点一下关掉这一格）',
+  unavailable: '我们的输入法未在设备上处于激活状态',
+  parked: '已在手机上关闭 Mac 键盘输入（点这一格恢复）',
+}
+watchMacKeyboardState(applyMacKeyboardState)
+
+/** @param {{ state?: string, token?: string, socket?: string } | null} payload */
+function applyMacKeyboardState(payload) {
+  const state = payload?.state ?? 'off'
+  const next = MAC_KEYBOARD_TIPS[state] ? state : 'off'
+  const changed = next !== macKeyboard.value
+  macKeyboard.value = next
+  if (next === 'active') macKeyboardWanted.value = true
+  else if (next === 'off') macKeyboardWanted.value = false
+  // 桥跟着归属走：`active`/`parked` 连着，`off` 断开（token 换了会重建）。
+  syncMacKeyboard(payload)
+  // 只在"我们想开着却拿不回来"那两种情况下打断用户，别为正常的 off 弹条。
+  if (changed && (next === 'switched_away' || next === 'unavailable')) showNotice(MAC_KEYBOARD_TIPS[next])
+}
+
+async function toggleMacKeyboard() {
+  if (macKeyboardBusy.value) return
+  // `parked`（用户在手机上按了 ×）那一下是「恢复」，不是「关掉」：意图本来就想开着，
+  // 按 toggle 语义翻一次会变成关掉，而 tooltip 写的是「点这一格恢复」——两者得一致。
+  if (macKeyboard.value === 'parked') {
+    macKeyboardWanted.value = true
+    macKeyboardBusy.value = true
+    try {
+      applyMacKeyboardState(await setMacKeyboard('on'))
+    } catch (error) {
+      showNotice(error?.message || '恢复 Mac 键盘失败')
+    } finally {
+      macKeyboardBusy.value = false
+    }
+    return
+  }
+  macKeyboardWanted.value = !macKeyboardWanted.value
+  macKeyboardBusy.value = true
+  try {
+    applyMacKeyboardState(await setMacKeyboard(macKeyboardWanted.value ? 'on' : 'off'))
+  } catch (error) {
+    showNotice(error?.message || '切换输入法失败')
+    macKeyboardWanted.value = macKeyboard.value === 'active'
+  } finally {
+    macKeyboardBusy.value = false
+  }
+}
+
+/**
+ * Mac 输入法收字的那个隐藏字段（Slice 4）：页面里 1×1、看不见、不接鼠标，
+ * 只为了有东西可聚焦 —— 没有聚焦的可编辑元素，macOS 输入法根本不给候选窗。
+ * 事件怎么翻成"要送出去的文本"全在 `macTextSink.js`（合成期间不送字，提交那一刻整串送一次）。
+ */
+const macTextInput = ref(null)
+const macSink = createMacTextSink({
+  // 桥连着就走输入法（中文整串不丢字）；没连着退回 `injectText`（ASCII 还能用，
+  // 中文会丢是那条路本来的样子 —— 见 NATIVE_MIRROR §G1 那两组单变量实测）。
+  // 记账放在**送之前**且只放这一处：`fallback` 是"桥没连上时补发"，在那里再记一遍就是双份。
+  commit: (text) => {
+    noteMacTextCommit(text)
+    return commitViaMacKeyboard(text)
+  },
+  fallback: (text) => sendControl({ kind: 'text', text }),
+  /**
+   * ⚠️ 合成串**只记在 Mac 上**（`.mirror-mactext-capsule`），**不送手机**。
+   * 竞品就是这么做的：拼音只在它自己画的胶囊里出现，手机上那一行看不到拼音。
+   * 早先这里是 `return composeViaMacKeyboard(text)`（手机侧 `setComposingText` 画下划线拼音），
+   * 那是 10-11 的误读 —— 用户说的"输入法文字显示在光标后"指的是 **Mac 上的胶囊**，不是手机。
+   * 两边都画就是同一串出现两次（10-11 用户拿截图说「不对」，指的就是这个）。
+   */
+  compose: (text) => {
+    noteMacTextComposing(text)
+  },
+})
+/** 只有归属在 `active` 时才收字：`parked`（用户在手机上按了 ×）还往里送就是跟他抢键盘。 */
+function macTextCapturing() {
+  return macKeyboard.value === 'active'
+}
+/**
+ * 收字字段**当前有没有拿到焦点** —— 这才是"按键归谁"的判据。
+ * ⚠️ 不能拿 `macTextCapturing()` 当它：状态是 active 但焦点在别处（用户刚点了长条上的键、
+ * 或窗口刚切回来）时，`useMirrorInput` 那边会以为"有人收"而不发 `kind:'text'`，
+ * 隐藏字段又收不到事件 ⇒ 两边都不发，按键凭空消失（10-11 真机撞到的：敲进去一个字符都没落地）。
+ */
+const macTextFocused = ref(false)
+
+/**
+ * 候选窗锚点（G1 续）：macOS 摆放输入法候选窗**只认宿主交给它的 caret 矩形**。
+ * 原生应用（竞品）自己实现 `NSTextInputClient.firstRectForCharacterRange:`，把手机光标
+ * 换算成屏幕坐标返回回去；Electron 里这条方法改不了 —— Chromium 拿**聚焦元素的 DOM caret
+ * 矩形**充当它。所以"候选窗贴哪"在渲染层只有一条路：**把收字字段摆成那个矩形**。
+ *
+ * ⚠️ 设备侧**报得出手机光标的屏幕矩形**（Slice 4c，已真机验证）—— 2026-10-11 走完了全程：
+ * 第一轮误判成"Android 没有这条路"；第二轮从竞品身上挖出 `requestCursorUpdates`（**不是不下发，
+ * 是要输入法先要**，我们没要 `mCursorRect` 才恒为 `0,0-0,0`）；第三轮真机验证发现回调会来、
+ * 但坐标对不上 —— 原因不是平台不行，而是漏了 `getMatrix()`（`getInsertionMarker*` 是**编辑器
+ * 本地坐标**，官方那句 "in the screen coordinates" 说的是过矩阵之后的结果）。补上变换后
+ * 两类编辑器都精确吻合，详见 `docs/NATIVE_MIRROR.md` §G1 Slice 4c。
+ *
+ * 所以：**设备报的那条优先**（`TRUST_DEVICE_CARET`，现在开着）；下面这套"自己攒"的估计只在
+ * 设备没报时兜底（编辑器不支持、或光标没了）。
+ *
+ * 三个量缺一个观感就不对：
+ * - `x` = 基准 x + 已送文本的推进宽度（不然打几个字候选窗就落在光标后面）；
+ * - `y` = 基准 y；
+ * - `height` = **一个行高** —— 1px 高的矩形会被 macOS 摆在那个点上、压在文字行上；
+ *   一个行高、且以锚点为中心，候选窗才落在文字行**下方**。
+ */
+
+/**
+ * 要不要采信设备报来的光标矩形（Slice 4c）。**开**。
+ *
+ * 2026-10-11 这条走过一段弯路，记下来免得再踩：设备侧 `getInsertionMarker*` 报的是
+ * **编辑器本地坐标**，不是屏幕坐标 —— 而 `CursorAnchorInfo` 的**类摘要**写的是
+ * "in the screen coordinates"，那句话说的是**过 `getMatrix()` 之后**的结果。当时漏了那一步，
+ * 于是把"本地坐标"误判成"平台给不出屏幕坐标"，一度把这条路整个关掉。
+ *
+ * 补上 `matrix.mapPoints()` 后，真机实测两类编辑器都对得上（`docs/NATIVE_MIRROR.md` §G1 Slice 4c）：
+ * MIUI 原生 EditText 的矩阵是纯平移（= 控件屏幕原点），WebView 的矩阵是缩放 2.75 + Y 平移 244
+ * （= 设备像素比 + WebView 顶部），变换后的值都精确落在控件真实边界内。
+ *
+ * 设备侧已经做完变换、报的就是**屏幕坐标（设备 px）**，所以这里直接采信。
+ * 若哪天遇到某类编辑器又不对，先查它的 `getMatrix()` 有没有被正确设置，再考虑按应用放行。
+ */
+const TRUST_DEVICE_CARET = true
+
+const macTextAnchorBase = ref(null)
+/** 自基准以来**已提交**的文本（退格往回删一个字符）。 */
+const macTextCommitted = ref('')
+/** 当前合成串（拼音）。合成结束并入上面那串 —— 期间它顶替光标，所以也要算进推进宽度。 */
+const macTextComposing = ref('')
+/** 设备报来的手机光标矩形（设备坐标）。**有它就以它为准**，上面那套估计整个让位。 */
+const macTextDeviceCaret = ref(null)
+
+/** 换算结果：`.mirror-screen` 内的 CSS px，绑给字段的 `left/top/height`。 */
+const macTextAnchorCss = ref(null)
+
+/**
+ * `.mirror-screen` 的宽（CSS px）—— 胶囊**固定宽度**要按它夹取，免得顶出画面右缘。
+ * 与 `macTextAnchorCss` 同一个出处（`syncMacTextAnchor()` 里那次 `getBoundingClientRect()`），
+ * 所以是同一个 ref 家族：一起更新，不会出现"位置是新的、宽度是旧的"。
+ * 拿不到就是 0（= 未知），`capsuleRect` 那时**不夹**。
+ */
+const macTextScreenWidth = ref(0)
+
+/**
+ * 拼音胶囊：把"正在输入的拼音"画在 Mac 上（竞品同款形状）。
+ * 为什么要自己画见 `macTextCapsule.js` 顶部 —— 一句话：macOS 不代画 marked text，
+ * 而我们的收字字段是 1×1 全透明，Chromium 画在里面等于看不见。
+ *
+ * ⚠️ 竞品是**三层**：正文行 → 胶囊 → 系统候选条。所以胶囊**不骑在正文行上**，
+ * 而是自己占正文行**下面**那一格；交给 macOS 的 caret 矩形也跟着下移成这一格
+ * （见 `macTextAnchorStyle`），系统候选条才会落在胶囊**下面**而不是压着胶囊。
+ * 两个矩形的关系与取值依据在 `macTextCapsule.js` 的 `capsuleRect`。
+ *
+ * ⚠️ 胶囊**固定宽度**且**夹在画面内**（第四轮，用户：「拼音框不要无限长，固定宽度，
+ * 而且不要超出屏幕」）：宽度与夹取都在 `capsuleRect` 里算，所以**字段位置跟着一起夹** ——
+ * 两层同源，不会一个夹了一个没夹。
+ */
+const macTextCapsuleState = computed(() =>
+  macTextCapsule({
+    capturing: macTextCapturing(),
+    focused: macTextFocused.value,
+    composing: macTextComposing.value,
+  }),
+)
+/** 胶囊矩形 = 交给 macOS 的那一格。字段位置与胶囊样式**同源**，两层不会错开。 */
+const macTextCapsuleRect = computed(() => capsuleRect(macTextAnchorCss.value, macTextScreenWidth.value))
+const macTextCapsuleStyle = computed(() => capsuleBox(macTextAnchorCss.value, macTextScreenWidth.value))
+
+function macTextCanvasRect() {
+  return canvasHost.value?.querySelector?.('canvas')?.getBoundingClientRect?.() ?? null
+}
+
+/** 一个 em 有多少设备像素（1sp = dpi/160 px）。密度取自设备（`wm density`，会话启动时那份）。 */
+function macTextEmPx() {
+  const size = getVideoSize()
+  const info = getSessionInfo()
+  const dpi = scaleDisplayDpi(info?.screenSize, info?.screenDpi, size)
+  // 密度拿不到就按长边等比估：1080×2340 / 440dpi 的机器上 16sp ≈ 44px ≈ 长边的 1.9%。
+  return dpi > 0 ? emSizePx(dpi) : (size?.height ?? 0) * 0.019
+}
+
+/** 设备报来的光标矩形 —— 只在 `TRUST_DEVICE_CARET` 打开时才认（原因见那个常量）。 */
+function reportedDeviceCaret() {
+  return TRUST_DEVICE_CARET ? caretRectToAnchor(macTextDeviceCaret.value) : null
+}
+
+/** 锚点（设备坐标）：采信设备报的光标时以它为准，否则用「基准 + 已送文本推进宽度」。 */
+const macTextAnchor = computed(() => {
+  const reported = reportedDeviceCaret()
+  if (reported) return { x: reported.x, y: reported.y }
+  const base = macTextAnchorBase.value
+  if (!base) return null
+  const advance = estimateAdvancePx(macTextCommitted.value + macTextComposing.value, macTextEmPx())
+  return { x: base.x + advance, y: base.y }
+})
+
+/** caret 矩形的高度（设备 px）：设备报了且被采信就照抄，否则按一个行高估。 */
+function macTextCaretHeightPx() {
+  const reported = reportedDeviceCaret()
+  return reported?.height > 0 ? reported.height : macTextEmPx() * LINE_HEIGHT_RATIO
+}
+
+/**
+ * 设备坐标 → 交给 macOS 的 caret 矩形。纯换算在 `macTextAnchor.js`，这里只负责取矩形。
+ *
+ * ⚠️ 定位祖先的矩形**只量一次**、两个用途：`deviceToScreen` 拿它换算坐标，
+ * `macTextScreenWidth` 拿它的宽夹取固定宽度胶囊。分两次量不但多一次布局读，
+ * 还可能量到两帧之间的不同值（位置是新的、宽度是旧的）。
+ */
+function syncMacTextAnchor() {
+  const screenRect = macTextInput.value?.parentElement?.getBoundingClientRect?.() ?? null
+  macTextScreenWidth.value = screenRect?.width ?? 0
+  macTextAnchorCss.value = deviceToScreen({
+    point: macTextAnchor.value,
+    rect: macTextCanvasRect(),
+    size: getVideoSize(),
+    screenRect,
+    caretHeightPx: macTextCaretHeightPx(),
+  })
+}
+
+/** 把窗口里的一个点定成**新基准**（设备坐标），并把已送文本清零。 */
+function anchorMacTextAt(clientX, clientY) {
+  if (!macTextCapturing()) return
+  macTextAnchorBase.value = clientToDevice({ clientX, clientY, rect: macTextCanvasRect(), size: getVideoSize() })
+  macTextCommitted.value = ''
+  macTextComposing.value = ''
+  syncMacTextAnchor()
+}
+
+/** 还没点过画面时的兜底：画面正中。比留在左上角好 —— 至少不跟手机光标差半屏。 */
+function anchorMacTextToVideoCenter() {
+  const size = getVideoSize()
+  if (!size?.width || !size?.height) return
+  macTextAnchorBase.value = { x: size.width / 2, y: size.height / 2 }
+  macTextCommitted.value = ''
+  macTextComposing.value = ''
+  syncMacTextAnchor()
+}
+
+/**
+ * 送出去一段文本 = 手机光标往前走了那么多。记账要发生在**送之前**、且只发生一次
+ * （`createMacTextSink` 的 `fallback` 是"桥没连上时补发"，不能在那里再记一遍）。
+ */
+function noteMacTextCommit(text) {
+  macTextCommitted.value += text
+  macTextComposing.value = ''
+  syncMacTextAnchor()
+}
+
+/** 合成串每敲一个字母来一条，**顶替**上一条（不是追加）。空串 = 结束合成。 */
+function noteMacTextComposing(text) {
+  macTextComposing.value = text
+  syncMacTextAnchor()
+}
+
+/** 退格：手机把光标左边的字删掉了，我们跟着退。合成中的退格只撤合成，不动已提交那串。 */
+function onMacTextBackspace() {
+  if (!macTextCapturing()) return
+  if (macTextComposing.value) macTextComposing.value = ''
+  else macTextCommitted.value = macTextCommitted.value.slice(0, -1)
+  syncMacTextAnchor()
+}
+
+/** 退格/删除键。`useMirrorInput` 那条路只负责把按键送给手机，光标这笔账要在这边跟着记。 */
+function onMacTextKeyDown(event) {
+  if (event.key === 'Backspace' || event.key === 'Delete') onMacTextBackspace()
+}
+
+/**
+ * 收字字段的位置 = **交给 macOS 的 caret 矩形**。
+ *
+ * ⚠️ 用的是**胶囊矩形**，不是正文行矩形（`macTextCapsuleRect`，几何见 `macTextCapsule.js`）：
+ * macOS 把系统候选条摆在 caret 矩形的下沿，所以矩形落在哪一格，候选条就贴在哪一格下面。
+ * 竞品是「正文行 → 胶囊 → 候选条」，我们把矩形放到胶囊那一格才复现得了；
+ * 放在正文行那一格的话，候选条会压在胶囊上（10-11 旧版就是这样）。
+ *
+ * `font-size` / `line-height` 决定 DOM caret 的高度 —— 必须跟盒子一样高，否则 Chromium
+ * 报给 macOS 的还是那条 1px 的线，候选条会压在胶囊中间。
+ */
+const macTextAnchorStyle = computed(() => {
+  const rect = macTextCapsuleRect.value
+  if (!rect) {
+    // 退化（高度拿不到）：只给位置，不给高度 —— 宁可退回"1px 的线"，也不要编一个假高度。
+    const css = macTextAnchorCss.value
+    return css ? { left: `${css.left}px`, top: `${css.top}px` } : {}
+  }
+  return {
+    left: `${rect.left}px`,
+    top: `${rect.top}px`,
+    height: `${rect.height}px`,
+    fontSize: `${rect.height}px`,
+    lineHeight: `${rect.height}px`,
+  }
+})
+
+/** 点画面 = 用户把手机光标放到了那里，收字字段跟过去，候选窗才会贴在光标下。 */
+function onMirrorScreenPointerDown(event) {
+  anchorMacTextAt(event.clientX, event.clientY)
+}
+
+function focusMacText() {
+  if (!macTextCapturing()) return
+  if (!macTextAnchor.value) anchorMacTextToVideoCenter()
+  macTextInput.value?.focus({ preventScroll: true })
+}
+function onMacCompositionEnd(event) {
+  // 合成串的清理由 `macSink.onCompositionEnd` 里的 `compose("")` 负责（那里才看得全：
+  // 提交、Esc 取消、收成空串三种走法都要收起胶囊），这里只管把字段自己清干净。
+  macSink.onCompositionEnd(event)
+  if (macTextInput.value) macTextInput.value.value = ''
+}
+function onMacInput(event) {
+  macSink.onInput(event)
+  if (!macSink.composing && macTextInput.value) macTextInput.value.value = ''
+}
+/**
+ * 设备送回来的坏消息：字发出去了但没落进任何输入框（手机上没聚焦的编辑器）。
+ * 以前这是静默丢的 —— 用户只看"打了没上屏"，什么都查不到（10-11）。
+ */
+onMacKeyboardFeedback(({ reason }) => {
+  showNotice(reason === 'no-editor' ? '手机上没有正在输入的输入框' : `Mac 键盘没送进去（${reason}）`)
+})
+// 归属一变成 active 就把焦点落到收字字段上，否则用户得先点一下画面才能打字。
+// ⚠️ 必须等一拍：`:disabled` 与这个 watcher 同一次更新里改，字段这会儿还是 disabled，focus() 会被忽略。
+watch(macKeyboard, () => nextTick(focusMacText))
+
 /** 指针 / 滚轮 / 键盘 → 控制消息（直写本进程 control socket）。 */
-useMirrorInput({ target: canvasHost, getVideoSize })
+useMirrorInput({
+  target: canvasHost,
+  getVideoSize,
+  // 可打印字符归谁：收字字段真的拿到焦点才归它，否则照旧走 `kind:'text'`（ASCII 不回归）。
+  captureText: () => macTextFocused.value && macKeyboard.value === 'active',
+})
 
 const title = computed(() => meta.value?.label || meta.value?.packageName || '镜像')
 
@@ -327,6 +681,7 @@ function showNotice(text) {
     noticeTimer = null
   }, 2400)
 }
+
 
 /**
  * 接回横幅上的应用图标与名称：都取自启动参数（主进程建会话时带来，`.adr` 那条路径也带图标）。
@@ -553,14 +908,30 @@ onMounted(() => {
   // 虚拟显示按**画面区**算（见 direct-session 的 contentCss）：dev 右侧那条 HUD 边栏
   // 不算进画面区，否则显示比例与画面比例对不上。必须在 bootstrap 之前设好。
   setContentElement(canvasHost.value)
-  hostResize = new ResizeObserver(() => syncCanvasBox())
+  hostResize = new ResizeObserver(() => {
+    syncCanvasBox()
+    // 锚点存的是设备坐标：画面矩形一变就得重算显示位置，否则候选窗会跟手机光标错开。
+    syncMacTextAnchor()
+  })
   if (canvasHost.value) hostResize.observe(canvasHost.value)
+  // 退格只走按键那条路（`kind:'key'`），收字字段的 `input` 事件里 `data` 是 null，翻不成文本 ——
+  // 所以光标账要在这里跟着记，不然退几个字之后候选窗就停在原地了。
+  window.addEventListener('keydown', onMacTextKeyDown)
+  // 设备侧报来的**手机光标矩形**（Slice 4c）：有它候选窗就贴真实光标，没有才退回上面那套估计。
+  disposeMacCaret = onMacKeyboardCaret((rect) => {
+    macTextDeviceCaret.value = rect
+    syncMacTextAnchor()
+  })
+  // 输入法归属是主进程记着的，页面重载（HMR / 接回）后不能自己回到「关」——问一句。
+  setMacKeyboard('state').then(applyMacKeyboardState).catch(() => {})
   void booted()
 })
 
 onBeforeUnmount(() => {
   if (statsTimer) clearInterval(statsTimer)
   hostResize?.disconnect()
+  window.removeEventListener('keydown', onMacTextKeyDown)
+  disposeMacCaret?.()
   disposeSizeChanged?.()
   disposeRendererType?.()
   try {
@@ -580,11 +951,43 @@ onBeforeUnmount(() => {
          长条）都只盖画面那一块，这样调试信息永远不被盖住，也不会压在镜像画面上。 -->
     <div class="mirror-main">
       <!-- 画面：位置与尺寸固定（= 窗口减掉那圈黑框与右边那条长条，两边同一个出处 `mirrorScreenInsets()`）。 -->
-      <div class="mirror-frame">
+      <div class="mirror-frame" @pointerdown="focusMacText()">
         <!-- 屏内各层在同一格里叠，压在画面上的是后面的兄弟节点；`attachCanvas()` 会清空
              `mirror-canvas`，所以覆盖层都是它的兄弟，不放进去。 -->
-        <div class="mirror-screen">
+        <div class="mirror-screen" @pointerdown="onMirrorScreenPointerDown($event)">
           <div ref="canvasHost" class="mirror-canvas"></div>
+
+          <!-- Mac 键盘收字的隐藏字段（Slice 4）：1×1、不接鼠标，只为让 macOS 输入法有可聚焦的
+               宿主肯出候选窗。它是 `.mirror-canvas` 的兄弟（`attachCanvas()` 会清空 canvasHost）。
+               `left/top` 绑的是**胶囊那一格**（G1 续）：macOS 的系统候选条跟着宿主的 DOM caret 走，
+               摆在这个矩形下沿；字段不动，候选条就会落在画面左上角。 -->
+          <input ref="macTextInput" class="mirror-mactext" aria-label="Mac 键盘输入" autocomplete="off"
+            :style="macTextAnchorStyle" :disabled="!macTextCapturing()" @compositionstart="macSink.onCompositionStart()"
+            @compositionupdate="macSink.onCompositionUpdate($event)" @compositionend="onMacCompositionEnd($event)"
+            @input="onMacInput($event)" @focus="macTextFocused = true" @blur="macTextFocused = false" />
+
+          <!-- dev 探针（G1 续）：**交给 macOS 的那个 caret 矩形本身**（1px 宽、一个胶囊高）。
+               ⚠️ **默认不画** —— 用户 10-11：「我不要自定义光标，输入选择框位置对就行」。
+               它只是给我们自己看锚点对不对的诊断，不是产品的一部分，所以挂在 dev 调试面板
+               （`tools` 按钮，默认收起）底下；打包版里 `devTools` 为假，元素压根不存在。
+               判据：它跟**胶囊**重合 ⇒ 矩形对；候选条紧贴它下边 ⇒ 高度对；
+               打字后它落在手机光标后面 ⇒ 推进宽度估小了。 -->
+          <div v-if="devTools && showHud && macTextCapsuleRect && macTextCapturing()" class="mirror-mactext-probe"
+            :style="macTextAnchorStyle" aria-hidden="true"></div>
+
+          <!-- 拼音胶囊（G1 续）：**正在输入的拼音**画在 Mac 上（竞品同款形状）。
+               macOS 不代画 marked text，收字字段又是 1×1 全透明 ⇒ 不画这个，Mac 上就什么都看不到。
+               它占**正文行下面那一格**（与交给 macOS 的矩形同源）；系统候选条再贴在它下面，
+               于是形成竞品那三层「正文行 → 胶囊 → 候选条」。
+               ⚠️ **固定宽度**（`capsuleBox()` 给死，不随合成串变）、且被夹在画面内
+               （用户 10-11：「拼音框不要无限长，固定宽度，而且不要超出屏幕」）；装不下的合成串
+               在内部**从头部裁**，光标那一段永远留着。
+               ⚠️ 不接指针、不参与输入 —— 锚点仍由收字字段决定，这里只是显示器。 -->
+          <div v-if="macTextCapsuleState.visible" class="mirror-mactext-capsule"
+            :style="macTextCapsuleStyle" aria-hidden="true">
+            <span class="mirror-mactext-capsule__text">{{ macTextCapsuleState.text }}</span>
+            <span class="mirror-mactext-capsule__caret"></span>
+          </div>
 
           <!-- 设备睡下了：给一个「继续使用」点亮屏幕（照竞品的「已休眠」那一格）。
                不自动弹醒 —— 手按电源键是用户的决定，程序不该抢。 -->
@@ -661,6 +1064,23 @@ onBeforeUnmount(() => {
               <TooltipPortal>
                 <TooltipContent side="left" :side-offset="12" :class="TIP_CLASS">{{
                   screenIsOff ? '恢复手机亮屏' : '关掉手机屏，镜像继续'
+                }}</TooltipContent>
+              </TooltipPortal>
+            </TooltipRoot>
+            <!-- Mac 键盘（G1）：把设备默认输入法切到我们那条，Mac 的输入法才能往手机里打字。
+                 亮 = 这台手机现在归我们；抢不过别人时主进程推 `switched_away`，这颗不亮并在画面下方给一句话。
+                 ⚠️ 归属是**设备级**的：同一台手机的多个窗口共用它，别按窗口理解。 -->
+            <TooltipRoot>
+              <TooltipTrigger as-child>
+                <button type="button" class="mirror-rail__key" :class="{ 'is-active': macKeyboard === 'active' }"
+                  :disabled="macKeyboardBusy" aria-label="使用 Mac 键盘" :aria-pressed="macKeyboard === 'active'"
+                  @click="toggleMacKeyboard">
+                  <Icon icon="lucide:keyboard" :width="18" :height="18" />
+                </button>
+              </TooltipTrigger>
+              <TooltipPortal>
+                <TooltipContent side="left" :side-offset="12" :class="TIP_CLASS">{{
+                  MAC_KEYBOARD_TIPS[macKeyboard]
                 }}</TooltipContent>
               </TooltipPortal>
             </TooltipRoot>
@@ -788,9 +1208,97 @@ onBeforeUnmount(() => {
 }
 
 .mirror-screen {
+  /* 收字字段要 `position: absolute` 才挪得到手机光标上（G1 续），它得有个定位祖先。 */
+  position: relative;
   overflow: hidden;
   border-radius: var(--radius);
   background: #000;
+}
+
+/* Mac 键盘收字的隐藏字段（Slice 4）：要能聚焦、要能出候选窗，但视觉上必须不存在。
+   靠 1×1 + 全透明 + 不接指针事件收掉；`left/top` 由 `macTextAnchorStyle` 绑到**胶囊那一格**
+   （G1 续）—— 这一个点是它唯一的布局职责，其余各层仍照旧靠 grid 同格叠。
+   ⚠️ 不能用 `display:none` / `visibility:hidden` / 零尺寸收掉：那样 DOM caret 矩形不存在，
+   macOS 会把候选窗丢回窗口左上角，正是这次要修的现象。 */
+.mirror-mactext {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 1px;
+  pointer-events: none;
+}
+
+/* dev 探针（G1 续）：**交给 macOS 的那个 caret 矩形本身**（= 胶囊那一格），不接指针、不参与输入。
+   ⚠️ 只在 dev 且调试面板打开时才渲染（见模板里的 `v-if`）—— 它不是产品的"光标"，
+   别让它默认出现在画面上。判据：它跟**胶囊**重合 ⇒ 矩形对；候选条紧贴它下边出现 ⇒ 高度对；
+   打字/退格时它跟着走 ⇒ 账记上了；停在原地说明账没记上。 */
+.mirror-mactext-probe {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  background: #ff5a5a;
+  pointer-events: none;
+}
+
+/* 拼音胶囊（G1 续）：正在输入的拼音画在 Mac 上，形状照竞品（白底圆角胶囊 + 下划线拼音 + 光标）。
+   位置、**固定宽度**与高度由 `capsuleBox()` 给（横向贴锚点并夹进画面、**顶边贴在正文行下沿**、
+   高 ≈1.3 个行高、宽 ≈3.4 个胶囊高），⚠️ 这里不再有 `translateY(-50%)` —— 胶囊不骑在正文行上，
+   而是自己占正文行下面那一格。
+   ⚠️ 宽度**不随合成串变**（用户 10-11：「拼音框不要无限长，固定宽度，而且不要超出屏幕」）：
+   旧版没有 `width`、内容又把盒子撑开，长拼音会顶出画面右缘被 `overflow: hidden` 裁掉半截。
+   ⚠️ 它只是显示器：不接指针、不参与输入、不进无障碍树；锚点仍由收字字段决定。
+   系统候选条是 macOS 画的，会按同一个矩形落在它**下面**，所以两层不会打架。 */
+.mirror-mactext-capsule {
+  position: absolute;
+  /* `flex`（不是 `inline-flex`）：宽度由 `capsuleBox()` 定死，内容不许再撑它。 */
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 0 0.5em;
+  border: 1px solid rgb(0 0 0 / 14%);
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 16%);
+  color: #111;
+  line-height: 1;
+  /* 固定宽度装不下时不许溢出圆角外（真正裁的是下面那两处）。 */
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.mirror-mactext-capsule__text {
+  /* 下划线 = marked text 的语义（这一段还没定下来），与竞品一致。 */
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  letter-spacing: 0.06em;
+  /* 合成串长了只压这一段（`flex-shrink` + `min-width: 0`），光标那一段永不被压缩。 */
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  /* 装不下时**从头部裁**（保住靠近光标的那一端）：`direction: rtl` 让 LTR 文本在盒内右对齐、
+     溢出裁在左边。字符顺序不变 —— 拼音是纯 LTR 强字符，不会触发双向重排。 */
+  direction: rtl;
+}
+
+.mirror-mactext-capsule__caret {
+  /* `flex: none` —— 光标是这一段里最不能丢的东西：合成串再长它也得留在胶囊内。 */
+  flex: none;
+  align-self: stretch;
+  width: 1.5px;
+  margin: 0.25em 0 0.25em 0.08em;
+  background: #111;
 }
 
 /* 画面容器（`canvasHost`）：解码出的 canvas 居中放在这块矩形里，虚拟显示也按它算尺寸。 */

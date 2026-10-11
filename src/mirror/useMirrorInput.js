@@ -1,14 +1,22 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import { KEYBOARD_KEYS, KEY_META } from '../../shared/keys.js'
+import { routeKeyDown } from './keyRouting.js'
 import { sendControl } from './direct-session.js'
 
 /**
  * 镜像窗口输入：把指针 / 滚轮 / 键盘事件翻成控制消息，直接写
  * 本进程内的 control socket（直连形态，不经过主进程）。
+ *
+ * @param {{ target: import('vue').Ref<HTMLElement | null>, getVideoSize: () => ({width:number,height:number}|null),
+ *   /** 返回 true = 可打印字符由 Mac 键盘那条路（隐藏字段的 `input` → 桥）送，
+ *    *  这里就**不许**再发 `kind:'text'` —— 两处都发就是每个字打两遍。
+ *   captureText?: () => boolean }} options
  */
-export function useMirrorInput({ target, getVideoSize }) {
+export function useMirrorInput({ target, getVideoSize, captureText }) {
   let pointerActive = false
   let activePointerId = null
+  /** 已经发过 `down` 的 keyCode：`keyup` 只补发这些，避免出现无主的 up。 */
+  const forwardedKeys = new Set()
 
   function send(message) {
     sendControl(message)
@@ -86,26 +94,27 @@ export function useMirrorInput({ target, getVideoSize }) {
   }
 
   function onKeyDown(event) {
-    // Cmd 组合键交给系统与应用（Cmd+Q / Cmd+W 等）。
-    if (event.metaKey) return
-    const keyCode = KEYBOARD_KEYS[event.key]
-    if (keyCode !== undefined) {
+    const route = routeKeyDown(event, { captureText: captureText?.() === true })
+    if (route === 'key') {
+      const keyCode = KEYBOARD_KEYS[event.key]
+      // 记下真的按下过的那几个，`keyup` 只补发它们 —— 输入法吞掉的键（合成态的空格 /
+      // 回车）不发 down，也就不该冒出一个无主的 up。
+      forwardedKeys.add(keyCode)
       send({ kind: 'key', action: 'down', keyCode, metaState: metaState(event) })
       event.preventDefault()
       return
     }
-    // 可打印字符走文本注入；Ctrl / Alt 组合（复制粘贴等）暂不处理。
-    if (event.ctrlKey || event.altKey) return
-    if (event.key.length === 1) {
+    if (route === 'text') {
       send({ kind: 'text', text: event.key })
       event.preventDefault()
     }
   }
 
   function onKeyUp(event) {
-    if (event.metaKey) return
     const keyCode = KEYBOARD_KEYS[event.key]
     if (keyCode === undefined) return
+    const forwarded = forwardedKeys.delete(keyCode)
+    if (!forwarded || event.metaKey) return
     send({ kind: 'key', action: 'up', keyCode, metaState: metaState(event) })
   }
 

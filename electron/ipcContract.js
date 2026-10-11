@@ -70,6 +70,12 @@ export const CHANNELS = {
   mirrorWindowButtons: 'mirror:windowButtons',
   /** 镜像窗口 → 主进程：dev 调试边栏要占多少宽（0 = 收起）。主进程把窗口撑宽同样的量，画面那块才不被挤小。 */
   mirrorWindowHud: 'mirror:windowHud',
+  /** 镜像窗口 → 主进程：长条那颗「使用 Mac 键盘」。`on` 抢过设备输入法、`off` 还原、`state` 只问当前归属。 */
+  mirrorMacKeyboard: 'mirror:macKeyboard',
+  /** 主进程 → 镜像窗口：Mac 键盘的输入法归属 `{ state, token, socket }`（state: `active` / `switched_away` / `unavailable` / `parked` / `off`）。 */
+  mirrorMacKeyboardState: 'mirror:macKeyboardState',
+  /** 镜像窗口 → 主进程：设备侧胶囊上的 × 被按了（桥收到 `yield`），让出输入法。 */
+  mirrorMacKeyboardYield: 'mirror:macKeyboardYield',
 
   /** macOS 系统权限（electron/permissions.js）。 */
   permissionsStatus: 'permissions:getStatus',

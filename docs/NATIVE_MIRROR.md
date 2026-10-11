@@ -214,6 +214,188 @@ scrcpy 会话用官方 `@yume-chan/adb-scrcpy` / `@yume-chan/scrcpy` 建立，�
    AndroMeld 的 resize 命令带 dpi（三个 int w/h/dpi），我们要跟就得扩自己的协议 —— 那才能真正做到
    "拖窗口任意大也不掉清晰度/不漂移"。
 
+### G1 切片：Mac 键盘输入法（2026-10-11 开工，`[~]` 进行中）
+
+
+用户点单「把竞品的键盘功能抄过来」，并选定 **b2 形状**（输入法自己当客户端连 `adb forward` 的本地 socket，**不新增设备端常驻进程**；协议形状仍照竞品的能力位信封）。待办口径在 `TODO.md` §6.2 G1。
+
+**为什么非要做输入法**（三条实测，别再往上游找现成出口）：
+
+- `controller.injectText("中文abc123测试")` 在 Mi 10 上**只落地 `abc123`**，中文整段被吞 —— 而且**与设备上装的是哪个输入法无关**（两组单变量：竞品输入法激活、搜狗输入法激活，结果逐字相同）。上游那条消息里根本没有 `escape_non_ascii` 那个字段（`@yume-chan/scrcpy` 的 `ScrcpyInjectTextControlMessage` = `type u8 + text string(u32)`），非 ASCII 走不通是设计如此。
+- `adb shell input text '中文abc'` 在 MIUI 14 直接 `NullPointerException @ InputShellCommand.sendText`；`cmd clipboard set-text` 回 `No shell command implementation`。⇒ 平台 shell 那条也不行。
+- **但 `setClipboard` + `KEYCODE_PASTE(279)` 能整串送中文**（实测搜索框落地 `剪贴板中文abc123测试`，全程只走 scrcpy 控制消息）。这一条是 Slice 5 文本剪贴板同步的地基，**不是**键盘输入的替代方案（它每次覆盖手机剪贴板，与同步功能互斥）。
+
+**竞品的实现地图**（照抄形状的来源，全部取自它的包体与设备日志）：胶囊是**手机上它自己的输入法**画的（`com.catchingnow.andfiles.helper/.MirrorInputMethodService`，APK 资源 `mirror_ime_status_title`="AndroMeld" 且所有语言都不翻译、`mirror_ime_action_close`="关闭输入法"、`mirror_ime_subtype`="屏幕镜像"），Mac 端只做 `ime set` + 记原输入法 + 还原；⚠️ **它记原输入法的存根实测是 `/data/local/tmp/anddrive-mirror-ime-state-user-0.json`**（JSON：`originalInputMethodId` + `activeSessionTokens` / `enabledSessionTokens` / `pendingRestoreOriginalInputMethod` / `pendingDisableMirrorInputMethod` / `lastUpdatedAtMs`，10-11 晚在设备上直接读到），早先记的 `anddrive-mirror-ime-original.txt` 在设备上**不存在**，以实测的 `.json` 为准；Mac 侧文本走 `NSTextInputClient`（`setMarkedText` 收候选、`insertText:` 才提交）。它设备侧日志暴露的状态形状 = `sessions=[<uuid>{display=0,user=0,alive=true,text=true,clipboard=true}]` + `hasBridge/dispatch/selected` ⇒ 我们的信封按这几个字段定。⚠️ 它用 binder 的前提是设备上本来就有常驻 `MirrorServerMain`（兼 WebRTC 信令），我们没有那个前提 ⇒ 走 b2。
+
+**切换与夺回（10-11 实测，Slice 2 的地基）**：
+
+- `ime enable` + `ime set` 都合法，但 **`ime set` 那句 `selected for user #0` 不可信** —— 实测它报成功后 `settings get secure default_input_method` 仍是别人的。
+- **直写 `settings put secure default_input_method <我们的>` 有效且守得住**：连着 4 次写入、每次 1.2s 后回读都是我们的；静置 6s、以及重新聚焦搜索框之后都还是我们的 —— **同场 AndroMeld 正在镜像这台手机**（它的输入法此前会秒级夺回）。⇒ 自动切换不需要用户点头，写这一条就够；但要配「写完回读校验 + 被抢走时重断言 / 或给反馈」，别只看命令返回值。
+- ⚠️ 两个镜像 app 同时跑夺回循环会**互相乒乓**。所以我们这边要有「让出（parked）」语义：用户按胶囊上的 ×、或在系统里手动切走，就**不再夺回**（竞品的 × 也正是这个意思，它日志里那句 `X is now a transient device-side yield`）。
+
+**Slice 1 已验收**（2026-10-11）：helper **1.6 / versionCode 7**（`resources/helper-app.apk` 已随构建回填），装 Mi 10 后 `ime list -a -s` 有我们那条，切过去后 `dumpsys input_method` 报 `mCurId=com.anddrive.helper/.MirrorInputMethodService mBoundToMethod=true`，手机右下角画出我们的胶囊（键盘图标 + `AndDrive` + ×，形状照竞品），按 × → `mInputShown=false` 胶囊消失。**测完已把用户手机还原回他原来的输入法**。构建配方（本机 PATH 里没有 java）：`JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ANDROID_HOME=~/Library/Android/sdk bash scripts/build-helper.sh`。
+
+**Slice 2 已验收**（2026-10-11，同一晚）：归属状态机在 `electron/mirror/macKeyboard.js`（**不 import adb**，设备读写全由 `session.js` 注入），入口是长条上新加的那颗 `lucide:keyboard`（在「关屏使用」下面、`tools` 上面），IPC 走 `mirror:macKeyboard`（`on` / `off` / `state`），状态回推走 `mirror:macKeyboardState`。
+
+- **归属是设备级的**：一台手机一份管理器（`macKeyboards` 按 serial 存），同一设备的第二个窗口复用同一份、不重复夺回；**最后一个镜像窗口关掉时自动还原**（`stopMirrorSession` → `releaseMacKeyboard`）。
+- 用户原输入法记两份：Mac 内存 + 设备侧 `/data/local/tmp/anddrive-mac-keyboard-original.txt`（Mac 被强杀后下次开启从设备那份捡回原值；捡不到就报 `unavailable` 并**不开** —— 不能把用户键盘永久留在我们手里）。设备回读的值要拼进 `echo > 文件`，所以过一道 `isSafeImeId` 卡死字符集。
+- 三条反馈文案照竞品 `mirror.ime.feedback.*`（`switched_away` / `unavailable`），走既有的 `showNotice`。
+- 真机端到端（Mi 10，同场 AndroMeld 仍在镜像）：点开关 → 变成我们的、stash 是原值；**手动 `settings put` 抢走 → 3.5s 内我们的循环自己抢回来**；再点一次 → 还原成开启前那一格、stash 清空。
+- ⚠️ 修掉一个自己造的 bug：**停手（防乒乓上限）之后再点「开」是空转** —— `enable()` 在 `running` 时直接 return，额度再也不装满，用户表现为"被抢走之后怎么点都回不来"。现在 `enable()` 在已运行时重置 `attempts` 并立刻对账一次（判据在 `tests/electron/macKeyboard.test.js`）。上限本身留着：两家无限互写不是解决问题。
+- ⚠️ 页面把「用户想要的」与「实际归属」分成两个 ref（`macKeyboardWanted` / `macKeyboard`）：合成一个之后，被抢走（`switched_away`）时再点一次会变成"重试"而不是"关掉这一格"，用户点两下都关不掉。
+- **× 的「让出（parked）」已接**（见下面 Slice 3）。
+
+**Slice 3 已验收**（2026-10-11）：通道 = 设备侧输入法监听**抽象** socket（`android.net.LocalServerSocket("anddrive-mac-keyboard")`），桌面侧 `adb.createSocket('localabstract:anddrive-mac-keyboard')` 连过去 —— 与 scrcpy 自己那条 `localabstract:scrcpy_<scid>` 同机制，**不需要 `forward`、两端都不开 TCP 端口**（这就是 b2；竞品用 binder 是因为它设备上本来就有常驻 `MirrorServerMain`）。线格式一行一条 JSON：Mac→设备 `hello{token}` / `commit{text}` / `ping`；设备→Mac `hello{proto,caps}` / `yield` / `pong`。三个文件：`helper-app/.../MirrorBridge.java`、`src/mirror/macBridge.js`、`src/mirror/macTextSink.js`。
+
+- ⚠️ **抽象 socket 在设备上任何 app 都连得上**（没有文件权限位、Java 侧拿不到对端 uid）⇒ 连上第一句必须对上 token，值走 `Settings.Global.anddrive_mac_keyboard_token`（桌面端每次开启换一个；输入法读它不需要权限）。真机验过：假 token 连上即被断，输入框一个字没进。
+- ⚠️ **半开连接是真实存在的**：设备侧早就关了，桌面侧 `read()` 永不返回、`writer` 还在 ⇒ `commit` 与 `yield` 一起静默消失（10-11 第一次"× 没反应"就是这个）。解法 = 保活：每 4s 一条 `ping`，任何来自设备的话都刷新 `lastPongAt`，超过 9s 没回话就主动 `socket.close()` 让重连循环重来。
+- ⚠️ **桥必须是进程内单例**：输入法服务会被系统反复重建，每建一个实例就各起一条监听线程的话，先起来那个占着 socket 并持有连接、后起来那个 `bind` 失败且 `out` 永远是 null —— `notifyYield` 读新实例、ping/pong 跑在旧实例上，× 就"发了但没人收到"。现在 `MirrorBridge.get(context)` 单例 + `setSink/clearSink`（服务实例只换落点，**`onDestroy` 不关桥**，关了会把 Mac 正在用的连接一起掐掉）。日志里带实例 id，一眼看得出是不是又冒出第二个。
+- 归属状态多了一格 `parked`（用户在手机上按了 ×）。⚠️ **× 必须把用户的原输入法真的写回去**：第一版只做「不再抢、不再送字、归属不动」，当场被打回 —— 我们这条输入法**没有键**，占着归属不还原就等于手机上打不出任何字（用户原话「关不掉 mac 打字了，调不出来手机输入法」；竞品的 × 也是还原，它日志里那句 `restoreOriginalInputMethodIfNeeded`）。现在 `park()` = 写回原值 + 清 stash + 撤夺回定时器；桌面那颗再点一下 = 重新接管（`enable()` 的 running 分支会补回 stash 与定时器），不是「关掉」。真机验过：接管（stash=搜狗）→ 按 × → `default_input_method` 回搜狗、stash 清空 → 再点搜索框，搜狗键盘正常弹出 ✓。
+- 真机端到端（Mi 10，helper 1.7/8）：`client authorized` → `notifyYield, connected=true` → 主进程 `[mackbd] parked` → 页面 tooltip 变「已在手机上关闭 Mac 键盘输入」；parked 期间手动把输入法改成百度的，6s 后**没被抢回** ✓；点一下恢复（那颗重新变亮）；再点一下关掉 → `default_input_method` 还原成用户原来那条、token 与 stash 都清空 ✓。
+- ⚠️ 排查这类"跨三层的状态没动"的问题，别猜：一次把三层都插临时日志（渲染层没有控制台出口就 `appendFileSync('/tmp/...')`，见记忆 `mirror-device-probing`），一轮就定位到是哪一段断的。本轮三处日志各命中一个根因（半开 / 多实例 / 下面那条）。
+- ⚠️ 顺带一个低级但阴间的 bug：主进程推的负载从「字符串」改成「对象」时，`watchMacKeyboardState` 里那句 `String(state ?? "off")` 没跟着改 ⇒ 页面收到 `"[object Object]"`，一律读成 `off`，表现成"× 按了没反应、状态推不上来"。**改 IPC 负载形状必须同时改订阅端**（这条在 `direct-session.js` 的注释里也写了）。
+- 还没做：Mac 侧中文候选（Slice 4 的代码与单测已就位，缺真人打一次拼音）；图片/文件剪贴板（Slice 5，走同一条桥的其它 op）。
+
+**Slice 4 已验（2026-10-11）+ 一个"关不掉"的真 bug**：
+
+- 中文这条通了，判据是**真键盘 + 临时探针**：`focus: active=true`（收字字段确实拿到焦点）→ 敲 `abc7` 全程 `input … composing=true` 一条都不送 → 提交候选（空格/回车）→ `compositionend data="abc7"` → 桥 → 手机搜索框出现 `abc7`。⚠️ **用户"打不了汉字"的第一层原因不是链路断**：Mac 处在拼音输入法时，字母全进合成态，**必须提交候选**才会发出去 —— 排查这类反馈先确认他提没提交。
+- **合成态也同步到手机**（用户 10-11：「竞品打字比我们的好看，它会将输入法文字显示在光标后」）：Mac 每次 `compositionupdate` 把**当前整串拼音**经桥送 `{op:'compose',text}` → 输入法 `InputConnection.setComposingText()` ⇒ 手机上出现带下划线的合成文字，提交时 `commitText` 直接替换它。真机验过：敲 `shd` 不提交 → 手机搜索框显示带下划线的 `sh d`；按空格选定 → 变成「手动」 ✓。协议上 compose 是高频的（每键一条），**不回 ack**（下一条就来覆盖，丢了无所谓）；空串走 `finishComposingText()`，桥断了也不会把半截拼音留在人家输入框里。
+  - ⚠️ **10-11 晚这条被改掉了**：合成串改成**只在 Mac 上画**（见 Slice 4d），**不再送手机** —— 用户拿截图说「不对」，指的正是同一串在手机上（下划线那段）与 Mac 胶囊里**各显示一遍**。竞品也不在手机上显示拼音。桥的 `{op:'compose'}` 与设备侧 `setComposingText` **都还在**（是桥的能力，不是死代码），要恢复就把它接回 `App.vue` 的 `compose` 里（见 `direct-session.js` 上那条注释）。
+  - 同一轮还修了一个隐患：`onCompositionEnd` 现在**一定**发一次空串。原先只有 `emit()` 那条路，而它对空串提前 `return` ⇒ **Esc 取消合成时没人通知**，Mac 胶囊会一直挂着。
+- ⚠️ **候选词表拿不到，但候选窗不用我们做**：macOS 不把第三方输入法的候选词表暴露给应用（`NSTextInputClient` 只有 marked text，没有 candidates）。⚠️ **旧结论更正（10-11 晚）**：这里原先写的是"截图里那排「1 史蒂夫舒服 2 啥的方式」是**手机自己的输入法**在合成（外接键盘模式），要那个观感只能走 UHID" —— 那个推断**不成立**："macOS 不给词表" 推不出 "候选条不是 macOS 画的"；**系统候选窗本来就是 macOS 自己画的，应用根本不需要知道词表**。复核（用户确认那张截图取自**竞品的 Mac 窗口**）：候选条就是 **macOS 的系统候选窗**，按我们交给它的 caret 矩形往下摆 —— 这一块**我们本来就有**，4c 做的是把位置定对。真要"手机自己出候选"那条路（UHID + Mac 切英文模式）仍然存在，但它会换掉整条输入链路、与我们的 helper 输入法互斥，**不是**拿到候选条的前提。
+- 补了 ack/nack：手机上没有聚焦的输入框时，提交以前是**静默丢**（发了字什么都没发生也没人说），现在设备回 `{op:'ack'}` / `{op:'nack',reason:'no-editor'}`，画面给一句「手机上没有正在输入的输入框」。⚠️ nack 那条**只有代码与链路，真人演示没做出来**（adb 侧焦点控制不稳，测出来的一次是"字进了别处"）。
+- ⚠️ 中途出现的 `abc7abc7` 双份是**探针自己造的**（模板字符串里 `committed=${commit(text)}` 把真正的 commit 又调了一遍）。**临时探针不许有副作用**，这条记下来免得再犯。
+- ⚠️ **「关闭 mac 打字失效」的真因 = 归属只活在内存里**：dev 实例重启（或进程被强杀）后主进程没有 owner，而设备上还是我们的输入法 ⇒ 页面查到 `off`、按钮是暗的；点一下走 `enable()`，又因为 stash 已被上一任清掉、认不出原值 ⇒ 回 `unavailable`，**谁也关不掉，手机还没有键盘**。解法 = `adopt()`：`state` 那一次查询顺带认领残留（原值优先取设备侧 stash，stash 没了从 `ime list -s` 里挑第一条不是我们的输入法兜底，并把原值补回 stash），认领后那颗是亮的、点一下即还原。一个别的输入法都没有时**不认领**（不装懂）。真机复现验过：把设备写成我们的 + 删掉 stash → 重启 dev → 页面一开那颗就是「Mac 键盘输入中」、stash 被补成兜底值 → 点一下关掉、输入法还原、token 与 stash 都清 ✓。
+- ⚠️ **「输入中感觉会多个空格」= 选候选的那个空格被送了两遍**（10-11 用户报）。中文输入法用**空格选候选**时，macOS 吃掉空格并提交候选词（走我们桥的 `commitText`），**同一个空格还照旧冒到 `window` 的 `keydown` 上** —— 而 `' '` 就在 `KEYBOARD_KEYS` 里（`shared/keys.js`），`onKeyDown` 在 `keyCode !== undefined` 时**提前 `return`**，那句"Mac 键盘在收字就别再发一遍"的 `captureText()` 闸在后面的可打印字符分支里，**根本轮不到空格**。设备端我们的输入法**不拦按键**（`MirrorInputMethodService` 没实现 `onKeyDown`），所以那条 `KEYCODE_SPACE` 被编辑器当成真的空格插了进去 ⇒ 手机上多一个空格。**回车选候选同理**（会多一个换行），只是没人报。
+  - **改法**：按键归属抽成纯函数 `src/mirror/keyRouting.js` 的 `routeKeyDown()` / `isImeKey()`，**"输入法正在消化这个键"（`event.isComposing || keyCode === 229`）这条判据排到查 `KEYBOARD_KEYS` 之前**，命中的键一个都不转发（候选词本身走 `compositionend` 那条文本路，不靠这个键）。`useMirrorInput.js` 改成按 `routeKeyDown` 的返回值分派，并加了 `forwardedKeys` 集合 —— `keyup` 只补发真的发过 `down` 的键，免得被吞掉的键再冒出一个无主的 up。判据在 `tests/mirror/keyRouting.test.js`（14 条，含"合成态的空格/回车/退格都不转发"与"不在合成态的空格照旧走按键"）。
+  - ⚠️ **教训**：同一个"谁负责这个键"的问题上有**两条判据叠着**（输入法有没有吃掉、可打印字符归谁），写成一行行 `if` 时极易把一条漏在提前 `return` 后面。**判据叠两层就抽成纯函数并补单测**，别靠读代码确认。
+
+**Slice 4d：拼音胶囊 —— 把 marked text 画在 Mac 上（2026-10-11，照竞品补的）**
+
+用户 10-11 拿竞品截图点单：「**可以做成竟品的样子吗**」。图里是「白底圆角胶囊（下划线拼音 + 光标）」+ 下面一排候选。
+
+- **先拆图，别整块照抄**：那是**两件东西叠着**。
+  - **候选条 = macOS 的系统候选窗**，不是竞品画的，也不是我们能自绘的（词表拿不到，见上一条的更正）。它按 caret 矩形的下沿往下摆 ⇒ **我们本来就有**。
+  - **胶囊 = 竞品自己画的**。判据取自竞品 Mac 二进制：它实现了完整的 `NSTextInputClient`（`setMarkedText:selectedRange:replacementRange:` / `hasMarkedText` / `markedTextStorage` / `unmarkText` / `validAttributesForMarkedText`）并带一个 **`inlineInputOverlayView`**。**macOS 不代画 marked text** —— 宿主收到 `setMarkedText:` 之后自己负责呈现，所以这块必须应用自己画。
+  - 顺手排掉一个误判：那个橙色块**不是**竞品的品牌标记（竞品图标是绿白，`AppIcon.icns` 导出比对过），它是 Mac 输入法自己那套预编辑窗的一部分。
+- **我们的缺口正好是胶囊**：收字字段 1×1 全透明、`font-size:1px`，Chromium 把合成串画在里面等于看不见；拼音又被我们送去手机（`setComposingText`），所以 Mac 上什么都不显示。
+- **落地**：新增纯模块 `src/mirror/macTextCapsule.js`（`macTextCapsule()` 判据 + `capsuleBox()` 几何，判据在 `tests/mirror/macTextCapsule.test.js`）；`App.vue` 里加 `.mirror-mactext-capsule` 覆盖层，位置由 `capsuleBox()` 给 —— ⚠️ 初版是**横向贴锚点、纵向以那一行为中心**（`translateY(-50%)`），**第三轮已改成"顶边贴正文行下沿、高 1.3 个行高"**（见下）。
+- **判据三条叠着**（任一条不成立都不画）：归属是我们的 + 收字字段**真的拿到焦点** + 正在合成。画错的表现是"用户没在打字，画面上却挂着一个胶囊"。
+- ⚠️ 胶囊**只是显示器**：不接指针、不参与输入、不进无障碍树；锚点仍由收字字段决定。
+- ⚠️ 它是**产品的一部分**（不像探针那样藏在 dev 开关后面）—— 但只在**合成期间**出现，纯 ASCII 直接落字时没有它。
+- **第二轮（同日，用户拿我们自己那版截图说「不对」）**：拼音**显示了两次** —— 手机上那一行已经用下划线画了（`setComposingText` 送过去的），胶囊里又一遍。**修法 = 照竞品：合成串只画在 Mac 上，不送手机。**
+  - `App.vue` 的 `compose` 回调**只** `noteMacTextComposing(text)`，不再 `composeViaMacKeyboard(text)`；`macTextSink.onCompositionEnd` 现在一定补发一次空串（理由见上）。
+  - ⚠️ **教训**：用户说「输入法文字显示在光标后」时，我们当成了"送手机、让手机画"。**他说的是 Mac 上的胶囊。** 竞品那张图里手机上根本没有拼音 —— 当时就该从图上读出这一点，而不是从字面推。
+  - 顺带量到的两处差异（用户**没**要求改，先记着）：竞品的胶囊浮在那一行的**下方**、高约 **2 倍行高**；我们的骑在行上、1 倍行高。竞品那套看起来是把**胶囊自己的矩形**当 caret 矩形交给 macOS，所以候选窗正好落在胶囊下面（「行 → 胶囊 → 候选条」）。要跟就得动交给 macOS 的矩形，与 4c 定准的锚点有取舍，**没动**。
+- **第三轮（同日，用户贴竞品图说「对比一下，还是有差距」）**：上一条那两处差异就是差距本体，**已改**。这一轮先把两张图逐像素量了一遍（脚本临时写的，用 Pillow 找蓝/白/深色像素的包围盒），把"看着不一样"变成数字：
+
+  | 量到的元素 | 竞品（560×248） | 我们（816×242，改前） |
+  |---|---|---|
+  | 正文行墨迹（中文） | y[52,79]，高 **28** | y[71,102]，高 **32** |
+  | 拼音胶囊 | y[90,146]，高 **56**；**顶边贴正文行下沿**（90 > 79） | y[69,111]，高 **42**；**骑在正文行上**（中心 90 ≈ 行心 86） |
+  | 胶囊高 / 正文墨高 | **2.0×** | 1.3× |
+  | 系统候选条 | y[154,201]；**顶边贴胶囊下沿**（154 vs 146） | y[128,175]；顶边贴**正文行**下沿 |
+
+  - **差距是结构性的**：竞品是「正文行 → 胶囊 → 候选条」**三层**；我们是「正文行（胶囊骑在上面）→ 候选条」**两层** —— 胶囊没有自己的那一层。
+  - **改法**：把**交给 macOS 的 caret 矩形**从「正文行那一格」换成**胶囊那一格**。新增 `capsuleRect()`（`src/mirror/macTextCapsule.js`）：横向贴锚点不变，纵向 `top + height`（顶边贴正文行下沿），高度 `× CAPSULE_HEIGHT_RATIO = 1.3`；`macTextAnchorStyle` 改用这个矩形 ⇒ 系统候选条自然落在胶囊**下面**。胶囊字号比例 `CAPSULE_FONT_RATIO = 0.48`（换算回行高仍是 0.62，与旧版一致 —— **拼音本身没变大，变大的是胶囊壳**），并去掉 `.mirror-mactext-capsule` 的 `translateY(-50%)`。
+  - **取舍**：caret 矩形不再落在手机光标那一行，而是下移一格。这个矩形的**唯一用途**就是给 macOS 摆候选条，所以 4c 定准的锚点（横向 x、以及"从手机光标推出来"这件事）**完全不受影响**；代价是矩形不再与手机上闪烁的竖线重合，dev 探针的判据跟着改成"与胶囊重合"。
+  - 两个常量都按上表反推：胶囊高 56 / 行高（墨高 28 ⇒ em≈32 ⇒ 行高≈43）≈ **1.3**；拼音字高 20 ⇒ em≈27 / 胶囊高 56 ≈ **0.48**。
+  - 横向那半边**没动**：竞品胶囊左边贴着正文行的 caret x（259 vs 正文末 256），与我们一致。竞品候选条比胶囊再往右 13px（272 vs 259），那是 macOS 自己的偏移，不归我们管。
+    - ⚠️ **更正（第四轮量得更细）**：那 13px 里**大部分是候选窗自己的内缩** —— 蓝色选中块离窗沿还有一圈，两者的**外框左缘**只差几个像素（胶囊 259 / 候选窗外沿 ≈266）。不是 macOS 把胶囊和候选条错开，别按那条改。
+- **第四轮（同日，用户：「上个功能不要了，我已恢复。拼音框不要无限长，固定宽度，而且不要超出屏幕」）**：胶囊从"随合成串变长"改成**固定宽度 + 夹在画面内**。
+  - **先把"固定宽度"这个取值量出来**（复用同一批竞品图，Pillow 逐行扫边框 + 深色墨迹包围盒）：胶囊外框 x[259,450] 宽 **192**、高 **56** ⇒ 宽/高 **≈3.43**。两张图（06-16 / 06-29，同一段 `s d f s d f`）量出来**完全一致**（墨迹宽 108、右边距 60）。
+  - ⚠️ **判据是它不裹文字**：拼音墨迹只占 108，**左边距 24、右边距 60** —— 左右不对称，右边多出来的约 36px 是**预留**。这是"固定宽度、文字靠左"的形状，不是"按文字收紧"。所以直接拿 3.43 当我们的常量是站得住的。
+  - **改法**：`CAPSULE_WIDTH_RATIO = 3.4`（新增）；`capsuleRect()` 多返回 `width`（只由高度决定，与合成串无关），并按第二个入参 `screenWidth` 把 `left` 夹进画面（`0 ≤ left ≤ screenWidth − width`）。画面宽未知（缺省 / 0 / 非有限数）**不夹** —— 宁可按真实锚点摆。
+  - ⚠️ **夹的是同一个矩形**：`macTextAnchorStyle`（= 交给 macOS 的 caret 矩形 = 字段位置）与胶囊样式都出自 `capsuleRect()`，所以**字段与胶囊一起夹**，"两层同源"这条不变量守住了。只夹胶囊、不夹字段的话，两层会在同一屏里错开 —— 那正是前几轮一直在修的现象。**代价**：靠近画面右缘打字时矩形整体左移，候选窗跟着左移，与手机光标错开**最多一个胶囊宽**。
+  - `App.vue`：新增 `macTextScreenWidth`，与 `macTextAnchorCss` **同一个出处** —— `syncMacTextAnchor()` 里那次 `getBoundingClientRect()` 只量一次、两个用途（换算坐标 + 夹取宽度），不会出现"位置是新的、宽度是旧的"。
+  - CSS：`.mirror-mactext-capsule` 由 `inline-flex` 改 `flex`（宽度定死，内容不许再撑开）+ `overflow: hidden`；文字段 `flex: 0 1 auto; min-width: 0; direction: rtl` —— 装不下时**从头部裁**（`direction: rtl` 让 LTR 文本在盒内右对齐、溢出裁在左边，拼音是纯 LTR 强字符不会触发双向重排），保住靠近光标的尾部；光标段 `flex: none`，合成串再长它也留在胶囊内。
+  - `capsuleBox()` 的输出统一过一遍两位小数：`26 × 3.4` 在浮点里是 `88.39999999999999`，不收敛就会绑成 `width: 88.39999999999999px`。
+  - ⚠️ **未真机验证**：固定宽度与夹取的观感（尤其是短拼音时右侧的留白）还没在真机上打过字。
+  - **单测**：`tests/mirror/macTextCapsule.test.js` 11 → 16 条（新增固定宽度只由高度决定、右缘夹取、画面比胶囊窄/锚点在画面外贴 0、画面宽未知不夹；`capsuleBox` 加 `width` 与夹取同源两条）。
+
+**Slice 4b：候选窗锚点（2026-10-11，真机两轮，机制成立但不精确）**
+
+用户 10-11 反馈：「竞品的候选词就在光标下边，我们飘在别处」。
+
+- **根因**：macOS 摆放输入法候选窗**只认宿主交给它的 caret 矩形**。原生应用（竞品）自己实现 `NSTextInputClient`，`firstRectForCharacterRange:actualRange:` 返回**手机光标换算到屏幕**的矩形，所以候选窗贴着手机光标。Electron 里这条方法**改不了** —— Chromium 拿**聚焦元素的 DOM caret 矩形**充当它。我们的收字字段原来靠 grid 同格叠、**没有任何 `left/top`**，它的 caret 就落在画面左上角 ⇒ 候选窗跟着跑偏。**元素没定位，候选窗就没锚点。**
+- ⚠️ 这条与 Slice 4 那条「读不到第三方输入法候选词表」**无关**，别混：候选窗本来就是 macOS 画的、词表本来就来自 Mac 输入法，我们缺的不是词表，是锚点。那条结论只对「把候选词画进手机画面」成立。
+- **改法（Electron 内可行）**：收字字段改 `position: absolute`（`.mirror-screen` 补 `position: relative` 当定位祖先），`left/top` 绑到**用户点画面那个点**的显示位置 —— 点哪儿，手机光标就在哪儿，候选窗就贴哪儿。`.mirror-frame` 上原来的 `focusMacText()` 保留，取点挂在 `.mirror-screen` 的 `pointerdown`（它先于冒泡到 frame 的聚焦跑）。
+- 两个方向的换算抽成 `src/mirror/macTextAnchor.js` 的 `clientToDevice` / `deviceToScreen`（纯函数，判据在 `tests/mirror/macTextAnchor.test.js`）：量的是与 `useMirrorInput.videoCoords()` **同一块 canvas 显示矩形**，两者互为逆变换，letterbox 的黑边被同一套比例排除；点到黑边上时夹进 `[0, size]`，不把候选窗甩出画面。
+- ⚠️ 换算的退化输入（尺寸未知 / 矩形为零）一律返回 `null`，**不许兜底成 0** —— 那就是把候选窗锚回左上角，正是这次要修的现象。锚点缺失时由页面兜底到画面正中。
+- 锚点存**设备坐标**、显示位置每次现算 ⇒ 窗口缩放与黑边比例变化自动跟上（`ResizeObserver` 里补一次 `syncMacTextAnchor()`），不用另存一份记忆。
+- ⚠️ 收字字段**不能用 `display:none` / `visibility:hidden` / 零尺寸**收掉：那样 DOM caret 矩形不存在，候选窗会退回窗口左上角。1×1 + 全透明 + `pointer-events: none` 是它的正确形状。
+- ⚠️ 挪位置只能用 `left/top`，**不能重挂 DOM**（重挂会 blur，输入法当场断）。
+- **真机第一轮（2026-10-11 下午，用户口述）**：**候选窗位置确实变了** ⇒ 「把收字字段挪过去」这条机制成立，Electron 里 Chromium 用 DOM caret 矩形充当 `firstRectForCharacterRange` 也成立。但**「不是特别精确」**。
+- **真机第二轮**：用户点明「红点跟着鼠标点击走，候选窗在红点下方 —— 我要的是**在光标下方**」。⇒ 红点（= 我们交给 macOS 的 caret 点）与手机上真实的闪烁光标**不是同一个东西**，锚点必须跟光标走，不能跟鼠标走。
+- ⚠️ **「设备侧拿不到光标的像素位置」这个结论是错的，Slice 4c 已推翻**（见下）。第一轮据 `dumpsys input_method` 的 `mCursorRect=Rect(0, 0 - 0, 0)`（WebView 编辑器 `com.miui.notes` 的 `RichEditorWebView` 与原生 `miuix.androidbasewidget.widget.ClearableEditText` 各测一次都恒为 0）断定"此路不通"，把 `CursorAnchorInfo` 记成"精确解作废"。**真相是：不主动要就不下发。** 留这两行是为了记住这个坑 —— 静态观测"没看到值"不等于"拿不到值"，尤其在它本来就有"需先订阅"语义的时候。（但要读全：4c 真机验下来还有第二个坑 —— **回调会来、坐标却要先过 `getMatrix()`** 才是屏幕坐标；"能拿到值"与"值直接能用"是两件事。见下。）
+  - 同批被排除的还有 `uiautomator dump`：对 WebView **只给一个整块矩形**（`class="android.webkit.WebView"`，内部节点 `NAF="true"` 无子节点）；原生 `ClearableEditText` 能给节点矩形，但**给不了光标在文本里的像素位置**。这条结论**仍然成立**，只是它不再重要 —— 有了 4c 那条，不再需要从控件树里挖。
+- **落地的形状（4b，自攒锚点 —— 现在是 4c 的退路）**：
+  - **位置** = `点画面定基准` + `按我们送出去的文本往前推`。推进宽度 = 宽字符 1 em / 其余 0.55 em（`estimateAdvancePx`），em 由设备密度换算（`wm density` → `scaleDisplayDpi` → 1sp = dpi/160 px，正文按 16sp）。**宽字符估得准**（方块字），拉丁有 ±10%；估小了候选窗落在光标后面，估大了超前。合成串（拼音）也计入推进宽度（它顶替光标），退格往回退一个字。
+  - **高度** = **一个行高**（`LINE_HEIGHT_RATIO = 1.35`），且矩形**以锚点为中心**。用户第一轮的观察"候选窗在红点下方"正好证明 macOS 是**按 caret 矩形的底边**摆放的 —— 所以给 1px 高的矩形，窗口就压在文字行上；给一个行高、底边落在文字行底，它才落在**文字行下方**。实现上靠 `font-size`/`line-height` 撑高 DOM caret（不给高度的话 Chromium 报的还是那条 1px 的线）。
+- **dev 探针改了形状**：从"红圈"改成**交给 macOS 的那个 caret 矩形本身**（1px 宽 × 一个行高）。判据三条：与手机竖线重合 ⇒ 位置对；候选窗仍压在文字行上 ⇒ 高度不对；打字后落在光标后面 ⇒ 推进宽度估小了。
+  - ⚠️ **它默认不画**（10-11 用户：「**我不要自定义光标，输入选择框位置对就行**」）：只在 **dev 且调试面板（`tools` 按钮）打开**时才渲染（`v-if="devTools && showHud && …"`），打包版里元素压根不存在。**镜像里没有任何自定义光标** —— 收字字段 `.mirror-mactext` 带 `caret-color: transparent`，它自己的 DOM 光标不可见；那条红线纯粹是给我们看锚点的诊断件。候选窗是 **macOS 画的**，它只认我们交出去的 caret 矩形，跟这条红线没有任何关系。
+- **4b 的自攒锚点缺陷**：手机应用自己改文本（自动纠错、联想补全、选中替换）时账会错位，没有纠偏手段 —— 只能靠用户重新点一下画面定基准。这正是要上 4c 的动因。
+
+**Slice 4c：抄竞品的 `CursorAnchorInfo`（2026-10-11，已真机验证可用 —— 关键在 `getMatrix()`）**
+
+用户 10-11 追问：「andromeld 怎么做的？能不能抄」。拆了竞品 Mac 二进制与设备 APK，照抄、真机验完、并修掉了一个自己踩进去的坑。**结论：能抄，链路通，补上 `getMatrix()` 之后坐标正确，已启用。**
+
+- **竞品怎么做的（拆包所见）**：
+  - Mac 端是**原生 AppKit**（无 Electron Framework），自带 `adb` 与 `andromeld-mcp-server`，含 `WebRTC.framework`。二进制里能搜到 `caretRect` / `caretWidth` / `caretSpacing` / `currentCaretX` / `currentCaretHeight` / `currentCaretOriginY` / `leadingText` / `currentSelectionLocation` 这一组字段，以及 `NSTextInputClient` / `firstRectForCharacterRange:actualRange:` / `setMarkedText:selectedRange:replacementRange:`（是 Swift 应用，类名被 name-mangling，但这几个 ObjC 选择器名原样保留）。
+  - 设备端 APK 里有 `MirrorInputMethodService` / `MirrorImeServerBridge` / `MirrorImeBridgeBinderParcel` / `Shizuku`，以及 `requestCursorUpdates` 与 `getInsertionMarkerHorizontal/Top/Bottom`。
+  - ⚠️ **一处推断要标清楚**：把 Mac 端那组 `caret*` 字段与设备端那几个 API 连起来看，"竞品用 `CursorAnchorInfo` 定位候选窗"是**推断**，不是实证 —— dex 里出现这两个符号也可能来自它捆绑的某个库。它 Mac 端那组字段名（`caretSpacing` / `leadingText` / `leadingTextStartX`）反而更像**自攒**的账（与 4b 同思路）。别再把这句当定论引用。
+- **机制**：`InputConnection.requestCursorUpdates(int)`（API 21+）**主动订阅**，编辑器随后把 `CursorAnchorInfo` 推进 `InputMethodService.onUpdateCursorAnchorInfo()`。常量：`CURSOR_UPDATE_IMMEDIATE = 1`、`CURSOR_UPDATE_MONITOR = 2`（后者持续跟随，选它）。已核对 android-36 SDK，两处 API 都在。
+- ⚠️⚠️ **必须再补一步 `getMatrix()`**（这条是本次最大的坑，单独列出来）：
+  - `getInsertionMarkerHorizontal/Top/Bottom`（以及 `Baseline`、`getCharacterBounds`）报的是**编辑器本地坐标**，官方文档逐字写着"在本地坐标中返回……将在屏幕上呈现时使用 `getMatrix()` 进行转换"。
+  - 但 `CursorAnchorInfo` 的**类摘要**写的是"此类将文本插入点和组合字符串的位置封装在**屏幕坐标**中"—— 那句话说的是**过矩阵之后**的结果。只看摘要就会以为拿到的已经是屏幕坐标。
+  - 正确做法：`float[] pts = {x, top, x, bottom}; info.getMatrix().mapPoints(pts);` —— 变换后才是屏幕坐标。
+  - 漏掉这一步的后果：拿到的是控件局部坐标（个位数），锚到画面原点附近，**比不采信更差**。
+- **落地（三处，各归各位）**：
+  - **设备侧** `MirrorInputMethodService`：`onStartInput` / `onStartInputView` 里调 `requestCaretUpdates()`（`CURSOR_UPDATE_MONITOR`，`try/catch (Throwable)` 包住）；`onUpdateCursorAnchorInfo` 读三个 `getInsertionMarker*`，`NaN` 跳过，**再过 `getMatrix().mapPoints()` 转成屏幕坐标**，然后 `bridge.notifyCaret(true, x, top, bottom)`；`onFinishInput` 报 `notifyCaret(false, …)`。**纯上报，不改任何输入行为**。`MirrorBridge` 加 `notifyCaret`，经 `out` 发 `{"op":"caret","valid":…,x,top,bottom}`。
+  - **桥** `macBridge.js`：`handleLine` 认 `op === "caret"` → `readCaret(msg)` → `onCaret?.(rect)`；`readCaret` 对 `valid === false` 或字段非有限数一律回 `null`。`direct-session.js` 透传 + 导出 `onMacKeyboardCaret(listener)` 订阅口。
+  - **渲染层** `App.vue`：`macTextDeviceCaret` 收设备上报，`TRUST_DEVICE_CARET = true` **采信**；`macTextAnchor` / `macTextCaretHeightPx()` 都过 `reportedDeviceCaret()`，设备没报时才退回 4b 自攒。换算在 `macTextAnchor.js` 的 `caretRectToAnchor`（纯函数，判据在 `tests/mirror/macTextAnchor.test.js`）。
+- **真机验证（Mi 10 / MIUI，2026-10-11）**：
+  - **通的**：`onStartInput pkg=…` 会来；`requestCursorUpdates(MONITOR) -> true`（编辑器**接受**了请求）；`onUpdateCursorAnchorInfo` **确实被回调**，还带着有意义的 `selStart/selEnd`（笔记那条是 `selStart=249`，正是正文里光标的位置）。`onFinishInput` 也在输入框没了时报 `valid:false`。整条桥 `{op:'caret'}` 到 Mac 侧收得到（用 `adb forward tcp:9999 localabstract:anddrive-mac-keyboard` + 自写旁听器验的，不依赖 Electron 应用）。
+  - **第一轮（漏了矩阵）**：报回的值都是个位数，与控件真实屏幕位置对不上，一度误判成"平台给不出屏幕坐标、这条路作废"。
+  - **第二轮（补上 `getMatrix()`）**：两类编辑器都精确吻合。`raw` 是本地坐标，`matrix` 是官方给的那个变换，`screen` 是变换后的结果：
+
+    | 应用 / 控件 | 控件屏幕边界（uiautomator） | raw（本地） | matrix | 变换后（屏幕） |
+    | --- | --- | --- | --- | --- |
+    | MIUI 短信 · 收件人框 | `[526,467][609,579]`（高 112） | `0 / 30 / 82` | 纯平移 `(526, 467)` | `526 / 497 / 549` |
+    | MIUI 笔记 · 正文（`RichEditorWebView`） | `[66,491][1017,2206]` | `195.6 / 335.3 / 356.4` | 缩放 `2.75` + Y 平移 `244` | `538 / 1166 / 1224` |
+
+  - **为什么说它是对的（两处独立佐证，不是"看着像"）**：
+    - 收件人框：矩阵平移量 `(526,467)` **恰好等于该控件的屏幕原点**；变换后行顶 `497 = 467 + 30`，而该框高 112、行高 52、垂直居中 ⇒ 行顶应为 `(112−52)/2 = 30` 偏移 —— 两条路算出来同一个数。
+    - 笔记 WebView：矩阵是缩放 `2.75`（= 设备像素比）+ Y 平移 `244`，而 uiautomator 报的 WebView 边界正是 `[0,244][1080,2206]`；`195.6 × 2.75 = 538`、`335.3 × 2.75 + 244 = 1166`，而 1166 落在正文框 `[66,491][1017,2206]` 内。**WebView 那条同时印证了"raw 是 CSS px"**（高度 21.1 ≈ 16px 字号 × 1.3 行高）。
+  - **第三轮：跨应用一致性（5 个应用 / 4 类输入表面，2026-10-11 晚）**。第二轮只覆盖了"纯平移"与"缩放"各一例，担心是个例。补测三个应用后结论不变 —— **每一例上报的坐标都落在控件真实边界内，且打字时光标随插入点推进**：
+
+    | 应用 / 控件 | 输入面 | 控件屏幕边界（uiautomator） | 上报（屏幕坐标） |
+    | --- | --- | --- | --- |
+    | MIUI 短信 · 收件人框 | MIUI 原生 `EditText`（纯平移） | `[526,467][609,579]` | 空框 `x=526 / top=497 / bottom=549` |
+    | MIUI 笔记 · 正文 | Chromium `RichEditorWebView`（缩放 2.75 + Y 平移 244） | `[66,491][1017,2206]` | `x=538 / top=1166 / bottom=1224` |
+    | 设置 · 搜索框 | AOSP Settings `EditText`（纯平移） | `[187,101][863,222]` | 空框 `187 / 129 / 193`；打 `hello` 后 `x` 走 `242 → 294 → 373 → 401`，纵向恒定 `129 / 193` |
+    | MIUI 浏览器 · 地址栏 | Chromium 原生 `EditText`（纯平移） | `[152,101][879,217]` | 空框 `152 / 131 / 187`；打 `abc` 后 `x` 走 `200 → 222 → 291.578125`，纵向恒定 `131 / 187` |
+    | MIUI 相册 · 搜索框 | MIUI `EditText`（纯平移，左侧含搜索图标内边距） | `[73,112][870,232]` | 空框 `189 / 144 / 200`；打 `abc` 后 `x` 走 `212 → 238 → 261 → 332.56640625`，纵向恒定 `144 / 200` |
+
+    - 判据三条：**① `x` 落在控件左右沿之间**（空框时贴内容左沿；相册那条 `189 > 73`，因为该框左侧有搜索图标与内边距）；**② `top`/`bottom` 落在控件上下沿之间**，且 `bottom − top` 为一个行高（设置/浏览器/相册分别是 64 / 56 / 56 px，同框内恒定）；**③ 打字时 `x` 单调推进、纵向不动** —— 这条才真正证明上报的是**插入点**而不是固定左沿。
+    - ⚠️ **矩阵那一步在每个应用上都必需，不是只有 WebView 才需要**：三个"纯平移"编辑器上报的 `top` 都比控件屏幕顶边高约 28–32px（设置 `129−101=28`、浏览器 `131−101=30`、相册 `144−112=32`）—— 那正是**本地坐标**。若跳过 `getMatrix()`，这三例都会把候选窗抬高 101–112px（约两个行高），错得比不采信更明显。**这条从反面再次证明矩阵变换是主链路的一部分。**
+    - 上报值出现**小数**（浏览器 `291.578125`、相册 `332.56640625`）是好事：说明是设备端真实排版测量出来的，不是整数吸附的近似。
+    - 覆盖的输入面：MIUI 原生 `EditText` / AOSP Settings `EditText` / Chromium 原生 `EditText`（地址栏）/ Chromium `WebView` 正文 —— 4 类，其中 WebView 带**非平凡矩阵（缩放）**，其余为**纯平移**，两类都过。
+- **仍未解（都不影响主路）**：
+  - 短信那两例里 `dumpsys input_method` 的 `mServedView=DecorView`、主 `inputContext` 的 `isActive()=false`（另有 `mFallbackInputConnection` 是 active）—— 不确定这是 MIUI 常态，还是我们的输入法没有真正的输入视图导致的。**存疑，别当结论**（现在坐标已经对了，这条的优先级很低）。
+  - 有没有编辑器把 `getMatrix()` 设成 identity 却又给本地坐标（那样变换救不回来）。5 个应用（含 WebView 与三种原生 `EditText`）都没遇到；真遇到就是那个 app 的问题，靠 4b 兜底。
+- **踩坑记录（可复用）**：
+  - ⚠️ **别只看 API 的类摘要，去看每个 getter 的逐字说明。** 这次就是被类摘要那句 "in the screen coordinates" 带偏，漏了 `getMatrix()`，白跑一轮。**平台 API 里出现"配套的变换矩阵/坐标系"时，默认它不是给你白拿的。**
+  - ⚠️ 排查"数值不对"别靠猜：把**原始值 + 中间量 + 变换后的值**一起打出来（本轮就是靠同时打 raw/matrix/screen 一次定位）。同时用 uiautomator 取控件真实边界做**独立基准**，别拿自己的推算当基准。
+  - 装包后系统**不会自动重新绑定**输入法服务：`settings put secure default_input_method` 回读已是我们的，但 `ps` 里没有 `com.anddrive.helper:ime`。解法 = 先切到别的输入法再切回来。
+  - ⚠️ **`onUpdateCursorAnchorInfo` 只在光标/选区变化时触发**：对着已经聚焦的同一个输入框反复 `input tap` **不会**产生回调（第一次旁听只收到 `hello`、没有 `caret`，就是这个原因，不是链路坏了）。要验证得**制造新的输入会话** —— 先 `KEYCODE_HOME` 再重新拉起界面，或换一个输入框。
+  - 同场竞品在跑时，它会**秒级夺回**归属（force-stop 它的 helper 也没用，Mac 端会重新拉起）。所以"我们的输入法 + 聚焦编辑器"这个状态很窗口化，测的时候要连写带点一起下发。
+  - **临时探针只能打日志、不许有副作用**，验完必须撤掉并重建 APK（本轮已撤，`grep AndDriveImeProbe` 在 dex 里为 0）。
+
+
+
+
+
 ### 2026-09-27~28 结案：抖音直播「上下裁」= 抖音按「设备类别」选版式，镜像侧无解（本文档相关代码已全部移除，仓库不留单 app 适配）
 
 **结论先行**：裁切发生在抖音 App 内部（播放器 cover 稳态），与显示几何、虚拟性、ISR、镜像链路全部无关；

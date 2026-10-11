@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 输入法只画这一颗贴在右下角的胶囊（形状照竞品）：整块 input view 透明，
+     所以画面里看见的就是浮着的一颗，不是一条占半屏的键盘。
+     10-11 对齐竞品那版的五处观感差：更高的胶囊、更宽的内距、中等字重、图标与文字更大间距、
+     × 不要灰底盘（按下才给反馈）+ 阴影放软。 -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@android:color/transparent">
+
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="10dp"
+        android:layout_marginBottom="4dp"
+        android:background="@drawable/mirror_ime_capsule_bg"
+        android:elevation="12dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="18dp"
+        android:paddingTop="13dp"
+        android:paddingEnd="14dp"
+        android:paddingBottom="13dp">
+
+        <ImageView
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:contentDescription="@null"
+            android:src="@drawable/mirror_ime_ic_keyboard" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="11dp"
+            android:fontFamily="sans-serif-medium"
+            android:letterSpacing="0.01"
+            android:text="@string/mirror_ime_status_title"
+            android:textColor="#1C1C1E"
+            android:textSize="16sp" />
+
+        <ImageView
+            android:id="@+id/mirror_ime_close"
+            android:layout_width="30dp"
+            android:layout_height="30dp"
+            android:layout_marginStart="10dp"
+            android:background="@null"
+            android:contentDescription="@string/mirror_ime_action_close"
+            android:padding="5dp"
+            android:src="@drawable/mirror_ime_ic_close" />
+    </LinearLayout>
+</FrameLayout>

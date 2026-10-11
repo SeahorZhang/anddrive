@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 我们不提供自己的键盘布局：真正的按键来自 Mac 侧，所以只有一个 `keyboard` 模式的子类型。 -->
+<input-method xmlns:android="http://schemas.android.com/apk/res/android"
+    android:isDefault="false">
+    <subtype
+        android:label="@string/mirror_ime_subtype"
+        android:imeSubtypeMode="keyboard"
+        android:isAsciiCapable="false" />
+</input-method>

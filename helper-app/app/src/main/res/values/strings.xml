@@ -1,0 +1,7 @@
+<resources>
+    <!-- 键名与文案形状照竞品（`mirror_ime_*`）：状态标题那一行**所有语言都不翻译**。 -->
+    <string name="mirror_ime_name">AndDrive 输入法</string>
+    <string name="mirror_ime_subtype">屏幕镜像</string>
+    <string name="mirror_ime_status_title">AndDrive</string>
+    <string name="mirror_ime_action_close">关闭输入法</string>
+</resources>

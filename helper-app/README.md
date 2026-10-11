@@ -1,10 +1,13 @@
 # AndDrive Helper App
 
-Helper App 安装在 Android 设备上，主要作为**纯代码容器**：桌面端通过 `app_process` 以 shell（uid 2000）身份一次性执行 `ListMain`，stdout 返回应用列表 JSON 后进程即退出。包内不申请权限、不监听端口。
+Helper App 安装在 Android 设备上，主体是**纯代码容器**：桌面端通过 `app_process` 以 shell（uid 2000）身份一次性执行 `ListMain`，stdout 返回应用列表 JSON 后进程即退出。这条流程仍然**不申请权限、不监听端口、不留后台组件**。
 
-此外它带有一个桌面图标（launcher Activity `QrPairActivity`），点击后跳转到系统的 ADB 无线调试二维码配对界面，方便在手机上直接扫码配对。该 Activity 不隶属 `app_process` 流程，也不影响应用列表（`ListMain` 会过滤自身包名）。
+它另外带两个由系统按焦点拉起的组件（2026-10-11 起）：
 
-Java 类：`ListMain.java`（列表/图标）与 `QrPairActivity.java`（二维码配对快捷入口）。
+- 桌面图标（launcher Activity `QrPairActivity`）：跳到系统的 ADB 无线调试二维码配对界面。不隶属 `app_process` 流程，也不影响应用列表（`ListMain` 会过滤自身包名）。
+- **输入法服务 `MirrorInputMethodService`（`:ime` 独立进程）**：Mac 键盘落在设备这一侧的端点。它不画键盘，只画右下角那颗状态胶囊，文本由桌面端经桥送进来后走 `InputConnection` 提交 —— 因为上游 scrcpy 的 `injectText` 送不了中文（真机实测），而输入法是设备上唯一不需要前台焦点就能提交文本/读写剪贴板的角色。桌面端会临时 `ime` 切到它并在会话结束时还原，所以**它是"会话期间顶掉用户键盘"的组件**，不是常驻服务（进程随系统对输入法的绑定起停）。为什么必须是输入法、切换与夺回的实测，见 `docs/NATIVE_MIRROR.md` §G1 切片。
+
+Java 类：`ListMain.java`（列表/图标）、`StorageMain.java`（存储卷读数）、`QrPairActivity.java`（配对快捷入口）、`MirrorInputMethodService.java`（Mac 键盘端点）。
 
 ## 构建
 
