@@ -1512,6 +1512,81 @@ export async function getAppTask(serial, packageName) {
 }
 
 /**
+ * 从 `dumpsys` 的前台行里取出**正在用的那个应用**的包名。
+ * 认三种行形态（都是「`u<userId>` 后面跟 `包名/Activity`」这一种排版）：
+ * - `topResumedActivity=ActivityRecord{… u0 com.pkg/.Act t42}`（`dumpsys activity activities`）
+ * - `ResumedActivity: ActivityRecord{… u0 com.pkg/.Act t42}`（同上的分显示段）
+ * - `mCurrentFocus=Window{… u0 com.pkg/com.pkg.Act}` / `mFocusedApp=ActivityRecord{…}`（`dumpsys window`）
+ * 读不到回 null —— 不猜。
+ * @param {string} output
+ * @returns {string | null}
+ */
+export function parseForegroundPackage(output) {
+  for (const line of String(output ?? "").split("\n")) {
+    if (!/(topResumedActivity|mResumedActivity|ResumedActivity|mFocusedApp|mCurrentFocus)/.test(line)) continue;
+    const match = /\bu\d+\s+([A-Za-z0-9_.]+)\//.exec(line);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/**
+ * `cmd package resolve-activity --brief … HOME` 的包名。
+ * 输出前几行是优先级统计（`priority=0 preferredOrder=0 …`），**最后一行**才是 `包名/Activity`，
+ * 所以从后往前找第一个形如 `包名/` 的行。问不到回 null。
+ * @param {string} output
+ * @returns {string | null}
+ */
+export function parseHomePackage(output) {
+  const lines = String(output ?? "").split("\n");
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const match = /^([A-Za-z0-9_.]+)\//.exec(lines[i].trim());
+    if (match) return match[1];
+  }
+  return null;
+}
+
+/**
+ * 手机**主屏上正在用的那个应用**（前台 Activity 的包名）。
+ * 镜像窗口悬浮栏那颗「桌面模式」要把它抽到一块独立虚拟屏上（见 `mirror/session.js`）——
+ * 与首页「点应用」走的是同一条路，区别只在包名是这里现问设备、而不是用户从列表里点的。
+ *
+ * **停在桌面时回 null**：那会儿前台是 launcher 自己，没有「正在用的应用」可搬，而把 launcher
+ * 的 task 搬走会把手机主屏一起搞乱（launcher 也搬不动）。launcher 包名按 HOME intent 现问，
+ * 不写死任何 ROM 的包名（仓库不留机型/应用特判）；问不到就不做这道守卫。
+ *
+ * 两条命令并发发，不为一次按钮点击多等一个来回。取的是**第一条命中行**：`Display #0` 永远最先
+ * dump，而全局那条 `topResumedActivity` 说的也是它 ⇒ 正常情况下拿到的就是主屏那个应用。
+ * @param {string} serial
+ * @returns {Promise<string | null>}
+ */
+export async function getForegroundApp(serial) {
+  assertSerial(serial);
+  await ensureServer();
+  const [foreground, home] = await Promise.all([
+    // 只 grep 需要的那几行：整份 `dumpsys activity` 是几百 KB，别拖回本机（同 `getAppTask`）。
+    adbExecSafe([
+      "-s",
+      serial,
+      "shell",
+      "dumpsys activity activities | grep -m1 -E 'topResumedActivity|mResumedActivity|ResumedActivity'",
+    ]),
+    // 设备的桌面（HOME activity）包名。失败/认不出就回 null，调用方跳过那道守卫。
+    adbExecSafe([
+      "-s",
+      serial,
+      "shell",
+      "cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.HOME",
+    ])
+      .then(({ code, stdout }) => (code === 0 ? parseHomePackage(stdout) : null))
+      .catch(() => null),
+  ]);
+  const packageName = parseForegroundPackage(foreground.stdout);
+  if (!packageName) return null;
+  return home && home === packageName ? null : packageName;
+}
+
+/**
  * 把一个 root task 搬到指定显示上 —— **不重启应用**，进程与页面状态都保留，
  * 只是换了块显示（真机量过：搬回来后 pid 不变，窗口尺寸等于新显示）。
  * @param {string} serial

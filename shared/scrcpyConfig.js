@@ -8,8 +8,12 @@ export const DEFAULT_SCRCPY_CONFIG = Object.freeze({
   /** 视频编码：auto = 按「设备能编 + 本机 WebCodecs 能解」自动挑（见 pickAutoCodec）。 */
   videoCodec: "auto",
   /**
-   * 音频转发：默认**开**（2026-10-08 用户定「都不加」那一档 = 声音转到电脑、手机静音）。
-   * 归一化只认显式 `false`，且不设 `audioDup` —— 上游因此用 `ROUTE_FLAG_LOOP_BACK`（只回环不本机渲染）。
+   * **要不要把设备声音转到电脑**：`true`（默认）= 转到电脑（投屏期间手机不出声）；
+   * `false` = 声音留在设备上，电脑这边听不到。
+   *
+   * 只有「下次开会话」这一档生效，**运行时不可切**：设备静音是 scrcpy 建会话时定的路由
+   * （`REMOTE_SUBMIX` 直采），控制协议里没有音频路由消息，改它只能整条会话重来。
+   * 归一化只认显式 `false`（老存盘/缺省都是「转到电脑」）。
    */
   audio: true,
   alwaysOnTop: false,
@@ -320,7 +324,7 @@ export function normalizeScrcpyConfig(input) {
     videoCodec: VIDEO_CODECS.has(raw.videoCodec)
       ? raw.videoCodec
       : DEFAULT_SCRCPY_CONFIG.videoCodec,
-    // 默认开，所以只认显式的 false（老存盘/缺省不该把音频关掉）。
+    // 默认「声音转到电脑」，所以只认显式的 false（老存盘/缺省不该把声音丢回手机）。
     audio: raw.audio !== false,
     quality,
     alwaysOnTop: raw.alwaysOnTop === true,

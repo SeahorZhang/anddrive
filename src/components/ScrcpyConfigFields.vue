@@ -141,13 +141,17 @@ function updateQuality(tier) {
 
     <div class="flex items-center gap-3 px-4 py-2.5">
       <div class="min-w-0 flex-1">
-        <div class="text-[13px] text-ink-2">音频转发</div>
+        <div class="text-[13px] text-ink-2">声音输出</div>
         <div class="mt-0.5 text-[11px] text-ink-3">
-          把设备声音转发到电脑播放（默认开）；转发期间手机不出声，结束投屏后手机立刻恢复播放
+          电脑 = 把设备声音转到电脑播放（投屏期间手机不出声，结束投屏后立刻恢复）；手机 = 声音留在手机上。
+          只影响下次打开镜像：设备静音是建会话时定死的路由，运行时改不了
         </div>
       </div>
-      <SwitchToggle :model-value="props.config.audio" :disabled="disabled"
-        @update:model-value="(value) => update({ audio: value })" />
+      <select :class="SELECT_CLASS" :value="props.config.audio ? 'computer' : 'phone'" :disabled="disabled"
+        @change="update({ audio: $event.target.value === 'computer' })">
+        <option value="computer">电脑</option>
+        <option value="phone">手机</option>
+      </select>
     </div>
 
     <div class="flex items-center gap-3 px-4 py-2.5">

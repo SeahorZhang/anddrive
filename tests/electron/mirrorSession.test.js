@@ -126,6 +126,10 @@ const env = vi.hoisted(() => {
     /** 设备 secure 设置（Mac 键盘要抢要还的那一格）与设备 shell 调用轨迹。 */
     secure: { default_input_method: 'com.sohu.inputmethod.sogou.xiaomi/.SogouIME' },
     shellCalls: [],
+    /** 「桌面模式」要读的手机前台应用（null = 手机停在桌面）。 */
+    foregroundApp: 'com.example.fg',
+    /** 本机那份应用缓存（`getCachedApps`）：新窗口的名称与图标从这里取，不碰设备。 */
+    cachedApps: [],
     /** `/data/local/tmp/` 里那份「用户原输入法」备份文件的内容（`echo`/`rm -f` 会改它）。 */
     stash: '',
     FakeBrowserWindow,
@@ -195,6 +199,9 @@ vi.mock('../../electron/adb.js', () => ({
   },
   isMiuiDevice: async () => false,
   getDeviceVideoCodecs: async () => ({ h264: true, h265: true, av1: false }),
+  // 「桌面模式」：手机主屏上正在用的应用，以及本机那份应用缓存（新窗口的名称/图标从它取）。
+  getForegroundApp: async () => env.foregroundApp,
+  getCachedApps: async () => env.cachedApps,
   setSecureSetting: async (_serial, key, value) => {
     env.secure[key] = value
     env.settingWrites.push(['secure', key, value])
@@ -333,6 +340,93 @@ describe('Android 13 及以下点应用 = 采主屏', () => {
   })
 })
 
+// 用户 2026-10-11 点单：「安卓 14 往上加一个桌面模式（= 点应用建虚拟屏那套）；
+// 如果是直接手机镜像，则在悬浮栏加一个桌面模式打开按钮」。
+// 于是入口只有一处：**采主屏的会话（整机镜像）+ Android 14+** 才在悬浮栏出那颗按钮，
+// 点了把手机主屏上正在用的应用抽到一块新的虚拟屏窗口里（与首页点应用同一条路）。
+describe('桌面模式入口（mirror:desktopMode）', () => {
+  const openDesktopMode = (win) => env.handlers.get(CHANNELS.mirrorDesktopMode)({ sender: win.webContents })
+
+  /** 这颗按钮出不出的判据在主进程定一次（渲染层不自己判版本），所以断言落在 pendingInit 上。 */
+  it('只有整机镜像 + Android 14 才出这颗按钮', async () => {
+    await startMirrorSession({ serial: 'dev-dm-sdk34', packageName: '' })
+    expect(initFrom(env.windows.at(-1)).desktopModeAvailable).toBe(true)
+
+    // 单应用那条路本身就是桌面模式（虚拟显示），不需要这个入口。
+    await startMirrorSession({ serial: 'dev-dm-app-sdk34', packageName: 'com.example.app' })
+    expect(initFrom(env.windows.at(-1)).desktopModeAvailable).toBe(false)
+
+    // Android 13 及以下建出来的显示拿不到焦点（`supportsDesktopMode` 的门槛）。
+    await startMirrorSession({ serial: 'dev-dm-sdk33', packageName: '' })
+    expect(initFrom(env.windows.at(-1)).desktopModeAvailable).toBe(false)
+
+    // 版本读不到 = 先不给入口（与 `mirrorsMainDisplay` 读不到时「照旧建显示」正好相反）。
+    await startMirrorSession({ serial: 'dev-dm-unknown', packageName: '' })
+    expect(initFrom(env.windows.at(-1)).desktopModeAvailable).toBe(false)
+  })
+
+  it('点了就把手机前台应用抽到一块新的虚拟屏窗口里（名称与图标取本机缓存）', async () => {
+    env.foregroundApp = 'com.example.fg'
+    env.cachedApps = [
+      { packageName: 'com.example.fg', label: '前台应用', iconUrl: 'data:image/png;base64,aGk=' },
+    ]
+    await startMirrorSession({ serial: 'dev-dm-open', packageName: '' })
+    const deviceWin = env.windows.at(-1)
+
+    const result = await openDesktopMode(deviceWin)
+    const appWin = env.windows.at(-1)
+    expect(appWin).not.toBe(deviceWin)
+    const init = initFrom(appWin)
+    expect(init.packageName).toBe('com.example.fg')
+    // 新窗口走的是虚拟显示那条路 —— 这才是「桌面模式」，不是又一扇采主屏的窗。
+    expect(init.deviceMirror).toBe(false)
+    expect(init.label).toBe('前台应用')
+    expect(init.iconUrl).toBe('data:image/png;base64,aGk=')
+    expect(init.desktopModeAvailable).toBe(false)
+    expect(result.reused).toBeUndefined()
+    expect(result.label).toBe('前台应用')
+  })
+
+  /** 手机上停在桌面（launcher 自己就是前台）时没有可搬的应用：不开窗，给一句能读的原因。 */
+  it('手机停在桌面时不开窗，抛出可读原因', async () => {
+    env.foregroundApp = null
+    await startMirrorSession({ serial: 'dev-dm-none', packageName: '' })
+    const win = env.windows.at(-1)
+    const before = env.windows.length
+    await expect(openDesktopMode(win)).rejects.toThrow(/没有打开的应用/)
+    expect(env.windows.length).toBe(before)
+  })
+
+  /** 一个会话 = 一块虚拟显示：这个应用已经有窗口时只能复用，再建一块会把应用从旧显示上搬走。 */
+  it('这个应用已经单独开着窗口时复用那个，不再建第二块显示', async () => {
+    env.foregroundApp = 'com.example.dup'
+    env.cachedApps = []
+    await startMirrorSession({ serial: 'dev-dm-dup', packageName: '' })
+    const deviceWin = env.windows.at(-1)
+    await startMirrorSession({ serial: 'dev-dm-dup', packageName: 'com.example.dup' })
+    const appWin = env.windows.at(-1)
+
+    const result = await openDesktopMode(deviceWin)
+    expect(result.reused).toBe(true)
+    expect(env.windows.at(-1)).toBe(appWin)
+    // 缓存里没有这个包名时名称退回包名本身（接回横幅会退化成首字母方块）。
+    expect(result.label).toBe('com.example.dup')
+  })
+
+  /** 换个入口不该换掉用户配好的规格：新窗口沿用这个窗口的参数。 */
+  it('新窗口沿用当前窗口的投屏参数', async () => {
+    env.foregroundApp = 'com.example.cfg'
+    env.cachedApps = []
+    await startMirrorSession({
+      serial: 'dev-dm-cfg',
+      packageName: '',
+      config: { maxFps: 30, audio: false },
+    })
+    await openDesktopMode(env.windows.at(-1))
+    expect(initFrom(env.windows.at(-1)).config).toEqual({ maxFps: 30, audio: false })
+  })
+})
+
 // 低版本没有 HyperOS 那扇 `Hangup` 门（灭屏仍合成），而这一档镜像的就是手机那块屏 ——
 // 面板灭了就没帧可采。所以开会话时把「插电不休眠」打开，关会话时还原成**它原来的值**。
 describe('Android 13 及以下开会话时 keepAwake', () => {
@@ -383,6 +477,55 @@ describe('Android 13 及以下开会话时 keepAwake', () => {
     expect(env.settingWrites).toEqual([[KEY, 7]])
     await stopMirrorSession(started.id)
     expect(env.settingWrites.at(-1)).toEqual([KEY, 0])
+  })
+})
+
+// scrcpy server 意外退出 / 设备断开时，渲染层报一条 `mirror:state` 的 `exit`。
+// ⚠️ 这条路径**不能只删会话记录** —— 设备的 `stay_on_while_plugged_in`、`synergy_mode` 与 Mac 键盘的归属
+// 都是挂在会话记录上的还原函数，记录一丢就再也还不回去（真机看到 `stay_on_while_plugged_in` 停在 7）。
+describe('server 意外退出（mirror:state exit）', () => {
+  const KEY = 'stay_on_while_plugged_in'
+  /** 收摊链上全是 async，微任务多跑几轮再断言。 */
+  const settle = async () => {
+    for (let i = 0; i < 40; i += 1) await Promise.resolve()
+  }
+  const exitFrom = (win, id) =>
+    env.handlers.get(CHANNELS.mirrorState)(
+      { sender: win.webContents },
+      { id, kind: 'exit', message: 'server 挂了' },
+    )
+
+  it('走完整收摊：设备侧的「插电不休眠」还回原值，窗口也关掉', async () => {
+    env.settingWrites.length = 0
+    env.stayOn[KEY] = 0
+    const started = await startMirrorSession({ serial: 'dev-exit-sdk33', packageName: 'com.example.app' })
+    await flush()
+    expect(env.settingWrites).toEqual([[KEY, 7]])
+    const win = env.windows.at(-1)
+    const closeSpy = vi.spyOn(win, 'close')
+
+    exitFrom(win, started.id)
+    await settle()
+    expect(env.settingWrites).toEqual([
+      [KEY, 7],
+      [KEY, 0],
+    ])
+    expect(closeSpy).toHaveBeenCalled()
+  })
+
+  /** 断开设备那条路也会调 `stopMirrorSession`；两条路撞上时只该还原一次，后到的那个拿不到记录、空转。 */
+  it('与设备清理撞上时只还原一次', async () => {
+    env.settingWrites.length = 0
+    env.stayOn[KEY] = 1
+    const serial = 'dev-exit-race-sdk33'
+    const started = await startMirrorSession({ serial, packageName: 'com.example.app' })
+    await flush()
+    const win = env.windows.at(-1)
+
+    exitFrom(win, started.id)
+    await Promise.all(env.teardownHooks.map((hook) => hook(serial)))
+    await settle()
+    expect(env.settingWrites.filter(([, value]) => value === 1)).toEqual([[KEY, 1]])
   })
 })
 

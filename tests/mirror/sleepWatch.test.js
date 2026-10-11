@@ -1,12 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { FROZEN_STATES, createSleepWatcher, panelIsOff } from '../../src/mirror/sleepWatch.js'
+import {
+  FROZEN_STATES,
+  PANEL_OFF_STATES,
+  createSleepWatcher,
+  needsRealWake,
+  panelIsOff,
+} from '../../src/mirror/sleepWatch.js'
 
 // 「已休眠」横幅与长条上那颗「关屏使用」的唯一判据是设备上的两条一手读数：
-// `mWakefulness`（睡没睡）和 SurfaceFlinger 的 `powerMode`（面板亮没亮）。这里钉三件事：
+// `mWakefulness`（睡没睡）和 SurfaceFlinger 的 `powerMode`（面板亮没亮）。这里钉四件事：
 // ① **什么时候才该弹横幅**（弹错一次 = 在一幅还在动的画面上盖一块黑，比如 HyperOS 的 `Hangup`）；
-// ② **两条读数任一变了都要报**（用户 10-10「关掉屏幕按钮再点一次要可以点亮」：`setDisplayPower(OFF)`
+// ② **什么时候算屏灭**（`Hangup` 面板灭着但 SF 报 `powerMode=On`，只按 powerMode 判会漏，
+//    那颗按钮就永远翻不到「恢复亮屏」—— 用户 10-11 报的那条）；
+// ③ **两条读数任一变了都要报**（用户 10-10「关掉屏幕按钮再点一次要可以点亮」：`setDisplayPower(OFF)`
 //    只灭面板，设备还 `Awake` —— 只看 `mWakefulness` 的话那颗按钮永远翻不回来）；
-// ③ **点了按钮之后要多快看到结果**（10-10「不灵敏」：原来只有慢轮询，撤个横幅要等下一拍）。
+// ④ **点了按钮之后要多快看到结果**（10-10「不灵敏」：原来只有慢轮询，撤个横幅要等下一拍）。
 
 /** 一次读数。缺省只给 `wakefulness`（另一条读不到＝ null）。 */
 const st = (wakefulness, screen = null) => ({ wakefulness, screen })
@@ -75,13 +83,14 @@ describe('createSleepWatcher（镜像窗口的电源状态轮询）', () => {
 
   /** `Hangup` 是 HyperOS/MIUI 投屏登记过的灭屏态：面板灭着仍继续合成，画面没定住。 */
   it('Hangup 不算休眠（不弹「已休眠」），但原值照样报出去', async () => {
-    const states = [st('Awake', 'ON'), st('Hangup', 'OFF')]
-    const { seen, stop } = spy(async () => states.shift() ?? st('Hangup', 'OFF'))
+    // 真机实测的读数组合：`Hangup` 时 SF 报的是 `powerMode=On`，不是 `OFF`。
+    const states = [st('Awake', 'ON'), st('Hangup', 'ON')]
+    const { seen, stop } = spy(async () => states.shift() ?? st('Hangup', 'ON'))
     await tick(2000)
     // 第一个值是 false ⇒ 页面不会因此弹「已休眠」；第二个是原读数 ⇒ 那颗图标据此画「恢复亮屏」。
     expect(seen).toEqual([
       [false, st('Awake', 'ON')],
-      [false, st('Hangup', 'OFF')],
+      [false, st('Hangup', 'ON')],
     ])
     stop()
   })
@@ -210,7 +219,14 @@ describe('panelIsOff（那颗图标的屏灭判据）', () => {
   it('设备醒着但面板灭着 = 屏灭（关屏使用中，按钮该翻成「恢复亮屏」）', () => {
     expect(panelIsOff(st('Awake', 'OFF'))).toBe(true)
     expect(panelIsOff(st('Awake', 'DOZE'))).toBe(true)
-    // MIUI 按电源键那个态：不算休眠，但屏是灭的
+  })
+
+  /**
+   * 用户 10-11 报的那条：手机走**超时灭屏**进 `Hangup` 后，SF 照旧报 `powerMode=On`
+   * （面板物理灭着、合成照跑）。只按 `powerMode` 判就会把它当亮屏，那颗按钮永远不亮。
+   */
+  it('Hangup 恒算屏灭（真机实测：面板灭着，但 SF 报 powerMode=On）', () => {
+    expect(panelIsOff(st('Hangup', 'ON'))).toBe(true)
     expect(panelIsOff(st('Hangup', 'OFF'))).toBe(true)
   })
 
@@ -223,9 +239,34 @@ describe('panelIsOff（那颗图标的屏灭判据）', () => {
     expect(panelIsOff(st('Dozing', 'DOZE'))).toBe(true)
   })
 
-  /** 有些 ROM 的 SurfaceFlinger 不 dump `powerMode` ⇒ 退回只按睡没睡判，不能因为缺读数就当屏亮。 */
-  it('面板读数缺失时退回睡没睡', () => {
+  /** 有些 ROM 的 SurfaceFlinger 不 dump `powerMode` ⇒ 退回只按 wakefulness 判，不能因为缺读数就当屏亮。 */
+  it('面板读数缺失时退回 wakefulness', () => {
     expect(panelIsOff(st('Awake', null))).toBe(false)
     expect(panelIsOff(st('Asleep', null))).toBe(true)
+    expect(panelIsOff(st('Hangup', null))).toBe(true)
+  })
+
+  /** 两个集合的语义不同：`FROZEN_STATES` 管「弹不弹已休眠」，`PANEL_OFF_STATES` 管「算不算屏灭」。 */
+  it('面板灭着的集合 = 冻结态 + Hangup（两者别合并）', () => {
+    expect([...FROZEN_STATES].sort()).toEqual(['Asleep', 'Dozing'])
+    expect([...PANEL_OFF_STATES].sort()).toEqual(['Asleep', 'Dozing', 'Hangup'])
+  })
+})
+
+/**
+ * 屏灭着时「把它弄亮」该走哪条路。真机实测（Mi 10 / HyperOS V816）：
+ * `Hangup` 下发 `setDisplayPower(Normal)` 之后 8 秒仍是 `Hangup`（那条路唤不动电源管理），
+ * 而 `input keyevent 224` 一秒内回到 `Awake`。
+ */
+describe('needsRealWake（「恢复亮屏」走哪条路）', () => {
+  it('电源管理的灭屏态（睡下 / Hangup）要用真唤醒', () => {
+    expect(needsRealWake(st('Asleep', 'OFF'))).toBe(true)
+    expect(needsRealWake(st('Dozing', 'DOZE'))).toBe(true)
+    expect(needsRealWake(st('Hangup', 'ON'))).toBe(true)
+  })
+
+  it('设备醒着 = 屏是我们自己关的，回 setDisplayPower(Normal) 就行', () => {
+    expect(needsRealWake(st('Awake', 'OFF'))).toBe(false)
+    expect(needsRealWake(st('Awake', 'ON'))).toBe(false)
   })
 })

@@ -134,6 +134,9 @@ export async function startSession(
   },
 ) {
   current.info = info;
+  // `bootstrap()` 可以重复调用（页面重载 / 被顶掉后接回），`stopSession()` 会把这一位立起来，
+  // 不在这里落回去的话，重建的会话里 `client.exited` 那条回调会以为已经收摊了。
+  current.stopping = false;
   const adb = await acquireDeviceAdb(getServerClient(), info.serial);
   current.adb = adb;
   const { client, display: createdDisplay } = await startScrcpy({
@@ -176,7 +179,10 @@ export async function startSession(
     // output 不可用不影响会话
   }
 
-  // 音频失败只降级为纯画面（scrcpy 4.0 仅支持 Opus）。
+  // 音频与画面在**同一条会话**里（参数见 `electron/mirror/options.js` 的 `buildMirrorOptions`：
+  // 设置页那一项决定 `audio` 开不开）。采不到就只降级成纯画面，不拖住画面（scrcpy 4.0 仅支持 Opus）。
+  // ⚠️ 这一档在建会话时定死：设备投屏期间不出声是服务端 `REMOTE_SUBMIX` 直采的结果，控制协议里
+  // 没有任何音频路由消息 ⇒ 运行时改它只能整条会话重来，所以我们不提供「声音在电脑 / 在手机」的切换。
   let audioConfigured = false;
   try {
     const audioMeta = await client.audioStream;
@@ -483,6 +489,16 @@ export async function wakeScreen() {
     const firstLine = String(error?.message || "").split("\n")[0].trim();
     return { ok: false, message: firstLine || "唤醒失败" };
   }
+}
+
+/**
+ * 长条那颗「桌面模式」：把手机主屏上**正在用的应用**抽到一块独立虚拟屏窗口里
+ * （与首页点应用同一条路，包名由主进程现问设备）。
+ * 只有整机镜像 + Android 14+ 才出这颗按钮（判据在主进程，见 `pendingInit.desktopModeAvailable`）。
+ * @returns {Promise<{ id: string, label?: string, packageName?: string, reused?: boolean }>}
+ */
+export async function openDesktopMode() {
+  return ipcInvoke(CHANNELS.mirrorDesktopMode);
 }
 
 /**

@@ -3,8 +3,10 @@ import path from "node:path";
 import { CHANNELS } from "../ipcContract.js";
 import {
   ensureServer,
+  getCachedApps,
   getDeviceSdk,
   getDeviceVideoCodecs,
+  getForegroundApp,
   getGlobalNumberSetting,
   getPhysicalScreenSize,
   getPhysicalScreenDensity,
@@ -31,6 +33,7 @@ import {
   mirrorWindowBounds,
   mirrorsMainDisplay,
   resolveRuntimePrefs,
+  supportsDesktopMode,
 } from "./options.js";
 
 // ---------------------------------------------------------------------------
@@ -283,6 +286,11 @@ export async function startMirrorSession(request) {
     // （那些都需要一块我们建的虚拟显示，这一档没有）。`startApp` 不在其列 —— 带着包名时渲染层
     // 照发，服务端把它开到主屏（= 手机屏幕）上，这一档要的正是「手机上打开这个 app，我们看着」。
     deviceMirror,
+    // 悬浮栏那颗「桌面模式」该不该出（用户 2026-10-11 点单）。两个条件：
+    // - 这是**采主屏**的会话（整机镜像）：虚拟显示那条路本身就是桌面模式，不需要这个入口。
+    // - 设备 Android 14+：13 及以下建出来的显示拿不到焦点（`supportsDesktopMode`）。
+    // 判据在主进程定一次，渲染层不重复判断 —— 同 `deviceMirror` 那条规矩。
+    desktopModeAvailable: deviceMirror && supportsDesktopMode(sdk),
     serverPath,
     config: request?.config ?? null,
     prefs,
@@ -487,18 +495,52 @@ ipcMain.on(CHANNELS.mirrorMacKeyboardYield, (event) => {
   macKeyboardOfEvent(event).park();
 });
 
-/** IPC 事件 → 这台设备那份归属管理器。发起方一定是镜像窗口，找不到就是编程错误。 */
-function macKeyboardOfEvent(event) {
+/** IPC 事件 → 发起它的那个镜像会话。发起方一定是镜像窗口，找不到就是编程错误。 */
+function sessionOfEvent(event) {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win || win.isDestroyed()) throw new Error("镜像窗口已关闭");
   const session = [...sessions.values()].find((item) => item.win === win);
   if (!session) throw new Error("镜像会话不存在");
-  return macKeyboardFor(session.serial);
+  return session;
+}
+
+/** IPC 事件 → 这台设备那份归属管理器。输入法是**设备级**的（一块屏只有一个默认输入法）。 */
+function macKeyboardOfEvent(event) {
+  return macKeyboardFor(sessionOfEvent(event).serial);
 }
 
 ipcMain.handle(CHANNELS.mirrorStop, (_, id) => stopMirrorSession(id));
 ipcMain.handle(CHANNELS.mirrorStopAll, () => stopAllMirrorSessions());
 ipcMain.handle(CHANNELS.mirrorFocus, (_, id) => focusMirrorSession(id));
+
+/**
+ * 长条上那颗「桌面模式」（用户 2026-10-11 点单）：把手机主屏上**正在用的那个应用**抽到一块新的
+ * 虚拟屏窗口里。走的就是首页「点应用」那条路 —— `startMirrorSession` 建虚拟显示，渲染层
+ * `startApp` 之后由 `ensureAppHere` 用 `am display move-stack` 把 task 搬过去（不重启应用）。
+ * 唯一的区别：包名不是用户从列表里点的，而是这里现问设备（`getForegroundApp`）。
+ *
+ * 名称与图标读**本机那份应用缓存**（`getCachedApps`，不碰设备）：新窗口的「接回画面」横幅要用它们，
+ * 而为一格图标去问设备等于白花一轮 IO（同 `startMirrorSession` 的 `iconUrl` 那条注释）。
+ * 已经在播的应用由 `findAppSession` 复用，返回里带 `reused`。
+ */
+ipcMain.handle(CHANNELS.mirrorDesktopMode, async (event) => {
+  const session = sessionOfEvent(event);
+  const packageName = await getForegroundApp(session.serial);
+  // 停在桌面（launcher 自己就是前台）时没有可搬的应用 —— 说清楚比搬走 launcher 好。
+  if (!packageName) throw new Error("手机上现在没有打开的应用");
+  const cached = await getCachedApps(session.serial).catch(() => []);
+  const entry = cached.find((app) => app.packageName === packageName);
+  const label = entry?.label || packageName;
+  const started = await startMirrorSession({
+    serial: session.serial,
+    packageName,
+    label,
+    iconUrl: entry?.iconUrl || undefined,
+    // 沿用这个窗口的参数：同一台设备上换个入口不该换掉用户配好的规格。
+    config: session.pendingInit?.config ?? null,
+  });
+  return { ...started, label: started.label || label };
+});
 
 /**
  * dev 调试边栏（`tools` 那一格）展开/收起：边栏是**浮在窗口右边的另一栏**，所以撑宽的是**窗口**，
@@ -535,9 +577,14 @@ ipcMain.on(CHANNELS.mirrorState, (_event, payload) => {
     session.hasAudio = payload.hasAudio === true;
   } else if (payload.kind === "exit") {
     notifyExit({ ...payload, label: session.label, packageName: session.packageName, win: session.win });
-    sessions.delete(session.id);
-    // 会话已经没了（设备断开 / server 挂了），归属要一起放手。这里不 release 的话，
-    // 窗口随后 closed → stopMirrorSession 会因为记录已删而什么都做不到。
+    // 会话已经没了（设备断开 / server 挂了），**必须走完整收摊**，不能只删记录。
+    // ⚠️ 这里原来只 `sessions.delete(session.id)`：`miProjectionRestore` / `keepAwakeRestore` 会**跟着记录
+    // 一起被丢掉**，而窗口随后 `closed` 再调 `stopMirrorSession` 时 `sessions.get` 已经拿不到 session
+    // （`if (!session) return false`）⇒ 设备的 `synergy_mode` 与 `stay_on_while_plugged_in` **永远停在我们
+    // 改过的值上**，Mac 键盘的归属也不会放手。真机证据：`stay_on_while_plugged_in` 停在 7（2026-10-11）。
+    // 断开设备那条路上 `onDeviceTeardown` 也会调 `stopMirrorSession`，两边谁先谁后都安全：
+    // 后到的那个拿不到记录，自然空转（与「接回 / 关窗 / ⌘Q 走同一个入口」同一条规矩）。
+    void stopMirrorSession(session.id);
   }
 });
 

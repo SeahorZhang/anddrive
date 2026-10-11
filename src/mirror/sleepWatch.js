@@ -6,15 +6,47 @@
 export const FROZEN_STATES = new Set(["Asleep", "Dozing"]);
 
 /**
- * 屏灭着 = 面板读数不是 `'ON'`（`OFF` / `DOZE`…，见 `electron/adb.js` 的 `parsePanelPower`），或设备已睡。
- * 面板读数拿不到（ROM 的 SF 不 dump `powerMode`）时退回睡没睡，至少不会比只看 `mWakefulness` 更差。
+ * **面板确定灭着**的 wakefulness 态 = 冻结态 + `Hangup`。
+ *
+ * 为什么 `Hangup` 必须单独列进来：它是 HyperOS/MIUI 投屏态的灭屏，**面板物理灭着，但
+ * SurfaceFlinger 照旧报 `powerMode=On`**（合成还在跑，那正是 `synergy_mode` 这扇门的目的）。
+ * 真机实测（Mi 10 / HyperOS V816）走**超时灭屏**（bedtime → `updateWakefulnessLocked`）后：
+ * `mWakefulness=Hangup` + `powerMode=On` 稳定保持。于是只按 `powerMode` 判屏灭就会把它当成亮屏 ——
+ * 长条那颗按钮永远翻不到「恢复亮屏」（用户 10-11 报：「手机已经是关闭屏幕，打开镜像后
+ * 悬浮栏上的关闭屏幕按钮并没有打开」）。
+ *
+ * ⚠️ 它**不能**并进 `FROZEN_STATES`：那一个管的是「要不要弹『已休眠』」，而 `Hangup` 画面还在动。
+ * 两个集合的语义不同，别合并。
+ */
+export const PANEL_OFF_STATES = new Set([...FROZEN_STATES, "Hangup"]);
+
+/**
+ * 屏灭着 = 面板读数不是 `'ON'`（`OFF` / `DOZE`…，见 `electron/adb.js` 的 `parsePanelPower`），
+ * 或设备在**面板确定灭着**的态里（睡下 / `Hangup`）。
+ * 面板读数拿不到（ROM 的 SF 不 dump `powerMode`）时退回后一条，至少不会比只看 `mWakefulness` 更差。
  * ⚠️ 这条判据是长条那颗「关屏使用 / 恢复亮屏」的唯一依据：`setDisplayPower(OFF)` 只关面板、
  * 设备还 `Awake`，只看 `wakefulness` 那颗按钮就翻不回来，再点一次还是关屏（用户 10-10）。
  * @param {{ wakefulness: string | null, screen: string | null }} state
  */
 export function panelIsOff(state) {
-  const sleeping = FROZEN_STATES.has(state.wakefulness);
-  return state.screen ? state.screen !== "ON" || sleeping : sleeping;
+  const off = PANEL_OFF_STATES.has(state.wakefulness);
+  return state.screen ? state.screen !== "ON" || off : off;
+}
+
+/**
+ * 屏灭着时，要把它弄亮该走哪条路：`true` = **真唤醒**（`input keyevent 224`，即横幅「继续使用」那条），
+ * `false` = `setDisplayPower(Normal)`（scrcpy 控制消息，回系统默认）。
+ *
+ * 判据只有 `mWakefulness` 一条，因为这两条路的能力边界正好按它分：
+ * - 设备**不是** `Awake`（`Asleep` / `Dozing` / `Hangup`）：屏是**电源管理**灭的。
+ *   `setDisplayPower` 只改 SurfaceFlinger、**唤不动**它 —— 真机实测（Mi 10 / HyperOS V816）：
+ *   `Hangup` 下发 `Normal` 之后 8 秒仍是 `Hangup`（按钮会亮着却点不动，就是「再点一次点不亮」那个洞）。
+ * - 设备 `Awake`：屏是我们自己用 `setDisplayPower(OFF)` 关的，回 `Normal` 就对（这条路不占 `INJECT_EVENTS`，
+ *   比真唤醒稳，别改）。
+ * @param {{ wakefulness: string | null }} state
+ */
+export function needsRealWake(state) {
+  return state?.wakefulness !== "Awake";
 }
 
 /**

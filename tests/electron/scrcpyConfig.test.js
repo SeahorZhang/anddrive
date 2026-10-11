@@ -108,7 +108,7 @@ describe('normalizeScrcpyConfig', () => {
     expect(normalizeScrcpyConfig({ lastDeviceStableId: 'x'.repeat(200) }).lastDeviceStableId).toHaveLength(128)
   })
 
-  it('音频转发默认开（声音转到电脑、手机静音）', () => {
+  it('声音在哪出声默认「电脑」（老存盘/缺省都算电脑，只认显式 false）', () => {
     expect(normalizeScrcpyConfig({}).audio).toBe(true)
     expect(normalizeScrcpyConfig({ audio: undefined }).audio).toBe(true)
     // 只认显式 false —— 与 fullscreen 那条一样：默认开的开关不能被脏值或缺省关掉。

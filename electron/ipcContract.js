@@ -60,6 +60,11 @@ export const CHANNELS = {
   mirrorAppTask: 'mirror:appTask',
   /** 镜像 → 设备：把应用的任务搬到本窗口的虚拟显示上（不重启应用）。 */
   mirrorMoveTask: 'mirror:moveTask',
+  /**
+   * 镜像窗口 → 主进程：长条那颗「桌面模式」——把手机主屏上**正在用的应用**抽到一块新的虚拟屏窗口里
+   * （与首页点应用同一条路，包名由主进程现问设备）。只有整机镜像 + Android 14+ 才有这个入口。
+   */
+  mirrorDesktopMode: 'mirror:desktopMode',
   /** 设备电源两条读数：`mWakefulness`（睡没睡，「已休眠」看它）+ SF 的 `powerMode`（面板亮没亮，「关屏使用」那颗看它）。 */
   mirrorPowerState: 'mirror:powerState',
   /** 镜像 → 设备：点亮屏幕（用户点「继续使用」；只唤醒不解密码锁）。 */

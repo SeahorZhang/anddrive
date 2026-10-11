@@ -104,6 +104,75 @@ describe('createChromeReveal（悬浮栏的显隐）', () => {
   })
 })
 
+// 长条上那颗「一直显示」（2026-10-11 用户点单）：常驻之后 leave 不该再收；取消常驻要干净地回到
+// 上面那套 hover 判据 —— 既不能留下一个陈旧的到期时间，也不能自己排一个新的（点那颗按钮时指针
+// 就在条上，条不该在 1 秒后从指针底下消失）。
+describe('createChromeReveal 的常驻开关', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('按下去就显形 —— 不必先 poke（常驻该独立于 hover 生效）', () => {
+    const { reveal, seen } = make()
+    reveal.setPinned(true)
+    expect(seen).toEqual([true])
+  })
+
+  it('常驻期间 leave 排不出到期时间：离开多久都在', () => {
+    const { reveal, seen } = make()
+    reveal.setPinned(true)
+    reveal.leave()
+    reveal.leave()
+    vi.advanceTimersByTime(RAIL_HIDE_DELAY_MS * 100)
+    expect(seen).toEqual([true])
+  })
+
+  it('常驻期间 poke 不重复报（poke 挂在 pointermove 上，每帧都调）', () => {
+    const { reveal, seen } = make()
+    reveal.setPinned(true)
+    reveal.poke()
+    reveal.poke()
+    expect(seen).toEqual([true])
+  })
+
+  /** 鼠标刚移出去（排队中）又按了常驻：那个到期时间必须被撤掉，否则 1 秒后条会自己收掉。 */
+  it('排队中的那次收回会被常驻撤掉', () => {
+    const { reveal, seen } = make()
+    reveal.poke()
+    reveal.leave()
+    vi.advanceTimersByTime(RAIL_HIDE_DELAY_MS - 1)
+    reveal.setPinned(true)
+    vi.advanceTimersByTime(RAIL_HIDE_DELAY_MS * 10)
+    expect(seen).toEqual([true])
+  })
+
+  it('取消常驻**不**自己排计时（指针就在条上，条不该在指针底下消失）', () => {
+    const { reveal, seen } = make()
+    reveal.setPinned(true)
+    reveal.setPinned(false)
+    vi.advanceTimersByTime(RAIL_HIDE_DELAY_MS * 10)
+    expect(seen).toEqual([true])
+    // 没常驻过就取消 = 什么也不发生（不许冒一条多余的 onShow）。
+    const fresh = make()
+    fresh.reveal.setPinned(false)
+    expect(fresh.seen).toEqual([])
+  })
+
+  it('取消常驻之后回到原来那套：离开 1 秒后照收，再进来照弹', () => {
+    const { reveal, seen } = make()
+    reveal.setPinned(true)
+    reveal.setPinned(false)
+    reveal.leave()
+    vi.advanceTimersByTime(RAIL_HIDE_DELAY_MS)
+    expect(seen).toEqual([true, false])
+    reveal.poke()
+    expect(seen).toEqual([true, false, true])
+  })
+})
+
 // 「鼠标在栏里移动就展示/隐藏来回抖」的回归判据：面板显形会盖到触发格上面，命中层一变
 // 浏览器就补发一次 pointerleave，坐标其实还在格子里 —— 所以收起必须先过这道几何关。
 describe('isOutsideRect（什么才算真的移出悬浮栏）', () => {

@@ -26,6 +26,24 @@ export function mirrorsMainDisplay(sdk) {
   return Number.isInteger(sdk) && sdk > 0 && sdk <= MAIN_DISPLAY_MIRROR_MAX_SDK;
 }
 
+/** 「桌面模式」（= 点应用建虚拟屏那套）的最低 API 级别：Android 14 = API 34。 */
+export const DESKTOP_MODE_MIN_SDK = 34;
+
+/**
+ * 这台设备能不能进「桌面模式」—— 即从**整机镜像**的悬浮栏里把手机主屏上正在用的应用抽到一块
+ * 独立虚拟屏上（与首页点应用同一条路，见 `mirror/session.js` 的 `mirror:desktopMode`）。
+ *
+ * 门槛与 `mirrorsMainDisplay` 同源同界（34 = Android 14），理由也一样：14 起 scrcpy 建虚拟显示
+ * 才会自动补 `OWN_FOCUS`，13 及以下那块显示拿不到焦点。区别只在**读不到版本时这里回 false**
+ * —— 那里回 false 的语义是「照旧建虚拟显示」（老行为），这里回 false 的语义是「先不给这个入口」：
+ * 版本不明时多给一颗按钮，代价可能是让 13 及以下的用户点开一块操作不了的显示。
+ * 用户 2026-10-11 的原话是「安卓 14 往上」，所以宁可少给。
+ * @param {number | null | undefined} sdk
+ */
+export function supportsDesktopMode(sdk) {
+  return Number.isInteger(sdk) && sdk >= DESKTOP_MODE_MIN_SDK;
+}
+
 /**
  * `24M` / `800K` / `1G` → 比特每秒。非法值回落到官方默认 8Mbps。
  * @param {unknown} value
@@ -78,11 +96,8 @@ export function buildMirrorOptions(input, overrides = {}) {
   /** @type {Record<string, unknown>} */
   const options = {
     video: true,
-    // 音频转发跟着设置走，不写死：抓系统音频（REMOTE_SUBMIX playback capture）会抢
-    // 设备侧的音频焦点，正在播的 app 会因此暂停，会话结束时焦点回来又自动续播 ——
-    // 用户实机反馈就是「关掉投屏，手机立刻响起声音」。关掉音频就没有这次焦点抢占。
-    // 开的时候命令行里**看不到 `audio=`** 是对的：Tango 会丢掉与默认值相同的键，
-    // 而上游 server 的默认就是 `audio = true`（`Options.java:28`），省略即开。
+    // 音频转发跟着设置页那一项走（`config.audio`，默认开）。开的时候命令行里**看不到 `audio=`**
+    // 是对的：Tango 会丢掉与默认值相同的键，而上游 server 的默认就是 `audio = true`（`Options.java:28`），省略即开。
     audio: config.audio === true,
     control: true,
     sendStreamMeta: true,
@@ -93,10 +108,12 @@ export function buildMirrorOptions(input, overrides = {}) {
   if (options.audio) {
     // scrcpy 4.0 的音频仅支持 Opus（`ScrcpyAudioCodec.Opus`），WebCodecs 可解。
     options.audioCodec = "opus";
-    // 故意**不**开 audioDup（scrcpy 默认）：服务端给 AudioMix 设的是 ROUTE_FLAG_LOOP_BACK
-    // —— 只回环、不在本机渲染，所以投屏期间手机静音、声音只在电脑上出。
-    // 代价要知道：会话结束时 AudioPolicy 撤销，手机恢复渲染，正在播的内容会当场出声。
-    // 想要两边同时有声才需要 audioDup: true（ROUTE_FLAG_LOOP_BACK_RENDER）。
+    // 故意**不**开 audioDup（scrcpy 默认）：默认 `audio_source=output` 走 `AudioDirectCapture`
+    // （`REMOTE_SUBMIX` 直采），采到回环就不再渲染到设备 —— 所以投屏期间手机静音、声音只在电脑上出。
+    // `audio_dup` 是 `playback` 源那一支的 `ROUTE_FLAG_LOOP_BACK_RENDER`，对直采源是空操作。
+    // 代价要知道：会话结束、AudioPolicy 撤销后手机恢复渲染，正在播的内容会当场出声。
+    // 这一档在建会话时定死，控制协议里没有任何音频路由消息（随包 5.0.1 server 的 `Controller.java`
+    // 那一串 TYPE_* 里没有）⇒ 运行时改它只能整条会话重来，所以我们不提供运行时切换。
   }
 
   // 建显示：**给得出尺寸就同时开 flex**（scrcpy `--flex-display` / -x），显示跟着窗口重排。

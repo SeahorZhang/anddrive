@@ -2,14 +2,14 @@
 import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { Icon } from '@iconify/vue'
 import { useMirrorInput } from './useMirrorInput.js'
-import { bootstrap, dispose as disposeSession, reclaimApp, wakeScreen, setWindowButtons, setHudExtra, getSessionInfo, setContentElement, sendControl, setScreenPower, kickSleepWatch, setMacKeyboard, watchMacKeyboardState, syncMacKeyboard, commitViaMacKeyboard, onMacKeyboardFeedback, onMacKeyboardCaret } from './direct-session.js'
+import { bootstrap, dispose as disposeSession, reclaimApp, wakeScreen, setWindowButtons, setHudExtra, getSessionInfo, setContentElement, sendControl, setScreenPower, kickSleepWatch, setMacKeyboard, watchMacKeyboardState, syncMacKeyboard, commitViaMacKeyboard, onMacKeyboardFeedback, onMacKeyboardCaret, openDesktopMode } from './direct-session.js'
 import { createMacTextSink } from './macTextSink.js'
 import { caretRectToAnchor, clientToDevice, deviceToScreen, emSizePx, estimateAdvancePx, LINE_HEIGHT_RATIO } from './macTextAnchor.js'
 import { capsuleBox, capsuleRect, macTextCapsule } from './macTextCapsule.js'
 import { scaleDisplayDpi } from '../../shared/scrcpyConfig.js'
 import { aspectDiffers, createReflowGate } from './displayFollow.js'
 import { createChromeReveal, isOutsideRect } from './chromeReveal.js'
-import { FROZEN_STATES, panelIsOff } from './sleepWatch.js'
+import { FROZEN_STATES, needsRealWake, panelIsOff } from './sleepWatch.js'
 import { KEY_CODES } from '../../shared/keys.js'
 import { MIRROR_FRAME, MIRROR_RAIL } from '../../electron/mirror/options.js'
 
@@ -39,6 +39,9 @@ watch(showHud, (open) => setHudExtra(open ? HUD_WIDTH : 0))
  * 才淡入，**离开那一条 1 秒后收回**（用户 2026-10-10 第三次改，作废「只有移出窗口才收」；
  * 状态机在 `chromeReveal.js`）。红绿灯跟着它一起开关（系统画的，CSS 盖不住；落点由主进程按 `MIRROR_RAIL` 贴进来）。
  *
+ * 条上那颗**「一直显示」**（2026-10-11 用户点单）：按下去常驻、不再自动收，再按一次回到上面那套
+ * hover 显隐（状态在 `railPinned`，判据在 `chromeReveal.js` 的 `setPinned`）。
+ *
  * 2026-10-10 三轮定稿：先把外面那圈「hover 才往外扩」的浅色窗口底整块删了（黑框那圈留着常驻），
  * 又把长条从**画面里面**挪到**画面外面** —— 「任何 UI 都不要在手机里出现」。
  * 挪出来意味着它**占窗口宽度**（进 `mirrorScreenInsets()` 的右边），换来的是：
@@ -52,6 +55,14 @@ watch(showHud, (open) => setHudExtra(open ? HUD_WIDTH : 0))
  */
 const fullscreen = ref(false)
 const railShown = ref(false)
+/**
+ * 长条**常驻**（2026-10-11，用户：「侧边悬浮按钮栏加一个始终显示悬浮的按钮」）。
+ * 真状态在状态机里（`setPinned`），这里只镜像一份给模板绑 `is-active` —— 与 `railShown` 同一套写法。
+ *
+ * ⚠️ **不持久化**：它是窗口级的一次性开关（与 `railShown` 同类）。要跨会话记住就得进 `prefs`
+ * —— 那个口子连着 `shared/scrcpyConfig.js` 与设置界面，用户没要，先不动。
+ */
+const railPinned = ref(false)
 const reveal = createChromeReveal({
   onShow: (shown) => {
     railShown.value = shown
@@ -82,6 +93,20 @@ function onRailLeave(event) {
   const box = el.getBoundingClientRect()
   if (isOutsideRect(event, { left: box.left, top: box.top, right: box.right, bottom: box.bottom }))
     reveal.leave()
+}
+/**
+ * 长条上那颗「一直显示」按钮。常驻交给状态机（`setPinned`），这里只镜像一份给模板。
+ *
+ * ⚠️ 取消常驻要**看指针在哪**：状态机解除"不许收"之后并不会自己排收回计时（点这颗按钮时
+ * 指针必然在条上，那条路径靠下一次 `pointerleave` 收）。但键盘触发（焦点在按钮上按回车）
+ * 时指针可能压根不在条上 —— 那条路径上**不会再有 `pointerleave`**，不补这一下条就一直挂着。
+ * `matches(':hover')` 是这里唯一能同步问到"指针在不在这个元素上"的办法。
+ */
+function toggleRailPinned() {
+  const next = !railPinned.value
+  railPinned.value = next
+  reveal.setPinned(next)
+  if (!next && !railSlot.value?.matches?.(':hover')) reveal.leave()
 }
 /** 长条上的三个导航键：`kind:'key'` 走已经在的控制 socket（Tango `injectKeyCode`），不起 adb 进程。 */
 const RAIL_KEYS = [
@@ -129,9 +154,11 @@ const asleep = computed(() => FROZEN_STATES.has(powerState.value.wakefulness))
  */
 const screenBusy = ref(false)
 /**
- * 屏灭着 = 设备自己报面板不是 `ON`，或已经睡下（判据在 `sleepWatch.js` 的 `panelIsOff`，那边有全项目的来龙去脉）。
+ * 屏灭着 = 设备自己报面板不是 `ON`，或已经睡下 / 进了 `Hangup`（判据在 `sleepWatch.js` 的
+ * `panelIsOff` + `PANEL_OFF_STATES`，那边有全项目的来龙去脉）。
  * ⚠️ 不能只看 `mWakefulness`：「关屏使用」走 scrcpy 的 `setDisplayPower(OFF)`，那**只关面板、设备还 `Awake`** ——
  * 只看睡没睡的话，图标会翻回「关屏使用」，再点一次还是关屏，永远点不亮（用户 10-10）。
+ * ⚠️ 也不能只看面板读数：`Hangup` 面板灭着、SurfaceFlinger 却照旧报 `powerMode=On`（用户 10-11）。
  */
 const screenIsOff = computed(() => panelIsOff(powerState.value))
 async function toggleScreenPower() {
@@ -139,7 +166,20 @@ async function toggleScreenPower() {
   screenBusy.value = true
   const turnOn = screenIsOff.value
   try {
-    await setScreenPower(turnOn)
+    // 「恢复亮屏」分两条路（判据 `needsRealWake`，那边有真机实测的来龙去脉）：
+    // 设备本身在 `Asleep` / `Dozing` / `Hangup` 这些**电源管理**的灭屏态里时，
+    // `setDisplayPower(Normal)` 只改 SurfaceFlinger、唤不动它（实测 Hangup 下发后 8 秒仍是 Hangup），
+    // 按钮会亮着却点不动 ⇒ 走真唤醒那条（与横幅「继续使用」同一条，失败原因要说清）。
+    // 设备醒着时屏是我们自己关的，回 `Normal` 就对。
+    if (turnOn && needsRealWake(powerState.value)) {
+      const result = await wakeScreen()
+      if (!result?.ok) {
+        showNotice(result?.message || '唤醒失败')
+        return
+      }
+    } else {
+      await setScreenPower(turnOn)
+    }
     // 同上：**不乐观改读数**，只 kick。图标/横幅一律等设备自己的 `mWakefulness` 报上来，
     // 否则页面会显示一个"已经亮了"的假状态（那颗按钮也就跟着说谎）。
     kickSleepWatch()
@@ -710,6 +750,31 @@ async function reclaim() {
   }
 }
 
+/**
+ * 长条那颗「桌面模式」（用户 2026-10-11 点单）：把手机主屏上**正在用的应用**抽到一块独立虚拟屏
+ * 窗口里 —— 与首页「点应用」同一条路（虚拟显示 + 把 task 搬过去，不重启应用），只是包名由主进程
+ * 现问设备。已在播的应用会复用那个窗口（主进程 `findAppSession`），所以 `reused` 要单独给一句话。
+ *
+ * 该不该出这颗按钮由主进程判好随启动参数带来（`desktopModeAvailable` = 采主屏的会话 + Android 14+），
+ * 页面**不自己判版本**：判据两处各写一遍就会漂（同 `deviceMirror` 那条规矩）。
+ */
+const desktopModeAvailable = ref(false)
+const desktopBusy = ref(false)
+async function openDesktopModeWindow() {
+  if (desktopBusy.value) return
+  desktopBusy.value = true
+  try {
+    const result = await openDesktopMode()
+    const name = result?.label || result?.packageName || '这个应用'
+    showNotice(result?.reused ? `${name}已经单独开着窗口了` : `已把${name}放到独立窗口`)
+  } catch (error) {
+    // 失败要说清为什么（手机上停在桌面时主进程抛的就是那句「没有打开的应用」）。
+    showNotice(error?.message || '打开桌面模式失败')
+  } finally {
+    desktopBusy.value = false
+  }
+}
+
 const waking = ref(false)
 
 async function continueAfterSleep() {
@@ -899,6 +964,8 @@ async function booted() {
     },
   }).then(() => {
     status.value = ''
+    // 启动参数到手才知道那颗「桌面模式」该不该出（主进程判好了，见 `desktopModeAvailable`）。
+    desktopModeAvailable.value = getSessionInfo()?.desktopModeAvailable === true
   }).catch((error) => {
     status.value = `镜像连接失败：${error?.message || error}`
   })
@@ -1064,6 +1131,39 @@ onBeforeUnmount(() => {
               <TooltipPortal>
                 <TooltipContent side="left" :side-offset="12" :class="TIP_CLASS">{{
                   screenIsOff ? '恢复手机亮屏' : '关掉手机屏，镜像继续'
+                }}</TooltipContent>
+              </TooltipPortal>
+            </TooltipRoot>
+            <!-- 桌面模式（用户 2026-10-11 点单）：把手机主屏上正在用的应用抽到一块独立虚拟屏窗口里
+                 —— 与首页「点应用」同一条路。只有**采主屏**的会话（整机镜像）在 Android 14+ 才出这颗：
+                 虚拟显示那条路本身就是桌面模式，13 及以下建出来的显示拿不到焦点（判据在主进程）。 -->
+            <TooltipRoot v-if="desktopModeAvailable">
+              <TooltipTrigger as-child>
+                <button type="button" class="mirror-rail__key" :disabled="desktopBusy" aria-label="桌面模式"
+                  @click="openDesktopModeWindow">
+                  <Icon icon="lucide:app-window" :width="18" :height="18" />
+                </button>
+              </TooltipTrigger>
+              <TooltipPortal>
+                <TooltipContent side="left" :side-offset="12" :class="TIP_CLASS">把手机上正在用的应用移进独立窗口</TooltipContent>
+              </TooltipPortal>
+            </TooltipRoot>
+            <!-- 长条**常驻**（2026-10-11 用户点单：「侧边悬浮按钮栏加一个始终显示悬浮的按钮」）：
+                 按下去这条不再自动收（鼠标移到哪它都在），再按一次回到「进格子才弹、离开 1 秒后收」。
+                 ⚠️ 高亮画的是**现在的状态**（常驻 = `is-active`），与上面那颗关屏同一条规矩 ——
+                 10-10 他报过「图标跟状态反着标」，别再来一次。
+                 ⚠️ 不持久化：换一扇窗口 / 重启应用回到非常驻（要跨会话记住得动 `prefs`）。 -->
+            <TooltipRoot>
+              <TooltipTrigger as-child>
+                <button type="button" class="mirror-rail__key" :class="{ 'is-active': railPinned }"
+                  :aria-label="railPinned ? '恢复自动收起' : '一直显示悬浮栏'" :aria-pressed="railPinned"
+                  @click="toggleRailPinned">
+                  <Icon icon="lucide:pin" :width="18" :height="18" />
+                </button>
+              </TooltipTrigger>
+              <TooltipPortal>
+                <TooltipContent side="left" :side-offset="12" :class="TIP_CLASS">{{
+                  railPinned ? '恢复自动收起' : '让这条一直显示'
                 }}</TooltipContent>
               </TooltipPortal>
             </TooltipRoot>
@@ -1325,6 +1425,15 @@ onBeforeUnmount(() => {
   /* 面板宽度**从格子推导**：格子左右各留 6px ⇒ 面板与红绿灯（在格子里居中）同一根中线，
      以后只改 `MIRROR_RAIL.width` 一个数，面板与落点会一起跟着走。 */
   --rail-side-gap: 6px;
+  /* 开关按键"开着"时的填充色（见下面 `.mirror-rail__key.is-active`）。
+     ⚠️ **必须写死，不能用 `var(--color-accent)`**：镜像页是**另一份 CSS 产物**，Tailwind 的
+     `@theme` 只把它**真正用到**的令牌发出来 —— 镜像页一个 `accent` 工具类都没有 ⇒ 那段 `:root`
+     在产物里压根不存在（`grep -- '--color-accent:' dist/assets/mirror-*.css` = 0 命中），
+     `var()` 取不到值就是"背景透明 + 白图标"，在白面板上等于消失。
+     色值取浅色主题那个蓝（`src/styles/index.css` 的 `--color-accent` / `-press`），与面板底色
+     `#fbfbfb` 同一个道理：**这块 chrome 不跟主题走**。 */
+  --rail-accent: #007aff;
+  --rail-accent-press: #0064d2;
   justify-self: end;
   width: calc(var(--rail-w) - 2 * var(--rail-side-gap));
   margin: 0 var(--rail-side-gap) 0 0;
@@ -1450,10 +1559,25 @@ onBeforeUnmount(() => {
   background: rgb(0 0 0 / 14%);
 }
 
-/* 关屏那一格按下去要留得住状态（它是个开关，不是瞬时按键）。 */
+/* 开关型按键（关屏 / 常驻 / Mac 键盘）**按下去要一眼看得出来**（用户 10-11：
+   「悬浮窗按钮选中状态不明显」）。原来只是把灰底从 5% 压到 14% —— 在 `#fbfbfb` 那块面板上
+   几乎分不出来。改成**填实的主色**（与主窗口那颗主按钮同一个蓝）+ 白图标：深浅对调，扫一眼
+   就知道哪几颗开着。色值出处与"为什么不能写 `var(--color-accent)`"见上面 `--rail-accent`。
+   ⚠️ 这三条必须排在 `:hover` / `:active` **后面**：特异性都是两个选择器，靠源码顺序决胜，
+   否则鼠标压上去时高亮会被灰底盖掉。 */
 .mirror-rail__key.is-active {
-  background: rgb(0 0 0 / 14%);
-  color: rgb(0 0 0 / 82%);
+  background: var(--rail-accent);
+  color: #fff;
+}
+
+/* 填实之后悬停/按下照主窗口那颗主按钮的规矩（`BaseButton`：hover 用 `accent-press`、
+   按下再压一档亮度），否则鼠标压上去一点反馈都没有。 */
+.mirror-rail__key.is-active:hover {
+  background: var(--rail-accent-press);
+}
+
+.mirror-rail__key.is-active:active {
+  filter: brightness(0.9);
 }
 
 .mirror-rail__key:disabled {

@@ -19,6 +19,7 @@ const {
   mirrorTrafficLightPosition,
   MIRROR_RAIL,
   mirrorsMainDisplay,
+  supportsDesktopMode,
 } = await import('../../electron/mirror/options.js')
 
 describe('mirrorsMainDisplay（Android 13 及以下点应用不建虚拟显示）', () => {
@@ -38,6 +39,28 @@ describe('mirrorsMainDisplay（Android 13 及以下点应用不建虚拟显示�
     expect(mirrorsMainDisplay(NaN)).toBe(false)
     expect(mirrorsMainDisplay('33')).toBe(false)
     expect(mirrorsMainDisplay(0)).toBe(false)
+  })
+})
+
+describe('supportsDesktopMode（整机镜像里那颗「桌面模式」按钮）', () => {
+  it('Android 14（API 34）起可用：33 及以下那块虚拟显示拿不到焦点', () => {
+    expect(supportsDesktopMode(34)).toBe(true)
+    expect(supportsDesktopMode(36)).toBe(true)
+    expect(supportsDesktopMode(33)).toBe(false)
+    expect(supportsDesktopMode(29)).toBe(false)
+  })
+
+  /**
+   * ⚠️ 这里与 `mirrorsMainDisplay` **反过来**：那边读不到版本 = 「照旧建虚拟显示」（老行为），
+   * 这边读不到版本 = 「先不给入口」。多一颗按钮的代价是让 13 及以下的用户点开一块操作不了的显示，
+   * 而用户 2026-10-11 的原话就是「安卓 14 往上」。
+   */
+  it('版本读不到（null/undefined/非数字）时不给这个入口', () => {
+    expect(supportsDesktopMode(null)).toBe(false)
+    expect(supportsDesktopMode(undefined)).toBe(false)
+    expect(supportsDesktopMode(NaN)).toBe(false)
+    expect(supportsDesktopMode('34')).toBe(false)
+    expect(supportsDesktopMode(0)).toBe(false)
   })
 })
 
@@ -71,7 +94,7 @@ describe('buildMirrorOptions', () => {
     const options = optionsFor(undefined)
     expect(options).toMatchObject({
       video: true,
-      // 音频转发默认开（声音转到电脑、手机静音；2026-10-08 用户定的那一档）。
+      // 音频与画面在**同一条会话**里：设置页那一项（默认开）决定 `audio`。
       audio: true,
       control: true,
       sendStreamMeta: true,
@@ -103,7 +126,7 @@ describe('buildMirrorOptions', () => {
     expect(options.newDisplay).toBeUndefined()
     expect(options.flexDisplay).toBeUndefined()
     expect(options.vdSystemDecorations).toBeUndefined()
-    // 其余参数与单应用镜像同规格：编码、码率、fps、音频照设置走，控制通道照旧开着。
+    // 其余参数与单应用镜像同规格：编码、码率、fps 照设置走，控制通道与音频照旧。
     expect(options).toMatchObject({ video: true, audio: true, control: true, videoCodec: 'h265' })
     // 大屏模式那份补丁的效果只作用于新建显示，整机镜像这一档带着它也建不出显示。
     expect(buildMirrorOptions(LARGE, { videoCodec: 'h265', deviceMirror: true }).newDisplay)
@@ -116,33 +139,16 @@ describe('buildMirrorOptions', () => {
     ).toThrow(/不建虚拟显示/)
   })
 
-  it('任何配置组合都不把系统装饰打开', () => {    for (const config of [undefined, { audio: true }, { maxFps: 120 }, { videoCodec: 'av1' }]) {
+  it('任何配置组合都不把系统装饰打开', () => {
+    for (const config of [undefined, { audio: true }, { maxFps: 120 }, { videoCodec: 'av1' }]) {
       expect(optionsFor(config).vdSystemDecorations).toBe(false)
     }
   })
 
-  it('打开音频转发时才有音频参数', () => {
-    expect(optionsFor({ audio: true })).toMatchObject({
-      video: true,
-      audio: true,
-      audioCodec: 'opus',
-    })
-  })
-
-  it('拿不到设备信息时：空串 + **不开 flex**，也不自己编数字', () => {
-    const options = buildMirrorOptions(undefined, { videoCodec: 'h265' })
-    expect(options.newDisplay).toBe('')
-    // flex 缺尺寸会撞上游 `prepare()` 的断言，所以这一条必须跟着关。
-    expect('flexDisplay' in options).toBe(false)
-    expect(buildMirrorOptions({}, { videoCodec: 'h265', display: null }).newDisplay).toBe('')
-    // 大屏模式没有尺寸就没有密度口径，宁可抛也不猜（2026-09-28 那条教训）。
-    expect(() => buildMirrorOptions(LARGE, { videoCodec: 'h265' })).toThrow(/虚拟显示/)
-    expect(() => buildMirrorOptions(LARGE, { videoCodec: 'h265', display: {} })).toThrow(/虚拟显示/)
-  })
-
   it('转发音频时才请求 Opus；显式关掉就完全不建音频采集', () => {
-    // 抓系统音频会抢设备侧音频焦点（在播的 app 会暂停、会话结束时又自动续播），
-    // 所以设置里的音频开关必须是真的开关 —— 早先这里写死 audio: true。
+    // 抓系统音频（`REMOTE_SUBMIX` 直采）会抢设备侧的音频路由：投屏期间手机不出声。
+    // 这一档在建会话时定死、控制协议里没有音频路由消息 ⇒ 设置页那一项只影响下次开会话，
+    // 没有运行时切换（2026-10-11 试过「独立音频会话」那条绕法，代价是每条会话各推一次 jar，已删）。
     expect(optionsFor({ audio: true }).audio).toBe(true)
     expect(optionsFor({ audio: true }).audioCodec).toBe('opus')
     // 用户 2026-09-21 明确要「投屏时手机不出声」= scrcpy 默认（不开 --audio-dup）。
@@ -154,6 +160,17 @@ describe('buildMirrorOptions', () => {
 
     // 没配置 = 默认值 = 开（2026-10-08 翻的默认，见 `DEFAULT_SCRCPY_CONFIG.audio`）。
     expect(optionsFor(undefined).audio).toBe(true)
+  })
+
+  it('拿不到设备信息时：空串 + **不开 flex**，也不自己编数字', () => {
+    const options = buildMirrorOptions(undefined, { videoCodec: 'h265' })
+    expect(options.newDisplay).toBe('')
+    // flex 缺尺寸会撞上游 `prepare()` 的断言，所以这一条必须跟着关。
+    expect('flexDisplay' in options).toBe(false)
+    expect(buildMirrorOptions({}, { videoCodec: 'h265', display: null }).newDisplay).toBe('')
+    // 大屏模式没有尺寸就没有密度口径，宁可抛也不猜（2026-09-28 那条教训）。
+    expect(() => buildMirrorOptions(LARGE, { videoCodec: 'h265' })).toThrow(/虚拟显示/)
+    expect(() => buildMirrorOptions(LARGE, { videoCodec: 'h265', display: {} })).toThrow(/虚拟显示/)
   })
 
   it('overrides the codec when the native engine requests it', () => {
