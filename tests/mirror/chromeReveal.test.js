@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createChromeReveal, rightEdgeZone, RAIL_HIDE_DELAY_MS } from '../../src/mirror/chromeReveal.js'
+import { createChromeReveal, chromeZone, RAIL_HIDE_DELAY_MS } from '../../src/mirror/chromeReveal.js'
 
 // 「往外扩那一圈」的显隐判据（用户 2026-10-10 第三次改）：**进到悬浮栏就出，离开它 1 秒后才收**。
 // 之前两版都作废过：「停手 1.5s 自动淡出」（在栏里不动也会收）与「只有移出窗口才收」（回到画面上还杵着）。
@@ -175,31 +175,48 @@ describe('createChromeReveal 的常驻开关', () => {
 
 // 「鼠标在栏里移动就展示/隐藏来回抖」的回归判据：面板显形会盖到触发格上面，命中层一变
 // 浏览器就补发一次 pointerleave，坐标其实还在格子里 —— 所以收起必须先过这道几何关。
-describe('rightEdgeZone（满屏那一档的触发，进出一条线、中间迟滞）', () => {
+// chrome 是 **L 形**（用户 2026-10-12「鼠标移动到右侧和上边都要展示边框」）⇒ 两条臂各有一条进线/出线。
+// 数按 `App.vue` 那两组常量取：右臂 = 长条格 86，上臂 = 顶条最上面那 12px 触发带
+// （顶条其余是 drag 区，DOM 收不到事件，见 `MIRROR_TITLEBAR.revealHeight`）。
+describe('chromeZone（L 形两条臂：右边长条 + 顶部那条，进出一条线、中间迟滞）', () => {
   const W = 1600
-  const ENTER = 86
-  const EXIT = 206 // 86 + 120：多给的那一截留给按钮左边的 tooltip
+  const H = 900
+  const ENTER = { x: 86, y: 12 }
+  const EXIT = { x: 206, y: 132 } // 各自 +120：多给的那一截留给按钮左边的 tooltip
+  const MID = { clientX: 800, clientY: 450 } // 两条臂都够不到的那一片
 
-  it('进 86px 以内 = enter（条自己的那一格）', () => {
-    expect(rightEdgeZone({ clientX: 1599 }, W, ENTER, EXIT)).toBe('enter')
-    expect(rightEdgeZone({ clientX: 1515 }, W, ENTER, EXIT)).toBe('enter')
-    expect(rightEdgeZone({ clientX: 1514 }, W, ENTER, EXIT)).toBe('enter') // 正好压在进线
+  it('右臂：进 86px 以内 = enter（条自己的那一格）', () => {
+    expect(chromeZone({ ...MID, clientX: 1599 }, W, H, ENTER, EXIT)).toBe('enter')
+    expect(chromeZone({ ...MID, clientX: 1515 }, W, H, ENTER, EXIT)).toBe('enter')
+    expect(chromeZone({ ...MID, clientX: 1514 }, W, H, ENTER, EXIT)).toBe('enter') // 正好压在进线
   })
 
-  it('出 206px 以外才算 leave', () => {
-    expect(rightEdgeZone({ clientX: 1393 }, W, ENTER, EXIT)).toBe('leave') // 1600-207
-    expect(rightEdgeZone({ clientX: 800 }, W, ENTER, EXIT)).toBe('leave')
-    expect(rightEdgeZone({ clientX: 0 }, W, ENTER, EXIT)).toBe('leave')
+  it('上臂：顶部那 12px 触发带也算触发区（用户点名要的两条边之一）', () => {
+    expect(chromeZone({ ...MID, clientY: 0 }, W, H, ENTER, EXIT)).toBe('enter')
+    expect(chromeZone({ ...MID, clientY: 11 }, W, H, ENTER, EXIT)).toBe('enter')
+    expect(chromeZone({ ...MID, clientY: 12 }, W, H, ENTER, EXIT)).toBe('enter') // 正好压在线下沿
+    // 横坐标压根不贴边也得认 —— 上臂与右臂是**或**的关系
+    expect(chromeZone({ clientX: 40, clientY: 6 }, W, H, ENTER, EXIT)).toBe('enter')
+  })
+
+  it('两条臂**都**越出各自的出线才算 leave', () => {
+    expect(chromeZone(MID, W, H, ENTER, EXIT)).toBe('leave')
+    expect(chromeZone({ clientX: 1393, clientY: 450 }, W, H, ENTER, EXIT)).toBe('leave') // 1600-207
+    expect(chromeZone({ clientX: 800, clientY: 133 }, W, H, ENTER, EXIT)).toBe('leave') // 12+120+1
   })
 
   it('中间那一圈是 hold：既不出也不收 —— 鼠标停在按钮左沿外或压在 tooltip 上时不该闪', () => {
-    expect(rightEdgeZone({ clientX: 1513 }, W, ENTER, EXIT)).toBe('hold') // 刚出进线
-    expect(rightEdgeZone({ clientX: 1450 }, W, ENTER, EXIT)).toBe('hold') // tooltip 那一截
-    expect(rightEdgeZone({ clientX: 1394 }, W, ENTER, EXIT)).toBe('hold') // 正好压出线
+    expect(chromeZone({ ...MID, clientX: 1513 }, W, H, ENTER, EXIT)).toBe('hold') // 刚出右臂进线
+    expect(chromeZone({ ...MID, clientX: 1450 }, W, H, ENTER, EXIT)).toBe('hold') // tooltip 那一截
+    expect(chromeZone({ ...MID, clientX: 1394 }, W, H, ENTER, EXIT)).toBe('hold') // 正好压右臂出线
+    expect(chromeZone({ ...MID, clientY: 13 }, W, H, ENTER, EXIT)).toBe('hold') // 刚出上臂进线（drag 区那 16px）
+    expect(chromeZone({ ...MID, clientY: 132 }, W, H, ENTER, EXIT)).toBe('hold') // 正好压上臂出线
   })
 
-  it('只按横坐标判：满屏里任何高度贴右边缘都该能浮出（不然顶/底要精确贴边）', () => {
-    expect(rightEdgeZone({ clientX: 1550, clientY: 0 }, W, ENTER, EXIT)).toBe('enter')
-    expect(rightEdgeZone({ clientX: 1550, clientY: 100000 }, W, ENTER, EXIT)).toBe('enter')
+  it('一条臂出去、另一条还留着 ⇒ 不收（L 形不能各判各的）', () => {
+    // 从顶部条滑到画面中间，但还贴右边缘
+    expect(chromeZone({ clientX: 1550, clientY: 450 }, W, H, ENTER, EXIT)).toBe('enter')
+    // 从右边缘挪到中间，但还贴顶边
+    expect(chromeZone({ clientX: 800, clientY: 5 }, W, H, ENTER, EXIT)).toBe('enter')
   })
 })

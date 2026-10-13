@@ -364,7 +364,7 @@ const deviceNames = new Map();
  * 读取手机上展示的设备名称（蓝牙名 / 设备名，其次市场名）。按 serial 缓存。
  * @param {string} serial
  */
-async function deviceDisplayName(serial) {
+export async function deviceDisplayName(serial) {
   if (deviceNames.has(serial)) return deviceNames.get(serial);
   const shell = async (...args) => {
     try {

@@ -69,9 +69,9 @@ export const CHANNELS = {
   /** 镜像 → 设备：点亮屏幕（用户点「继续使用」；只唤醒不解密码锁）。 */
   mirrorWake: 'mirror:wake',
   /** 主进程 → 镜像窗口：进/出 macOS 全屏（那一屏里长条不再占窗口宽度、红绿灯归系统藏，页面要换排法）。 */
+  mirrorWindowButtons: 'mirror:windowButtons',
   mirrorFullscreen: 'mirror:fullscreen',
   /** 镜像窗口 → 主进程：淡入/收起边框时一起开关红绿灯（透明窗口里浮着的圆点会破坏「就是个手机」的样子）。 */
-  mirrorWindowButtons: 'mirror:windowButtons',
   /** 镜像窗口 → 主进程：dev 调试边栏要占多少宽（0 = 收起）。主进程把窗口撑宽同样的量，画面那块才不被挤小。 */
   mirrorWindowHud: 'mirror:windowHud',
   /** 镜像窗口 → 主进程：长条那颗「使用 Mac 键盘」。`on` 抢过设备输入法、`off` 还原、`state` 只问当前归属。 */

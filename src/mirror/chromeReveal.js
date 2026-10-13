@@ -43,7 +43,7 @@ export function createChromeReveal({ onShow, hideAfterMs = RAIL_HIDE_DELAY_MS })
       cancelHide();
       apply(true);
     },
-    /** 鼠标离开触发区（由调用方按 `rightEdgeZone` 判，格子矩形那套已废）。 */
+    /** 鼠标离开触发区（由调用方按 `chromeZone` 判，格子矩形那套已废）。 */
     leave() {
       // 常驻时不收，也不排到期时间：排了就会在"取消常驻"那一刻冒出一个陈旧的计时。
       if (!shown || pinned || timer) return;
@@ -65,27 +65,27 @@ export function createChromeReveal({ onShow, hideAfterMs = RAIL_HIDE_DELAY_MS })
 }
 
 /**
- * 满屏那一档（桌面模式）「指针进没进右边缘那一条」的判据，返回三态而不是布尔：
- * **进出的线不是同一条**（迟滞）。
+ * 「指针进没进那层 chrome 的两条边」的判据，返回三态而不是布尔：**进出的线不是同一条**（迟滞）。
  *
- * 为什么必须两条线：只有一条 86px 的线时，鼠标停在按钮上、或往左挪一点点去看浮出的 tooltip
- * （它 portal 到 body，在条的左边）就会立刻算「离开」⇒ 条收一半又弹回来，用户看到的就是
- * 「一闪一闪、而且常常要移几次才出得来」（2026-10-11）。所以：
- * - 进 `enterPx` 以内算 `enter`（显形）；
- * - 出 `exitPx` 以外算 `leave`（交给状态机延 `hideAfterMs` 收）；
- * - 中间那一圈 `hold` —— **什么都不做**，保持现在的样子。
+ * chrome 是一个 **L 形**：右边那一条（= 操作栏本身）+ 上边那一条（三颗与标题）。用户 10-12 明确
+ * 「鼠标移动到右侧和上边都要展示边框」⇒ 两条臂都算触发区。
+ * 为什么还要迟滞：只有一条线时，鼠标停在按钮上、或往左/往下挪一点去看 tooltip，条就当场收一半
+ * 再弹回（「一闪一闪、常常要移几次才出得来」）。所以：
+ * - 落在任一臂的 `enter` 范围内 → `enter`（显形）；
+ * - 两条臂**都**越出 `exit` → `leave`（交给状态机延 `hideAfterMs` 收）；
+ * - 其余 → `hold`，保持现状。
  *
- * 只按横坐标判：满屏里贴任何高度都该能浮出条，不然顶部/底部要精确贴边才出得来。
- *
- * @param {{ clientX: number }} point
- * @param {number} windowWidth 窗口宽（CSS px）
- * @param {number} enterPx 进来算触发的宽度（= 长条格子宽）
- * @param {number} exitPx 离开算收线的宽度（比 `enterPx` 宽，构成迟滞）
+ * @param {{ clientX: number, clientY: number }} point
+ * @param {number} width 窗口宽（CSS px）
+ * @param {number} height 窗口高
+ * @param {{ x: number, y: number }} enter 两臂各自的进入宽度 / 高度
+ * @param {{ x: number, y: number }} exit 两臂各自的收线（比 `enter` 宽，构成迟滞）
  * @returns {'enter' | 'hold' | 'leave'}
  */
-export function rightEdgeZone({ clientX }, windowWidth, enterPx, exitPx) {
-  const fromRight = windowWidth - clientX;
-  if (fromRight <= enterPx) return 'enter';
-  if (fromRight > exitPx) return 'leave';
+export function chromeZone({ clientX, clientY }, width, height, enter, exit) {
+  const fromRight = width - clientX;
+  const fromTop = clientY;
+  if (fromRight <= enter.x || fromTop <= enter.y) return 'enter';
+  if (fromRight > exit.x && fromTop > exit.y) return 'leave';
   return 'hold';
 }

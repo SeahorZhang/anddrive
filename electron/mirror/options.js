@@ -199,7 +199,53 @@ export const MIRROR_FRAME = {
 };
 
 /**
- * 手机**右边**那条悬浮控制长条（红绿灯 + 返回/Home/多任务，用户 2026-10-10 定）。
+ * 窗口**顶部**那一条：专门放系统那三颗彩虹键 + app 名称（用户 2026-10-12：「试试 a 的变体，
+ * 上边加一条专门放三个按钮和 app 名称」）。
+ *
+ * 它**占布局** ⇒ 进 `mirrorScreenInsets()` 的上边：画面那块矩形 = 窗口 − 这一条 − 四边黑框 − 右边长条，
+ * 两边（主进程算的 `initialCss` 与渲染层的 DOM）必须同源，否则画面里会露出一条 letterbox。
+ * `height` 与三颗的关系：三颗约 14 高，垂直居中 ⇒ `lightTop = (height − 14) / 2`。
+ */
+export const MIRROR_TITLEBAR = {
+  // 用户 10-12：「上边高度窄一点」⇒ 从照抄竞品的 41 收到 28（macOS 隐藏式标题栏的常见高度，
+  // 三颗约 14 高，上下各留 7 正好垂直居中）。
+  height: 28,
+  /**
+   * 顶部这一条里**最上面那 12px 不当地窗拖区，专门留给 hover 触发**（用户 10-12「鼠标移动到
+   * 右侧和上边都要展示边框」，10-12 实测才定位到根因）：整条 `-webkit-app-region: drag` 时
+   * Chromium **不把指针事件送进 DOM**（探针：从画面中间一步一步移到 y=14，一路只有 y≥30 的事件，
+   * 进到 drag 区那一步连 `pointermove` 都没有）⇒ "贴上边"这条臂永远收不到信号，chrome 不出来。
+   * 所以真正算触发区的只有这 `revealHeight` 那一截（`no-drag`，见 `App.vue` 的 `.mirror-titlebar__reveal`），
+   * 剩下 16px 照样能拖着窗口走。
+   */
+  revealHeight: 12,
+  /** 最左那颗的 x（从窗口内容区左沿量，AppKit 那个坐标系的惯例）。 */
+  lightX: 12,
+  /** 三颗**整组**的实测宽（Electron 44 / macOS 27：约 58，间距与大小都动不了，只能整组平移）。 */
+  lightGroupWidth: 58,
+  /** 名称与三颗之间留这一点。 */
+  nameGap: 10,
+};
+
+/** app 名称的左起位置：让开三颗（名称是我们画的，落点自己算）。 */
+export function mirrorTitlebarNameLeft() {
+  return MIRROR_TITLEBAR.lightX + MIRROR_TITLEBAR.lightGroupWidth + MIRROR_TITLEBAR.nameGap;
+}
+
+/**
+ * 三颗彩虹键的落点（`BrowserWindow` 的 `trafficLightPosition`）。
+ *
+ * ⚠️ **与窗口宽无关**（这是这次选顶部条、不选右侧长条的第二个理由）：10-10 那套把它们贴进右侧长条，
+ * 落点是 `窗口宽 − 长条宽 + 内缩` ⇒ 每次 resize 都得重算一次，漏一次就留在旧位置。
+ * 现在钉在顶部条里，一个常量，`resize` 什么都不用做。
+ * @returns {{ x: number, y: number }}
+ */
+export function mirrorTrafficLightPosition() {
+  return { x: MIRROR_TITLEBAR.lightX, y: Math.round((MIRROR_TITLEBAR.height - 14) / 2) };
+}
+
+/**
+ * 手机**右边**那条悬浮控制长条（返回/Home/多任务 + 那几颗开关，用户 2026-10-10 定）。
  * 它**占窗口宽度**（用户 10-10 第二次定稿：「任何 UI 都不要在手机里出现，都移到外边」⇒ 只能挤到画面外），
  * 所以它进 `mirrorScreenInsets()` 的右边：窗口 = 画面 + 黑框 + 这条。
  * 唯一进主进程的另一件事是红绿灯的落点 —— 那三颗是系统画的，CSS 盖不住。
@@ -207,22 +253,10 @@ export const MIRROR_FRAME = {
 export const MIRROR_RAIL = {
   /**
    * 长条格子宽（占布局那一格，面板在它里面左右各留 6px）。
-   * 下限由红绿灯定：三颗**永远横排**、整组实测约 58px 宽（Electron 44，`/tmp` 探针量过）+ 两侧居中留白。
+   * ⚠️ 红绿灯**不再进这套算术**（用户 2026-10-11：「3 个彩虹按键恢复默认，不要有任何修改」）：
+   * 之前 86 的下限是「三颗约 58 宽 + 居中留白」，现在三颗归 AppKit 放左上角，这个数只剩面板自己的手感值。
    */
   width: 86,
-  /** 红绿灯整组距格子左沿 = `(width − 58) / 2`，也就是让三颗在格子里居中（面板同心中）。 */
-  lightInset: 14,
-  /**
-   * 红绿灯距窗口顶。**这两档（`lightTop` / `keysTop`）是用户自己在真窗上对着调的手感值**，
-   * 不是算出来的不变量 —— 10-10 一路调过 14 → 18 → 30 → 37 → 18（面板从"顶部一小块"改成与手机同高后又调回偏上）。
-   * 唯一的硬约束：三颗约 14 高，必须整个待在红绿灯那一截里（`keysTop` 下面才是按键）。
-   */
-  lightTop: 18,
-  /**
-   * 按键区从这条高度以下开始排（从**窗口顶**算起）。上面那一截归红绿灯 —— 它是系统画的，
-   * CSS 既盖不住也挪不动，我们只能给它留位并在下沿画一条分隔线（`App.vue` 的 `.mirror-rail__lights`）。
-   */
-  keysTop: 50,
   /**
    * 淡入 / 淡出各多久（CSS 与「红绿灯延后藏起来」共用这两个数）。
    * 出去比进来慢一档：出现要跟手，消失要收得干净（用户 10-10「消失的时候感觉不太协调」）。
@@ -238,7 +272,8 @@ export const MIRROR_RAIL = {
 export function mirrorScreenInsets() {
   const { bezel } = MIRROR_FRAME;
   return {
-    top: bezel,
+    // 上边多一条标题栏（三颗彩虹键 + app 名的地盘，见 `MIRROR_TITLEBAR`）。
+    top: bezel + MIRROR_TITLEBAR.height,
     bottom: bezel,
     left: bezel,
     right: bezel + MIRROR_RAIL.width,
@@ -270,18 +305,6 @@ export function mirrorAspectRatio(screenSize) {
   if (!(width > 0) || !(height > 0)) return 0;
   const ratio = width / height;
   return Number.isFinite(ratio) ? ratio : 0;
-}
-
-/**
- * 红绿灯落点（`BrowserWindow` 的 `trafficLightPosition` / `setWindowButtonPosition` 都吃这个形状）。
- * 坐标 = 三颗里最左边那颗的左上角，从窗口内容区左上量起；给的是**整组**的位置，间距与大小动不了。
- * 长条与窗口右边缘齐平（它在画面外面），所以落点 = 内容区宽 − 长条宽 + 内缩，正好把 58px 那组居中。
- * @param {number} contentWidth 窗口内容区宽（CSS px）
- * @returns {{ x: number, y: number }}
- */
-export function mirrorTrafficLightPosition(contentWidth) {
-  const { width, lightInset, lightTop } = MIRROR_RAIL;
-  return { x: Math.round(contentWidth - width + lightInset), y: lightTop };
 }
 
 /**

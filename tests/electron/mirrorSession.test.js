@@ -25,9 +25,9 @@ const env = vi.hoisted(() => {
       this.fullscreenCalls = []
       /** `maximize()` 的调用次数（满屏 = zoom 撑满，不再是 macOS 全屏）。 */
       this.maximizeCalls = 0
-      /** `setWindowButtonVisibility` 收到过的值（红绿灯的开关轨迹）。 */
+      /** `setWindowButtonVisibility` 收到过的值。红绿灯已归系统（10-11），这里只用来证明"一次都没调"。 */
       this.buttonCalls = []
-      /** `setWindowButtonPosition` 收到过的落点（红绿灯贴右侧长条的算术轨迹）。 */
+      /** `setWindowButtonPosition` 收到过的落点。同上：谁再去挪三颗，这里就留痕。 */
       this.buttonPositionCalls = []
       /** 红绿灯两类调用的**先后**轨迹：放出来之后必须紧跟一次设位（见 session.js 那条实测）。 */
       this.lightTrace = []
@@ -60,12 +60,12 @@ const env = vi.hoisted(() => {
     isMaximized() {
       return this.maximized === true
     }
-    /** macOS 红绿灯：长条收起时要藏起来，否则三颗圆点会浮在透明窗口上。 */
+    /** macOS 红绿灯：记录调用。10-11 起我们一个都不该调（见「红绿灯零定制」）。 */
     setWindowButtonVisibility(value) {
       this.buttonCalls.push(value)
       this.lightTrace.push({ kind: 'visibility', value })
     }
-    /** macOS 红绿灯只能整组平移（间距/大小动不了）。 */
+    /** macOS 红绿灯只能整组平移（间距/大小动不了）—— 现在压根不平移。 */
     setWindowButtonPosition(position) {
       this.buttonPositionCalls.push(position)
       this.lightTrace.push({ kind: 'position', value: position })
@@ -169,6 +169,8 @@ vi.mock('../../electron/adb.js', () => ({
   // 设备物理密度：flex 显示必须带密度，缺它渲染层就不给显示尺寸。
   getPhysicalScreenDensity: async (serial) =>
     String(serial ?? '').includes('unknown') ? null : 440,
+  // 设备展示名（标题栏那行「app - 设备名」用）：serial 带 `dev-xxx` 时回一个固定名，其余读不到。
+  deviceDisplayName: async (serial) => (String(serial ?? '').includes('named') ? 'Mi 10' : null),
   // 设备 API 级别：serial 里带 `sdk<数字>` 的按那个数字回，其余模拟读不到（null）。
   getDeviceSdk: async (serial) => {
     const match = /sdk(\d+)/.exec(String(serial ?? ''))
@@ -225,7 +227,7 @@ process.env.APP_ROOT = '/tmp/anddrive-test'
 const { startMirrorSession, stopMirrorSession } = await import('../../electron/mirror/session.js')
 // 黑框与长条那几档数只有一个出处；窗口尺寸、`initialCss`、红绿灯落点都由它推出来，
 // 测试按同一份数算期望（改了 `options.js` 而这里没跟着红，说明断言写死了数、没钉住关系）。
-const { mirrorScreenInsets, mirrorContentExtraSize, mirrorTrafficLightPosition } = await import(
+const { mirrorScreenInsets, mirrorContentExtraSize, mirrorTrafficLightPosition, MIRROR_TITLEBAR } = await import(
   '../../electron/mirror/options.js'
 )
 const { MAC_KEYBOARD_IME } = await import('../../electron/mirror/macKeyboard.js')
@@ -579,41 +581,65 @@ describe('关会话回桌面（goHome）', () => {
 // 画面外面平时什么都不画：窗口本体必须透明（否则那是一条不透明的底压在桌面上），红绿灯也得跟着藏 ——
 // 那三颗圆点是系统画的，CSS 盖不住，浮在透明窗口上就不像手机了。
 describe('镜像窗口的透明本体与红绿灯', () => {
-  it('本体透明、底色全透明，建窗口时先把红绿灯藏起来', async () => {
+  it('设备名读得到时，窗口标题与 pendingInit 都写「app - 设备名」', async () => {
+    await startMirrorSession({ serial: 'dev-named', packageName: 'com.example.app', label: '日历' })
+    const win = env.windows.at(-1)
+    expect(win.options.title).toBe('日历 - Mi 10')
+    expect(initFrom(win).windowTitle).toBe('日历 - Mi 10')
+  })
+
+  it('设备名读不到时只留 app 名，不留一个孤零零的 " - "', async () => {
+    await startMirrorSession({ serial: 'dev-noname', packageName: 'com.example.app', label: '日历' })
+    expect(env.windows.at(-1).options.title).toBe('日历')
+  })
+
+  it('本体透明、底色全透明（平时"就是个手机样子"），三颗先藏起来', async () => {
     await startMirrorSession({ serial: 'dev-transparent', packageName: 'com.example.app' })
     const win = env.windows.at(-1)
     expect(win.options.transparent).toBe(true)
     expect(win.options.backgroundColor).toBe('#00000000')
+    // ⚠️ 墓碑：**别加 `roundedCorners: false`**（10-12 加过一整轮）。它确实能让那层浅灰铺到窗口尖角，
+    // 但同一刻 macOS 那三颗彩虹键整组不画了（用户当场报「mac的三个彩虹按钮没了」）—— 窗角与标准按钮
+    // 是同一套窗口外形。圆角归系统，臂只要把灰铺到边（`border-radius` 也别写，见 `App.vue`）。
+    expect('roundedCorners' in win.options).toBe(false)
+    // 10-12 竞品口径：浅灰那层 chrome 是**涂装**，鼠标贴边才浮出 ⇒ 本体一个字节不改，
+    // 但三颗必须平时藏着（不然圆点会浮在桌面上）。
     expect(win.buttonCalls).toEqual([false])
   })
 
-  it('渲染层报「长条显形」时红绿灯放出来，报「收起」时再藏掉', async () => {
-    await startMirrorSession({ serial: 'dev-buttons', packageName: 'com.example.app' })
+  /** 放出来之后必须紧跟一次设位：`setWindowButtonVisibility(true)` 会把三颗打回默认左上角。 */
+  it('chrome 显形放出三颗并补设落点，收起时再藏掉', async () => {
+    await startMirrorSession({ serial: 'dev-chrome', packageName: 'com.example.app' })
     const win = env.windows.at(-1)
-    const handler = env.handlers.get(CHANNELS.mirrorWindowButtons)
-    handler({ sender: win.webContents }, true)
-    handler({ sender: win.webContents }, false)
+    env.handlers.get(CHANNELS.mirrorWindowButtons)({ sender: win.webContents }, true)
+    env.handlers.get(CHANNELS.mirrorWindowButtons)({ sender: win.webContents }, false)
     expect(win.buttonCalls).toEqual([false, true, false])
-    // ⚠️ 关键在**顺序**：`setWindowButtonVisibility(true)` 会把三颗打回 AppKit 默认的左上角
-    // （探针窗口实测：藏一次再放出来，构造参数那次 `trafficLightPosition` 就丢了），
-    // 所以放出来之后必须紧跟一次设位 —— 少了这一步就是用户 10-10 报的「彩虹按钮并没有靠右」。
     expect(win.lightTrace.map((c) => c.kind)).toEqual([
       'visibility',
       'visibility',
       'position',
       'visibility',
     ])
-    expect(win.lightTrace[2].value).toEqual(mirrorTrafficLightPosition(win.getContentBounds().width))
+    expect(win.lightTrace[2].value).toEqual(mirrorTrafficLightPosition())
   })
 
-  /** 红绿灯落在右侧长条里：建窗口时就给一次，之后每次 resize 都得按新的窗口宽重算。 */
-  it('红绿灯初始落点在长条里，窗口 resize 后跟着重算（不会留在旧位置）', async () => {
-    await startMirrorSession({ serial: 'dev-lights', packageName: 'com.example.app' })
+  /**
+   * 用户 2026-10-12：「试试 a 的变体，上边加一条专门放三个按钮和 app 名称」⇒ 三颗**只挪进顶部那条**：
+   * 落点是个与窗口宽无关的常量（10-10 贴右侧长条那套要跟着窗口宽跑，那条坑从根上没了），
+   * **显隐照样一次都不调** —— 常驻，不跟长条 hover 走（10-11 那条"不要藏不要放"仍然算数）。
+   */
+  it('红绿灯落点在顶部标题栏里、与窗口宽无关；显隐一次都不调', async () => {
+    await startMirrorSession({ serial: 'dev-lights-bar', packageName: 'com.example.app' })
     const win = env.windows.at(-1)
-    expect(win.options.trafficLightPosition).toEqual(mirrorTrafficLightPosition(win.options.width))
-    win.options.width = 500
+    expect(win.options.trafficLightPosition).toEqual(mirrorTrafficLightPosition())
+    // 建窗口那一次「先藏」是 chrome 涂装的一部分，不算"去管三颗"。
+    expect(win.lightTrace.map((c) => c.kind)).toEqual(['visibility'])
+    // 落点不依赖窗口宽：换个宽度再算还是同一个数（所以 resize 里没有任何重算代码）。
+    expect(mirrorTrafficLightPosition()).toEqual({ x: MIRROR_TITLEBAR.lightX, y: 7 })
     win.fire('resize')
-    expect(win.buttonPositionCalls).toEqual([mirrorTrafficLightPosition(500)])
+    win.fire('enter-full-screen')
+    win.fire('leave-full-screen')
+    expect(win.lightTrace.map((c) => c.kind)).toEqual(['visibility'])
   })
 })
 
@@ -653,10 +679,10 @@ describe('镜像窗口照设备画面比例开', () => {
   it('竖屏手机 → 等比竖窗，并把设备分辨率透传给镜像页（它据此决定给不给显示尺寸）', async () => {
     await startMirrorSession({ serial: 'dev-shape', packageName: 'com.example.app' })
     const win = env.windows.at(-1)
-    // adb mock 回 1200x2608；可用区 1440x900 减 80 系统余量再减内缩（横 4+(4+86)=94、纵 4+4=8）
-    // → 画面可用 1266x812，高顶满 812、宽按比 374；窗口 = 374+94 x 812+8。
+    // adb mock 回 1200x2608；可用区 1440x900 减 80 系统余量再减内缩（横 94、纵 (4+28)+4=36）
+    // → 画面可用 1266x784，高顶满 784、宽按比 361；窗口 = 361+94 x 784+36。
     expect({ width: win.options.width, height: win.options.height }).toEqual({
-      width: 468,
+      width: 455,
       height: 820,
     })
     expect(initFrom(win).screenSize).toEqual({ width: 1200, height: 2608 })
@@ -744,8 +770,7 @@ describe('镜像窗口的全屏启动', () => {
 
   /**
    * 全屏那一屏是另一种形态（手机在整块屏幕正中、长条常驻、画面收成手机那块）⇒ 进/出都要推给页面。
-   * ⚠️ 这里**不碰红绿灯**：真全屏里它们归系统收放（顶边浮出），我们钉不住（10-11 四种救法实测都不出），
-   * 也不该藏 —— 用户要「全屏」，那三颗就随系统。
+   * ⚠️ 这里**不碰红绿灯**：用户 10-11 定了「恢复默认，不要有任何修改」，那三颗全归系统。
    */
   it('进/出全屏各推一条 mirror:fullscreen，并且不动红绿灯', async () => {
     const win = await open('dev-fs-push', undefined)
@@ -756,8 +781,8 @@ describe('镜像窗口的全屏启动', () => {
       [CHANNELS.mirrorFullscreen, true],
       [CHANNELS.mirrorFullscreen, false],
     ])
-    // 只有建窗口那一次「先藏」—— 多了就是有人又试图去管三颗。
-    expect(win.lightTrace.map((c) => c.kind)).toEqual(['visibility'])
+    // 全屏里不许再动那三颗（归系统顶边浮出）⇒ 只有建窗口那一次「先藏」。
+    expect(win.lightTrace).toEqual([{ kind: 'visibility', value: false }])
   })
 
   it('关着时：只 show，不碰全屏', async () => {

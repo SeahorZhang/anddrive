@@ -8,11 +8,11 @@ import { caretRectToAnchor, clientToDevice, deviceToScreen, emSizePx, estimateAd
 import { capsuleBox, capsuleRect, macTextCapsule } from './macTextCapsule.js'
 import { scaleDisplayDpi } from '../../shared/scrcpyConfig.js'
 import { aspectDiffers, createReflowGate } from './displayFollow.js'
-import { createChromeReveal, rightEdgeZone } from './chromeReveal.js'
+import { createChromeReveal, chromeZone } from './chromeReveal.js'
 import { clampRailTop } from './railDock.js'
 import { FROZEN_STATES, needsRealWake, panelIsOff } from './sleepWatch.js'
 import { KEY_CODES } from '../../shared/keys.js'
-import { MIRROR_FRAME, MIRROR_RAIL } from '../../electron/mirror/options.js'
+import { MIRROR_FRAME, MIRROR_RAIL, MIRROR_TITLEBAR, mirrorTitlebarNameLeft } from '../../electron/mirror/options.js'
 
 // 镜像窗口（渲染层直连）：adb/scrcpy 全在本进程内由 Tango 官方库建立，
 // 视频包直接写 WebCodecs 解码器、音频包直接播放，主进程不参与帧路径。
@@ -36,9 +36,10 @@ const HUD_WIDTH = 240
  */
 watch(showHud, (open) => setHudExtra(open ? HUD_WIDTH : 0))
 /**
- * 手机**右边外面**那条悬浮长条（红绿灯 + 返回/Home/多任务）：平时不画，鼠标进到窗口右边那一条
+ * 手机**右边外面**那条悬浮长条（返回/Home/多任务 + 那几颗开关）：平时不画，鼠标进到窗口右边那一条
  * 才淡入，**离开那一条 1 秒后收回**（用户 2026-10-10 第三次改，作废「只有移出窗口才收」；
- * 状态机在 `chromeReveal.js`）。红绿灯跟着它一起开关（系统画的，CSS 盖不住；落点由主进程按 `MIRROR_RAIL` 贴进来）。
+ * 状态机在 `chromeReveal.js`）。红绿灯不跟着开关 —— 用户 2026-10-11 定「恢复默认，不要有任何修改」，
+ * 落点与显隐全归 AppKit。
  *
  * 条上那颗**「一直显示」**（2026-10-11 用户点单）：按下去常驻、不再自动收，再按一次回到上面那套
  * hover 显隐（状态在 `railPinned`，判据在 `chromeReveal.js` 的 `setPinned`）。
@@ -60,6 +61,8 @@ const fullscreen = ref(false)
  * 点应用 = 假，那档采的是手机主屏）。只有它有形状可改 —— 尺寸归 `resizeDisplay` 说话。
  */
 const virtualDisplay = ref(false)
+/** 标题栏那行「app - 设备名」：式子在主进程（`session.windowTitle`），这里只照抄，两处不各写一遍。 */
+const windowTitle = ref('')
 /**
  * 「桌面模式的全屏」那一屏（用户 2026-10-11：「只把视频全屏，其他什么东西都不要有，
  * 镜像比例跟显示器一样」）= 满屏 **且** 这一块显示是我们建的。
@@ -79,22 +82,35 @@ const edgeToEdge = computed(() => fullscreen.value && virtualDisplay.value)
  *   就被判「移出格子」，条当场收 —— 用户报的「移过去显示后立马消失」；
  * - 事件挂在格子上还会漏：tooltip portal 到 body，指针压到它上面时事件不经过那棵树 ⇒ 「移几次才出得来」。
  *
- * 判据带**迟滞**（`rightEdgeZone`）：进 86px 才显形，出 206px 才算离开，中间那一圈保持现状。
- * 多给那 120px 是给按钮左边那截 tooltip 与「往左一点去按画面」留的余量 —— 只有一条线时鼠标停在
- * 按钮上或稍挪一点就当场收一半再弹回，就是「一闪一闪」。
+ * 判据带**迟滞**（`chromeZone`）：这一层 chrome 是 **L 形**（右边长条 + 顶部那条），两条臂都算触发区
+ * —— 用户 2026-10-12「鼠标移动到右侧和上边都要展示边框」。进 86px（横）/ 12px（竖）才显形，
+ * 两条臂**都**越出各自 +120 才算离开，中间那一圈保持现状。
+ * 上臂只有 `MIRROR_TITLEBAR.revealHeight` 那一截收得到事件（顶条其余是 drag 区，drag 里 Chromium 不发指针事件），
+ * 所以进线就按那一截算；出线仍多给 120px —— 鼠标停在按钮上或稍挪一点就当场收一半再弹回，就是「一闪一闪」。
  */
-const RAIL_EXIT_ZONE_PX = MIRROR_RAIL.width + 120
+const CHROME_ENTER = { x: MIRROR_RAIL.width, y: MIRROR_TITLEBAR.revealHeight }
+const CHROME_EXIT = { x: MIRROR_RAIL.width + 120, y: MIRROR_TITLEBAR.revealHeight + 120 }
 function onScreenPointerMove(event) {
-  const zone = rightEdgeZone(event, window.innerWidth, MIRROR_RAIL.width, RAIL_EXIT_ZONE_PX)
+  const zone = chromeZone(event, window.innerWidth, window.innerHeight, CHROME_ENTER, CHROME_EXIT)
   if (zone === 'enter') reveal.poke()
   else if (zone === 'leave') reveal.leave()
 }
 /**
- * 指针**离开窗口**（`relatedTarget` 为空 = 不是移到窗口里另一个元素上）：窗口态那 86px 就贴着窗口右沿，
- * 手一快就滑出去了，之后不会再有任何 `pointermove` ⇒ 必须在这里补一次收线，否则条会永远挂着。
+ * `relatedTarget = null` 的 `pointerout` 有**两种**来源，必须分开判：
+ * ① 指针**真的离开窗口**（手一快就从右边滑出去了，之后不会再有任何 `pointermove` ⇒ 这里不补一次收线，
+ *    条就永远挂着）；
+ * ② 指针**踏进顶部那条 drag 区**（`-webkit-app-region: drag` 那一片 Chromium 根本不往 DOM 发事件，
+ *    进来这一下只发一条 pointerout，坐标就是新位置）。
+ * 按 y 分得开 —— **drag 区只有顶部那一条**（触发带 `revealHeight` 之外的 16px）：
+ * 落在顶条里就当他"还在 chrome 上"（poke，否则鼠标停在标题栏上 1 秒后条自己收了），
+ * 其余位置照旧走 `leave`（延 1 秒收）。
  */
 function onScreenPointerOut(event) {
   if (event.relatedTarget) return
+  if (event.clientY <= MIRROR_TITLEBAR.height) {
+    reveal.poke()
+    return
+  }
   reveal.leave()
 }
 const railShown = ref(false)
@@ -109,20 +125,13 @@ const railPinned = ref(false)
 const reveal = createChromeReveal({
   onShow: (shown) => {
     railShown.value = shown
+    // 三颗彩虹键跟着这层 chrome 一起出/收（窗口本体透明，平时不藏就会浮在桌面上，
+    // 「就是个手机样子」当场破功）。⚠️ 满屏那一屏不碰：那三颗归系统收放（顶边才浮出）。
+    if (!fullscreen.value) setWindowButtons(shown)
     if (shown) {
-      // 红绿灯只跟**窗口态**的显隐：真全屏里那三颗归系统收放（顶边才浮出），我们既钉不住也不该抢
-      // （10-11 四种救法像素扫描命中数全 0，见 `electron/mirror/session.js` 的 `fullscreenable`）。
-      if (!fullscreen.value) setWindowButtons(true)
       // 他把鼠标移进来就是要看那颗「关屏 / 恢复亮屏」，此刻读一次真状态最划算（顺带快轮询一阵）。
       kickSleepWatch()
-      return
     }
-    // 红绿灯是系统画的，**没有淡出可跟**：原来条还在半透明、三颗已经「啪」地没了（用户 10-10
-    // 「消失的时候感觉不太协调」）⇒ 让面板把淡出跑完再藏它们。期间若又显形就别补这一刀。
-    setTimeout(() => {
-      // 同上：满屏那一屏压根没放出来过，也就没有"跟着收"这一说。
-      if (!railShown.value && !fullscreen.value) setWindowButtons(false)
-    }, MIRROR_RAIL.fadeOutMs)
   },
 })
 /**
@@ -207,7 +216,16 @@ const TIP_CLASS =
  * 醒回来后轮询自己会把横幅撤掉（`onSleepChange(false, state)`）。
  */
 const powerState = ref({ wakefulness: 'Awake', screen: 'ON' })
-const asleep = computed(() => FROZEN_STATES.has(powerState.value.wakefulness))
+/**
+ * 「已休眠」横幅 —— **只给采主屏那一档**。这一档采的是手机那块屏，面板灭了就没帧可采
+ * （HyperOS 息屏停止合成，见 `electron/mirror/miProjection.js`），所以必须提示并给「继续使用」。
+ *
+ * ⚠️ 桌面模式 / 点应用那档**不弹**：那块虚拟显示是我们建的，真机实测（Android 17，
+ * `mWakefulness=Dozing`、主屏 `powerMode=Off`）下它 `powerMode=On`、静置 6s 仍出 55 帧、
+ * 注入一次点按后 6s 内又 +11 帧 ⇒ 画面是活的。在那一屏中间摆一块「已休眠」是假警报，
+ * 还会引导人去点「继续使用」把手机真唤醒。判据哪天若不成立了，要改成按**帧停滞**判，不是按电源读数判。
+ */
+const asleep = computed(() => FROZEN_STATES.has(powerState.value.wakefulness) && !virtualDisplay.value)
 /**
  * **关屏使用**（长条最上面那一格，用户 2026-10-10 点名）：走 scrcpy 的 `setDisplayPower`，
  * 不占 `INJECT_EVENTS`（不同于「继续使用」那条 `input keyevent 224`）。
@@ -278,9 +296,11 @@ const screenRatioN = ref(1)
 const windowStyle = computed(() => ({
   '--bezel': `${MIRROR_FRAME.bezel}px`,
   '--rail-w': `${MIRROR_RAIL.width}px`,
-  '--rail-keys-top': `${MIRROR_RAIL.keysTop}px`,
   '--rail-fade-in': `${MIRROR_RAIL.fadeInMs}ms`,
   '--rail-fade-out': `${MIRROR_RAIL.fadeOutMs}ms`,
+  '--titlebar-height': `${MIRROR_TITLEBAR.height}px`,
+  '--titlebar-reveal-height': `${MIRROR_TITLEBAR.revealHeight}px`,
+  '--titlebar-name-x': `${mirrorTitlebarNameLeft()}px`,
   '--screen-ratio': screenRatio.value,
   '--screen-ratio-n': String(screenRatioN.value),
   '--rail-top': `${railTop.value}px`,
@@ -692,7 +712,7 @@ useMirrorInput({
   captureText: () => macTextFocused.value && macKeyboard.value === 'active',
 })
 
-const title = computed(() => meta.value?.label || meta.value?.packageName || '镜像')
+const title = computed(() => windowTitle.value || meta.value?.label || meta.value?.packageName || '镜像')
 
 /** canvas 由 Tango 渲染器创建，切换 WebGL / 2D 时重新挂载。 */
 function attachCanvas() {
@@ -1023,7 +1043,6 @@ async function booted() {
         fullscreen.value = value
         // 进满屏：长条常驻 ⇒ 三颗一起放出来（落点由 `resize` 按新窗口宽重贴）。
         // 出满屏：交回 hover 那套，此刻长条没收就顺手藏掉。
-        setWindowButtons(value || railShown.value)
       },
       onSleepChange: (_asleep, state) => {
         // 存原始读数：横幅与那颗图标都从它派生，页面自己不另记状态。
@@ -1049,6 +1068,7 @@ async function booted() {
     // 这一档是不是**我们自己建的那块 flex 显示**（桌面模式 / 首页点应用）：只有它有形状可改，
     // 采主屏那档（整机镜像、13 及以下点应用）形状归手机，全屏只能收着（见 `edgeToEdge`）。
     virtualDisplay.value = getSessionInfo()?.deviceMirror === false
+    windowTitle.value = getSessionInfo()?.windowTitle || ''
   }).catch((error) => {
     status.value = `镜像连接失败：${error?.message || error}`
   })
@@ -1103,11 +1123,27 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="h-full mirror-window text-white" :class="{ 'is-fullscreen': fullscreen, 'is-edge-to-edge': edgeToEdge }"
+  <div class="h-full mirror-window text-white" :class="{ 'is-fullscreen': fullscreen, 'is-edge-to-edge': edgeToEdge, 'is-chrome': railShown }"
     :style="windowStyle">
     <!-- 画面区：dev 时右侧让出一条 HUD 边栏（`aside` 与它左右排），画面上的覆盖层（遮罩/接回/提示/
          长条）都只盖画面那一块，这样调试信息永远不被盖住，也不会压在镜像画面上。 -->
-    <div class="mirror-main">
+    <div class="mirror-body">
+      <!-- 那层 chrome 涂装：**就这一个 div**（用户 2026-10-13「左上角右上角右下角和上边右边改成一个 div」）。
+           它铺满整扇 `.mirror-body`、整块填浅灰，手机（`.mirror-main` 那一层）画在它**上面** ⇒
+           手机轮廓自己把中间挖掉，剩下的正好是上臂 + 右臂 + 黑框三个圆角外侧那三块；
+           左下角那块用 `clip-path` 挖掉（「左下角不要有边框」）。形状与取舍见样式里 `.mirror-chrome` 那段。
+           放在第一个：DOM 顺序 + `z-index` 两条一起保证它压在最底下（只是一层涂装，不接指针）。 -->
+      <div class="mirror-chrome" aria-hidden="true"></div>
+      <!-- 顶部这一条：三颗彩虹键的地盘 + app 名称（用户 2026-10-12 点单）。
+           名称是窗口拖拽区（取代以前画在画面顶上的那条 `.mirror-dragstrip`），但**最上面那 12px 不是** ——
+           那是 chrome 的触发条（`__reveal`，见 `MIRROR_TITLEBAR.revealHeight` 那段：drag 区里 Chromium
+           一个指针事件都不发，整条都拖 ⇒ "贴上边"永远收不到信号）。三颗是系统画的，落点由主进程按
+           `MIRROR_TITLEBAR` 给，名称是我们自己画的、让开三颗。 -->
+      <div class="mirror-titlebar">
+        <span class="mirror-titlebar__name">{{ title }}</span>
+        <div class="mirror-titlebar__reveal" aria-hidden="true"></div>
+      </div>
+      <div class="mirror-main">
       <!-- 画面：位置与尺寸固定（= 窗口减掉那圈黑框与右边那条长条，两边同一个出处 `mirrorScreenInsets()`）。 -->
       <div class="mirror-frame" @pointerdown="focusMacText()">
         <!-- 屏内各层在同一格里叠，压在画面上的是后面的兄弟节点；`attachCanvas()` 会清空
@@ -1185,7 +1221,6 @@ onBeforeUnmount(() => {
 
         <!-- 拖窗口的条：这扇窗口没有标题栏可抓，只能靠它。它压在画面顶部 24px 上，
              代价是手机画面最顶那一条点不到（先落窗口拖动）。 -->
-        <div class="mirror-dragstrip"></div>
       </div>
 
       <!-- 长条的**格子**：手机右边外面那 74px，永远占着（画面那块矩形才不动）。
@@ -1193,26 +1228,19 @@ onBeforeUnmount(() => {
            poke 挂在格子上而不是面板上：面板收起时 `pointer-events: none`，显形时又盖住格子，
            挂格子上两种状态都由同一条 `pointermove`（冒泡上来）接住。 -->
       <div class="mirror-rail" ref="railSlot">
-        <!-- 面板：顶部那条 `--rail-keys-top` 以下才排按键 —— 上面那截是红绿灯的位置
-             （系统画的，CSS 盖不住，落点由主进程按 `MIRROR_RAIL` 贴进来）。 -->
+        <!-- 面板：按键从面板顶往下排。红绿灯（那三颗彩虹键）归系统放左上角，不再给它留一截。 -->
         <div ref="railPanel" class="mirror-rail__panel" :class="{ 'is-shown': railShown }">
           <!-- 拖拽把手：只有这一格能拖（按在按钮上是点按钮，不该顺手把条拖走）。
                按住走 pointer capture ⇒ 鼠标滑出把手也继续跟，不会拖到一半脱手。 -->
           <div class="mirror-rail__handle" aria-label="上下拖动这条" role="separator"
             @pointerdown="onRailHandleDown" @pointermove="onRailHandleMove" @pointerup="onRailHandleUp"
             @pointercancel="onRailHandleUp"></div>
-          <!-- 顶部这一截是红绿灯的地盘：窗口态那三颗是系统画的（CSS 盖不住，落点由主进程按
-               `MIRROR_RAIL` 贴进来）。**全屏里它们钉不住**（实测见 `session.js` 的 `enter-full-screen`）
-               ⇒ 这一档改由我们自己画三颗一样的，主进程同时把系统那三颗关掉，免得鼠标移到顶边时两套重叠。 -->
-          <!-- 顶部这一截是红绿灯的地盘：那三颗是系统画的（CSS 盖不住，落点由主进程按 `MIRROR_RAIL`
-               贴进来），窗口态与满屏态都一样 —— 满屏用的是 zoom 撑满的普通窗口，三颗归窗口管、常驻。 -->
-          <div class="mirror-rail__lights"></div>
           <!-- 按键说明：reka-ui 的 Tooltip（与主窗口 `PageHeader.vue` 同一套写法）。
                `delay-duration=0` = 一移上就出；`side="left"` = 往按键左边展开（用户 10-10 点名）。
                所以按钮上**不再挂 `title`** —— 两个都留着会同时弹系统气泡和这个气泡。
                Provider 是纯上下文组件，不产生元素，长条的 flex 排布不受影响。 -->
           <TooltipProvider :delay-duration="0">
-            <!-- 关屏使用：紧贴在红绿灯那一截**下面**的第一格（用户 10-10 点名放最上）。
+            <!-- 关屏使用：按键区的第一格（用户 10-10 点名放最上）。
                  按下去关手机屏，再点一次恢复亮屏。
                  ⚠️ 图标与高亮画的是**现在的状态**（亮着 = 正常显示器；灭着 = 带斜杠那台 + `is-active`），
                  不是"点下去会发生什么" —— 上一版反着标，他报「明明是亮着屏幕，息屏图标却展示息屏」。 -->
@@ -1307,6 +1335,7 @@ onBeforeUnmount(() => {
           </TooltipProvider>
         </div>
       </div>
+      </div>
     </div>
 
     <!-- dev 专用：调试信息在画面**右边**的独立边栏里，不遮挡镜像内容。 -->
@@ -1362,13 +1391,24 @@ onBeforeUnmount(() => {
 .mirror-window {
   display: flex;
   align-items: stretch;
+  /* 手机那块的两圈圆角：`--radius` 是屏自己那圈，`--frame-radius` 是黑框**外沿**那圈（多一圈边框厚度，
+     两层才同心）。放在根上是因为窗口态补那三块楔形要用同一个数（见下面 `.mirror-main` 那组）。 */
+  --radius: 40px;
+  --frame-radius: calc(var(--radius) + var(--bezel));
 }
 
 /* 画面区：手机（黑框 + 画面）与右边那条长条左右排。生产中它占满整个视口；
-   dev 时再让出右侧的 HUD 边栏（也是 flex 排的），所以覆盖层只盖画面、不盖调试信息。 */
+   dev 时再让出右侧的 HUD 边栏（也是 flex 排的），所以覆盖层只盖画面、不盖调试信息。
+   ⚠️ `position: relative; z-index: 1` 是**涂装那一层**（`.mirror-chrome`）需要的：涂装铺满整扇
+   `.mirror-body`、压在手机**下面**，靠"手机盖住中间那块"来挖出形状（见 `.mirror-chrome`）。
+   这里抬一层，手机与长条才会画在涂装之上；不给它 `position` 的话，绝对定位的涂装会盖住画面。 */
 .mirror-main {
+  position: relative;
+  z-index: 1;
   flex: 1;
   min-width: 0;
+  /* 在 `.mirror-body` 那一竖列里，剩余高度才归画面；不留这条下限，窗口缩小时顶不动标题栏。 */
+  min-height: 0;
   display: flex;
   align-items: stretch;
 }
@@ -1396,11 +1436,12 @@ onBeforeUnmount(() => {
    算的那块画面矩形；圆角比里面 `.mirror-screen` 的 `--radius` 多一圈边框厚度，两层才同心。
    宽度 = 画面区减掉长条，剩下全给它（长条那 74px 由 `.mirror-rail` 自己钉死）。 */
 .mirror-frame {
-  --radius: 40px;
+  /* 黑框**外沿**那个圆的半径（= 圆角 + 边框宽）：`.mirror-screen` 的圆角 + 一圈边框厚度，两层才同心。
+     提到 `.mirror-window` 这一层是因为窗口态补那三块楔形要用同一个数（见下面 `.mirror-main` 那组）。 */
   flex: 1;
   min-width: 0;
   border: var(--bezel) solid #0b0b0d;
-  border-radius: calc(var(--radius) + var(--bezel));
+  border-radius: var(--frame-radius);
 }
 
 .mirror-screen {
@@ -1506,19 +1547,24 @@ onBeforeUnmount(() => {
   touch-action: none;
 }
 
-/* 长条的**格子**：手机右边外面那 86px，永远占着布局（画面那块矩形才不因显隐而动），自己不画东西。
+/* 长条的**格子**：手机右边外面那 86px，永远占着布局（画面那块矩形才不因显隐而动）。
+   窗口态它**自己就是那条 chrome 的右臂**（用户 2026-10-12「右侧操作栏和边框写在一起，不要分成 2 个叠在一起」）
+   ⇒ 面板不再画成浮在上面的白胶囊，键直接落在这格上。
+   ⚠️ 底色**不在这里画**（10-13 第四稿）：那层浅灰现在整块归 `.mirror-chrome`（一个 div 画完上臂 + 右臂
+   + 手机三个圆角外侧那三块），这里只管占位与收 poke。
    poke 挂在这一格上（见模板）—— 面板收起时它是命中层，显形时面板盖住它、move 冒泡上来还是它接住，
    两种状态同一条判据，不用按坐标筛。 */
 .mirror-rail {
   flex: none;
   width: var(--rail-w);
+  background-color: transparent;
 }
 
 /* 面板：**淡入淡出**，不滑（用户 2026-10-10：「不要从右侧往左展示，直接过渡展示出来就行」）。
    与手机同高（顶到窗口顶与底，10-10 又点「浮动条跟手机一个高度」）、贴窗口右边，只留左右各 6px。
-   顶部不留白 —— 那一截归 `.mirror-rail__lights`（红绿灯的地盘）。 */
+   顶部不留白（红绿灯已归系统左上角，不再占这里的一截）。 */
 .mirror-rail__panel {
-  /* 面板宽度**从格子推导**：格子左右各留 6px ⇒ 面板与红绿灯（在格子里居中）同一根中线，
+  /* 面板宽度**从格子推导**：格子左右各留 6px ⇒ 面板在格子里居中，
      以后只改 `MIRROR_RAIL.width` 一个数，面板与落点会一起跟着走。 */
   --rail-side-gap: 6px;
   /* 开关按键"开着"时的填充色（见下面 `.mirror-rail__key.is-active`）。
@@ -1544,7 +1590,7 @@ onBeforeUnmount(() => {
   opacity: 0;
   pointer-events: none;
   /* 收得比出来慢一档（用户 10-10「消失的时候感觉不太协调」）：进来跟手，出去收干净。
-     红绿灯那边另有 `MIRROR_RAIL.fadeOutMs` 的延后藏起来，两边共用这一个数。 */
+     （以前红绿灯跟着一起藏，所以要算这个延后；现在它归系统，这里只剩面板自己。） */
   /* 拖出来的纵向落点（`--rail-top`，见 `railDock.js`）。translate 不吃布局 ⇒ 画面那块矩形不动。 */
   translate: 0 var(--rail-top, 0px);
   transition: opacity var(--rail-fade-out) ease-in;
@@ -1561,6 +1607,10 @@ onBeforeUnmount(() => {
   cursor: grab;
   /* 触摸板上拖拽会被当成滚动手势吞掉，必须自己接管。 */
   touch-action: none;
+}
+
+.mirror-window.is-chrome:not(.is-fullscreen) .mirror-titlebar__name {
+  opacity: 1;
 }
 
 .mirror-window.is-edge-to-edge .mirror-rail__handle {
@@ -1587,12 +1637,17 @@ onBeforeUnmount(() => {
   transition: opacity var(--rail-fade-in) ease-out;
 }
 
-/* 红绿灯那一截：从窗口顶占到 `--rail-keys-top`，下沿一条分隔线把它与按键区分开。
-   里面什么都不放 —— 三颗圆点是系统画在这一块上面的（居中位置见 `MIRROR_RAIL.lightTop`）。 */
-.mirror-rail__lights {
-  align-self: stretch;
-  height: var(--rail-keys-top);
-  border-bottom: 1px solid rgb(0 0 0 / 7%);
+/* 窗口态：**长条与右边那条边框是同一块**（用户 2026-10-12「右侧操作栏和边框写在一起，不要分成 2 个叠在一起」）
+   ⇒ 不再在灰臂上浮一颗白胶囊，面板铺满整格、底色交给涂装那一层（`.mirror-chrome`，显形时才有），
+   键直接坐在臂上。
+   两档全屏没有灰臂（`.is-fullscreen` 被排掉），白胶囊照旧 —— 那是浮在画面/亮底上的独立一件。
+   ⚠️ 特异度：三个类选择器 > `.mirror-rail__panel.is-shown`（两个）⇒ 这里只覆盖外观，别写 `opacity`，
+   显隐仍由那个类说话。 */
+.mirror-window:not(.is-fullscreen) .mirror-rail__panel {
+  width: var(--rail-w);
+  margin-right: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 
@@ -1660,8 +1715,10 @@ onBeforeUnmount(() => {
 /* 满屏里没用的两样一起撤：拖窗条（那一屏没人会去拖它，留着只压在画面顶上），
    以及红绿灯那一截 —— 真全屏里那三颗归系统收放（顶边才浮出），在他眼里那就是长条顶部一块**空白区域**
    （用户 10-11：「全屏右侧悬浮红绿灯区域要去掉」）。顶边留白改由面板自己的 `padding-top` 给。 */
-.mirror-window.is-fullscreen .mirror-dragstrip,
-.mirror-window.is-fullscreen .mirror-rail__lights {
+.mirror-window.is-fullscreen .mirror-titlebar {
+  /* 满屏那一屏「什么都不要有」（10-11）⇒ 标题栏整条撤掉，画面从窗口顶开始铺。
+     主进程的 `mirrorScreenInsets()` 那一截只算在窗口态（`initialCss` 是建窗口那一刻算的），
+     全屏后画面区由 CSS 定，所以这里隐藏它不会让虚拟显示尺寸算错。 */
   display: none;
 }
 
@@ -1798,12 +1855,129 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
-/* 拖窗口的条：这扇窗口没有标题栏可抓，只能靠它。它是 `.mirror-frame` 那格里的第二层，
-   所以只压在**画面顶部 24px** 上（右边那条长条不受它影响），代价是手机画面最顶那一条点不到。 */
-.mirror-dragstrip {
-  align-self: start;
-  height: 24px;
+/* ── 那层 chrome 涂装：**一整块**（2026-10-13 第四稿）────────────────────────────────
+   用户 10-13：「上边和右边的边框以及左上角右上角右下角的圆角不协调，不是一个图层」→
+   「左上角右上角右下角和上边右边改成一个 div」。他说得对：上一版是**三个元素**在画同一层涂装
+   （`.mirror-titlebar` 一条臂、`.mirror-rail` 一条臂、`.mirror-main` 上三层 `radial-gradient` 补三个角），
+   连淡入都是两套 —— 两条臂走 `background-color`（可过渡），三块角走 `background-image`（不可过渡，
+   "啪"地早到早走）。现在全部归这一个 div。
+
+   形状怎么来的：这一层铺满 `.mirror-body`、整块填 `#dcdfe3`，而**手机画在它上面**
+   （`.mirror-main` 抬到 `z-index: 1`）⇒ 手机轮廓自己把中间那块"挖"掉，剩下的正好是三样：
+   ① 上臂（标题栏那 28px）、② 右臂（长条那 86px）、③ 手机黑框三个圆角**外侧**那三块
+   （黑框是 `--frame-radius` 的圆角矩形，它的**包围盒**在圆角外还有三块没被画到 —— 就是上一版
+   要用三层 `radial-gradient` 去补的楔形）。一个 div + 一条 `opacity` 就全有了。
+
+   ⚠️ **左下角那一块必须挖掉**（用户 10-12「左下角不要有边框，只有上边和右边有」）：它是手机黑框
+   左下圆角外侧那块，手机盖不住它（它本来就在圆角之外），不挖就是手机左下凭空一块灰。
+   挖法 = `clip-path` 上切一个 `--frame-radius` 见方的方口：方口比那块楔形略大，多出来的部分落在
+   黑框**里面**、被手机盖住 ⇒ 看不出接缝（不必真按圆弧去裁）。
+   ⚠️ **两条臂都不写 `border-radius`**（10-12 连着两刀：「左上右上右下的圆角颜色和边框颜色一样，
+   不要现在丑丑的黑色」→「边框圆角加一下」）：**窗口那圈圆角归 macOS 系统**（透明窗口照旧被裁成圆角，
+   实测角上 `(1,1)`/`(3,3)` 是桌面、`(6,6)` 起就是灰），我们只管把灰铺到窗口边，圆角就是对的。
+   自己再写一圈 CSS 半径 = 在系统那圈**里面**又挖一圈，两圈不重合 ⇒ 中间露出一条桌面，就是他说的黑缺口。
+   ⚠️ 也别去主进程加 `roundedCorners: false` 想把灰铺到尖角 —— 那一下**三颗彩虹键整块没了**（10-12 实测，
+   理由与取证见 `electron/mirror/session.js` 里那段）。手机轮廓那圈圆弧在 `.mirror-frame` 上（`--radius`），照旧。
+   ⚠️ **只换涂装，不动布局** —— 标题栏与右边那一格平时照样占位（`mirrorScreenInsets()` 算的就是占位后的
+   画面矩形），否则一显一收画面矩形就变 ⇒ 白发一条 `resizeDisplay` ⇒ 手机当场重排一次。
+   平时这一层 `opacity: 0`，看不见，所以"就是个手机样子"仍然成立（用户 10-12 原话）。
+   ⚠️ 淡入淡出的两个时长照旧用长条那两个数（`--rail-fade-in/out`）：进来跟手、出去收干净。 */
+.mirror-chrome {
+  position: absolute;
+  inset: 0;
+  /* 压在手机下面（`.mirror-main` 是 z-index: 1）——形状就是靠"手机盖住中间那块"挖出来的。 */
+  z-index: 0;
+  background: #dcdfe3;
+  /* 只是涂装：不接指针，拖窗口那条 drag 区照旧。 */
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--rail-fade-out) ease-in;
+  /* 左下角那个方口（见上面那段）。`--frame-radius` 是黑框外沿那圈半径（40 + 4 = 44）。 */
+  clip-path: polygon(
+    0 0,
+    100% 0,
+    100% 100%,
+    var(--frame-radius) 100%,
+    var(--frame-radius) calc(100% - var(--frame-radius)),
+    0 calc(100% - var(--frame-radius))
+  );
+}
+
+/* 两档全屏没有这层涂装（满屏那屏铺的是亮底、桌面模式那屏是纯画面），照旧由 `:not(.is-fullscreen)` 挡住。 */
+.mirror-window.is-chrome:not(.is-fullscreen) .mirror-chrome {
+  opacity: 1;
+  transition: opacity var(--rail-fade-in) ease-out;
+}
+
+/* 「标题栏 + 画面」这一竖列，dev 边栏仍在它右边（`.mirror-window` 那一横排）。
+   `position: relative` 是给涂装那一层（`.mirror-chrome`，绝对定位铺满这里）当定位祖先用的。 */
+.mirror-body {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 顶部标题栏：三颗彩虹键的地盘 + app 名称（用户 2026-10-12 点单）。
+   ⚠️ `position: relative; z-index: 1` 与 `.mirror-main` 同一件事：抬到涂装那一层（`.mirror-chrome`）
+   上面 —— 那层灰铺满整扇 `.mirror-body`（含这一条的地盘），不抬就被它盖住，名称也看不见了。 */
+.mirror-titlebar {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  /* ⚠️ 变量名别写成 `--titlebar-h`：lightningcss 1.33 的 minify 会把整个 CSS 判成
+     "Unexpected end of input"，而 dev 不压缩 ⇒ 只有 `vite build` 才炸（10-12 撞过一次）。 */
+  height: var(--titlebar-height);
+  /* 同格叠两层：名称（拖拽区）+ 顶上那一条触发带。这两层自己不用 `position`，谁在上面看 DOM 顺序。 */
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  align-items: center;
+  /* 平时不画底色（窗口本体透明 = 手机外面什么都没有）；chrome 显形时那条灰是下面 `.mirror-chrome`
+     这一层画的，不归这条（10-13 第四稿）。10-12 先试过把它涂成黑框那个 `#0b0b0d`，
+     结果黑条 + 黑框把手机切成两截，更难看。 */
+  background-color: transparent;
+  /* 整条默认就是窗口拖拽区 —— 取代 10-10 那条压在画面顶上的 `.mirror-dragstrip`
+     （那条会吃掉手机画面最顶 24px 的点按，这里不再有这个代价）。 */
   -webkit-app-region: drag;
+}
+
+.mirror-titlebar>* {
+  grid-area: 1 / 1;
+  min-width: 0;
+}
+
+/* 顶上那一条**触发带**（`MIRROR_TITLEBAR.revealHeight`）：唯一必须 `no-drag` 的一截。
+   为什么要有它 —— `-webkit-app-region: drag` 那一片 Chromium **不把指针事件送进 DOM**
+   （10-12 探针：从画面中间一步一步往上移，y≥30 一路都有 `pointermove`，踏进 drag 区那一步起一个都没有），
+   而用户 10-12 要「鼠标移动到上边也要展示边框」⇒ 整条都当拖拽区就永远收不到"贴上边"这个信号。
+   让出最上面 12px 当触发区，剩下 16px 照样拖窗口（探针实测拖得动，见 `mirror-window-chrome` 文档）。
+   自己不画东西，也不接点击以外的行为 —— 它只是把这条带的坐标喂给 `chromeZone`。 */
+.mirror-titlebar__reveal {
+  align-self: start;
+  height: var(--titlebar-reveal-height);
+  -webkit-app-region: no-drag;
+}
+
+.mirror-titlebar__name {
+  align-self: center;
+  /* 让开三颗：`--titlebar-name-x` = lightX + 整组宽 + 间距，算式在 `mirrorTitlebarNameLeft()`。 */
+  padding-left: var(--titlebar-name-x);
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0.1px;
+  /* 浅灰底 ⇒ 深色字（竞品那条就是系统默认的标题色）。 */
+  color: rgb(0 0 0 / 62%);
+  font-weight: 500;
+  /* 平时不画字（chrome 没显形），跟长条同一条淡入淡出。 */
+  opacity: 0;
+  transition: opacity var(--rail-fade-in) ease-out;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  user-select: none;
 }
 
 /* dev 调试信息边栏：**与长条同一套外观**（用户 10-10「风格跟操作栏一样」）—— 浅色圆角、四周留白浮着，

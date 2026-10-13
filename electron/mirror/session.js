@@ -2,6 +2,7 @@ import { BrowserWindow, ipcMain, screen } from "electron";
 import path from "node:path";
 import { CHANNELS } from "../ipcContract.js";
 import {
+  deviceDisplayName,
   ensureServer,
   getCachedApps,
   getDeviceSdk,
@@ -28,8 +29,8 @@ import { startMiProjection } from "./miProjection.js";
 import {
   mirrorAspectRatio,
   mirrorContentExtraSize,
-  mirrorScreenInsets,
   mirrorTrafficLightPosition,
+  mirrorScreenInsets,
   mirrorWindowBounds,
   mirrorsMainDisplay,
   resolveRuntimePrefs,
@@ -85,7 +86,8 @@ const aspectRatios = new WeakMap();
 
 function createMirrorWindow(session, prefs, bounds, ratio) {
   const win = new BrowserWindow({
-    title: session.label || session.packageName,
+    // 标题栏文字（渲染层那份从 `pendingInit` 组，两边同一个式子）。
+    title: session.windowTitle || session.label || session.packageName,
     // 初始形状跟设备屏幕一致（用户 2026-09-19 要求）：pad 状态下的 app 在竖形显示上排双列、
     // 横形显示上排宽布局，两种都铺满整帧，所以窗口照手机比例开也不会有黑边。
     width: bounds.width,
@@ -93,22 +95,26 @@ function createMirrorWindow(session, prefs, bounds, ratio) {
     minWidth: 280,
     minHeight: 280,
     titleBarStyle: "hiddenInset",
-    // 红绿灯落在**画面右边缘那条控制长条**里（尺寸与落点见 `MIRROR_RAIL`）：
-    // 三颗是系统画的、CSS 盖不住，只能整组平移，所以长条的宽度下限就是它。
-    trafficLightPosition: mirrorTrafficLightPosition(bounds.width),
-    // **窗口本体透明**（2026-10-09）：平时只看见那块圆角屏幕 + 贴它外沿那圈常驻黑框（「就是个手机样子」）。
-    // 2026-10-10 用户把外面那圈「hover 才往外扩」的浅色窗口底删了，换成右侧那条悬浮长条
-    // （渲染层 `App.vue` 的 `railShown` + `chromeReveal.js`）。长条在手机右边**外面**、占窗口宽度，
-    // 那一格平时是透明的，所以收起时看见的还是「一块圆角屏幕 + 一圈黑框」。
-    // 这里不能再给 `backgroundColor` 上色 —— 铺一层不透明就把透明白开了。
+    // 三颗彩虹键钉进**顶部那条标题栏**（用户 2026-10-12：「试试 a 的变体，上边加一条专门放三个按钮和
+    // app 名称」；10-11 那条「恢复默认，不要有任何修改」到此为止）。落点与窗口宽无关 ⇒ `resize` 里
+    // 什么都不用做（10-10 把它们贴进右侧长条时，落点 = 窗口宽 − 长条宽 + 内缩，每次改大小都得重算，
+    // 漏一次就留在旧位置 —— 那条坑这次从根上没有了）。**显隐照样不碰**：常驻，不跟长条 hover 走。
+    trafficLightPosition: mirrorTrafficLightPosition(),
+    // **本体仍然透明**（2026-10-09 定稿，10-12 一度照竞品改成不透明浅灰窗，当天被否：
+    // 「竞品是鼠标移到边框上才那个样子，没移上去就是个手机样子」）⇒ 那层灰底是**涂装**，
+    // 由渲染层跟着长条的 hover 显隐（`.mirror-window.is-chrome`），窗口本体一个字节不改。
     transparent: true,
     backgroundColor: "#00000000",
+    // ⚠️ **别加 `roundedCorners: false`**（10-12 试过一整轮）：它确实能把窗口四角的系统圆角去掉、
+    // 让渲染层那层浅灰铺到角上，但**同一刻 macOS 那三颗彩虹键整组不画了**（他当场报「mac的三个彩虹按钮没了」）
+    // —— 那圈窗角与 AppKit 画标准按钮用的是同一套窗口外形，去掉圆角把按钮也带走了。
+    // 想要"边框有圆角 + 三颗在"就别动这个开关：**系统那圈圆角留着，chrome 两条臂自己不再写 `border-radius`**
+    // （写了就是在系统那圈里面再挖一圈，中间露出一条桌面 = 他说的「丑丑的黑色」）。
     show: false,
     alwaysOnTop: prefs.alwaysOnTop,
-    // 真·全屏（macOS 那个独立 Space）。⚠️ 代价实测清楚：这种全屏里系统把红绿灯连标题栏一起收进
-    // 「鼠标移到顶边才浮出」—— 进全屏时 `setWindowButtonVisibility(true)`、动画落定后再调一次、
-    // 落点交回默认、建窗口时压根不藏，四种救法像素扫描命中数全 0（10-11）。
-    // 用户 10-11 明确「我要的是全屏，不是放大按钮」⇒ 保真全屏，那三颗随系统；
+    // 真·全屏（macOS 那个独立 Space）：这种全屏里红绿灯连标题栏一起归系统（顶边才浮出），
+    // 我们不去动它（10-11 实测四种救法像素扫描命中数全 0，而且现在压根不定制）。
+    // 用户 10-11 明确「我要的是全屏，不是放大按钮」⇒ 保真全屏；
     // 试过的 `fullscreenable: false` + `maximize()`（zoom 撑满）已回退 —— 那只是最大化，不是全屏。
     // 另一条老坑仍在：构造参数传 `fullscreen:true` + `show:false` 常常进不去 ⇒ 靠 show 之后再调。
     fullscreenable: true,
@@ -133,20 +139,14 @@ function createMirrorWindow(session, prefs, bounds, ratio) {
     // 「全屏启动」在 show 之后落地（构造参数那条路在 macOS 上不可靠，见上面 `fullscreenable` 的注释）。
     if (prefs.fullscreen) win.setFullScreen(true);
   });
-  // 红绿灯是**按窗口宽**贴到右侧长条里的，所以窗口一改大小就得跟着重算落点。
-  win.on("resize", () => {
-    if (win.isDestroyed()) return;
-    win.setWindowButtonPosition?.(mirrorTrafficLightPosition(win.getContentBounds().width));
-  });
   // 全屏那一屏要单独一种排法：手机得在整块屏幕正中，而常态那 86px 长条是从窗口右边
   // **挖走一块宽度**的 ⇒ 画面会偏左。把状态推给渲染层，它那一档让长条常驻、画面收成手机那块。
   // 初值不用推：页面自己从 `pendingInit.prefs.fullscreen` 读（「全屏启动」那条开关）。
-  // ⚠️ 红绿灯**不去动**：真全屏里它们归系统收放（顶边浮出），钉不住也不该藏 —— 浮出来正好落在
-  // 右上角这一格里，与窗口态同一个位置。
   win.on("enter-full-screen", () => win.webContents.send(CHANNELS.mirrorFullscreen, true));
   win.on("leave-full-screen", () => win.webContents.send(CHANNELS.mirrorFullscreen, false));
-  // 默认把红绿灯藏起来：窗口本体透明，三颗圆点会浮在桌面上，「就是个手机样子」当场破功。
-  // 渲染层浮出右侧长条时通过 `mirror:windowButtons` 一起放出来（关掉窗口仍要靠它或 ⌘Q）。
+  // 三颗彩虹键**平时藏起来**（本体透明时它们会浮在桌面上，「就是个手机样子」当场破功）；
+  // 鼠标贴边、那层灰底 chrome 显形时由渲染层放出来。落点与窗口宽无关 ⇒ 放出来之后补一次设位
+  // 就够了（`setWindowButtonVisibility(true)` 会把三颗打回 AppKit 默认的左上角，10-10 探针实测）。
   win.setWindowButtonVisibility?.(false);
   void loadMirrorPage(win);
   win.on("closed", () => void stopMirrorSession(session.id));
@@ -229,10 +229,13 @@ export async function startMirrorSession(request) {
   // 任一处读不到就退回既有的 850x600，且渲染层不给显示尺寸（`new_display` 退空串、不开 flex）。
   // 版本（API 级别）决定两件事：点应用要不要改走主屏镜像，以及要不要 keepAwake。
   // 与读分辨率/密度并列，不多等一个来回。
-  const [screenSize, screenDpi, sdk] = await Promise.all([
+  // 设备展示名也在这里一起拿：标题栏要写「日历 - Mi 10」那种「app - 设备名」（对照竞品，用户 10-12）。
+  // 它在 adb.js 里按 serial 缓存，所以开窗之后每次都是零成本。
+  const [screenSize, screenDpi, sdk, deviceName] = await Promise.all([
     getPhysicalScreenSize(serial).catch(() => null),
     getPhysicalScreenDensity(serial).catch(() => null),
     getDeviceSdk(serial).catch(() => null),
+    deviceDisplayName(serial).catch(() => null),
   ]);
   const deviceMirror = wholeDevice || mirrorsMainDisplay(sdk);
   const serverPath = scrcpyServerPath(deviceMirror ? { largeScreenDisplay: false } : undefined);
@@ -248,11 +251,15 @@ export async function startMirrorSession(request) {
   const deviceEncoders = await getDeviceVideoCodecs(serial).catch(() => null);
 
   /** @type {MirrorSession} */
+  const windowTitle = deviceName ? `${label} - ${deviceName}` : label;
+  /** @type {MirrorSession} */
   const session = {
     id: `mirror-${++sessionSeq}`,
     serial,
     packageName,
     label,
+    // 「app - 设备名」：设备名读不到时只留 app 名，不留 " - "。
+    windowTitle,
     startedAt: Date.now(),
     codec: null,
     codecName: null,
@@ -286,6 +293,10 @@ export async function startMirrorSession(request) {
     id: session.id,
     serial,
     label,
+    // 标题栏那行文字（`app - 设备名`）：主进程的窗口标题与渲染层画的那行**必须同一个式子**，
+    // 否则两处会漂（Dock / 窗口列表读的是原生标题，屏上读的是我们画的）。
+    windowTitle,
+    deviceName,
     packageName,
     // 采主屏的判据在这里定一次：渲染层拿它跳过「接回画面」与「跟随窗口」
     // （那些都需要一块我们建的虚拟显示，这一档没有）。`startApp` 不在其列 —— 带着包名时渲染层
@@ -465,22 +476,6 @@ ipcMain.handle(CHANNELS.mirrorInitGet, (event) => {
 ipcMain.handle(CHANNELS.mirrorList, () => listMirrorSessions());
 
 /**
- * 渲染层浮出/收起右侧长条时一起开关红绿灯（`hiddenInset` 的三颗圆点是系统画的，CSS 盖不住）。
- * 用 `on` 不用 `handle`：纯表现层的一刀，没有要等结果的地方。
- */
-ipcMain.on(CHANNELS.mirrorWindowButtons, (event, shown) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  if (!win || win.isDestroyed()) return;
-  const visible = shown === true;
-  win.setWindowButtonVisibility?.(visible);
-  // ⚠️ **放出来之后必须重设落点**：`setWindowButtonVisibility(true)` 会把三颗打回 AppKit 默认的
-  // 左上角，构造参数那次 `trafficLightPosition` 就这么丢了（10-10 探针实测：藏一次再放出来就回左边，
-  // 补一次 `setWindowButtonPosition` 立刻回右侧长条里）。用户看到的就是「彩虹按钮并没有靠右」。
-  if (visible) {
-    win.setWindowButtonPosition?.(mirrorTrafficLightPosition(win.getContentBounds().width));
-  }
-});
-/**
  * 长条上那颗「使用 Mac 键盘」：`on` 把设备输入法抢过来、`off` 还原、`state` 只是问一句
  * （镜像页重载后要知道当前状态，别把开关画反）。回的是归属状态，见 `macKeyboard.js`。
  */
@@ -496,6 +491,19 @@ ipcMain.handle(CHANNELS.mirrorMacKeyboard, async (event, action) => {
 });
 
 /** 设备侧按了胶囊上的 ×（渲染层的桥收到 `yield` 转过来）：让出，不再抢也不再送字。 */
+/**
+ * 渲染层显隐那层 chrome（浅灰底 + 标题栏 + 长条）时，把系统那三颗一起开关。
+ * 用 `on` 不用 `handle`：纯表现层的一刀，没有要等结果的地方。
+ */
+ipcMain.on(CHANNELS.mirrorWindowButtons, (event, shown) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return;
+  const visible = shown === true;
+  win.setWindowButtonVisibility?.(visible);
+  // 放出来之后必须重设落点，否则三颗回到 AppKit 默认的左上角（≠ 我们要的标题栏居中位）。
+  if (visible) win.setWindowButtonPosition?.(mirrorTrafficLightPosition());
+});
+
 ipcMain.on(CHANNELS.mirrorMacKeyboardYield, (event) => {
   macKeyboardOfEvent(event).park();
 });

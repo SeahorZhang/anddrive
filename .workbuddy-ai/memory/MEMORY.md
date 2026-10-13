@@ -21,6 +21,8 @@
 - 显隐状态机在 `src/mirror/chromeReveal.js`（纯函数 + `tests/mirror/chromeReveal.test.js`）：进格子就弹、离开格子 1 秒后收；`setPinned` 是那颗「一直显示」的常驻开关。
 - 几何/时长数只有一个出处：`electron/mirror/options.js` 的 `MIRROR_FRAME` / `MIRROR_RAIL`，经 `App.vue` 的 `windowStyle` 注入成 CSS 变量（主进程算窗口尺寸也要用同一份数）。
 - 开关型按键（关屏 / 常驻 / Mac 键盘）的"开着"态 = `.mirror-rail__key.is-active`（填实主色 + 白图标）。
+- **贴边浮出的那层浅灰涂装（`is-chrome`）= 一个元素 `.mirror-chrome`**（2026-10-13 第四稿）。用户口径：「上边和右边的边框以及左上角右上角右下角的圆角不协调，**不是一个图层**」→「改成一个 div」—— 他指的是 **DOM 结构**（上一版是 `.mirror-titlebar` 一条臂 + `.mirror-rail` 一条臂 + `.mirror-main` 三层 `radial-gradient` 补三个角，三个元素在画同一层涂装，连淡入都分两套）。现在：那层铺满 `.mirror-body` 填 `#dcdfe3`，`.mirror-titlebar` / `.mirror-main` 抬到 `z-index: 1` ⇒ **手机轮廓自己把中间挖掉**，剩下就是上臂 + 右臂 + 黑框三个圆角外侧那三块；左下角那块用 `clip-path` 切一个 `--frame-radius` 见方的方口（多出的部分落在黑框里被手机盖住，所以不必按圆弧裁）。
+- ⚠️ 因此：**`.mirror-titlebar` 与 `.mirror-rail` 的底色必须保持 `transparent`**（灰只有一个出处），`.mirror-rail__panel` 的白胶囊只剩两档全屏（那条 `:not(.is-fullscreen)` 覆盖照旧）。
 - ⚠️ **这三颗开关的状态都不跨会话保存**（窗口级一次性开关）：用户 2026-10-11 一度点单「记住我点的选项」、已实现后又当天撤销 —— **别再把它当需求捡回来**。要恢复得进 `prefs`（`shared/scrcpyConfig.js` 的 `normalizeScrcpyConfig` + `resolveRuntimePrefs`），且「关屏使用」那颗**永远不该进** —— 它画的是设备实时电源状态（`mWakefulness` / `powerMode`），持久化它只会跟用户的电源键打架。
 
 ## 声音在哪出声：**只有默认档，运行时切换已删**（2026-10-11 当天做当天删）

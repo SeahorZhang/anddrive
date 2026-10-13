@@ -308,13 +308,12 @@ function ipcInvoke(channel, ...args) {
 }
 
 /**
- * 长条显形/收起时把红绿灯一起开关（`hiddenInset` 那三颗圆点是系统画的，CSS 盖不住）。
+ * chrome（浅灰底 + 标题栏 + 那三颗）显形/收起。系统画的三颗 CSS 盖不住，只能请主进程开关。
  * 不 invoke 只 send：纯表现层，没有要等结果、也没有会失败的地方。
  */
 export function setWindowButtons(shown) {
   ipc()?.send?.(CHANNELS.mirrorWindowButtons, shown === true);
 }
-
 
 /**
  * dev 调试边栏要占多宽（0 = 收起）：主进程把**窗口**撑宽同样的量，画面那块才不被挤小。
