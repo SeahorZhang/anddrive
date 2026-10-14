@@ -1,5 +1,5 @@
 import { CHANNELS } from "../../electron/ipcContract.js";
-import { getServerClient, acquireDeviceAdb, startScrcpy, codecName } from "./connect.js";
+import { getServerClient, acquireDeviceAdb, startScrcpy, startAudioScrcpy, codecName } from "./connect.js";
 import { computeDisplayMetrics, scaleDisplayDpi } from "../../shared/scrcpyConfig.js";
 import { createDisplayFollower } from "./displayFollow.js";
 import { createSleepWatcher } from "./sleepWatch.js";
@@ -27,6 +27,11 @@ const current = {
   stopStolenWatch: null,
   /** 设备电源状态轮询的句柄（`stop` / `kick`）。 */
   sleepWatch: null,
+  /**
+   * 本窗口是不是这台设备**唯一那条音频会话**的承载者（用户 2026-10-14 第三条）。
+   * 由主进程选举（该设备最早的镜像窗口），关窗时移交 —— 见 `ensureAudioCompanion`。
+   */
+  audioHost: false,
 };
 
 /** 设备侧送回执/坏消息时的出口，由 `App.vue` 挂进来（它才知道该往哪句提示上放）。 */
@@ -110,7 +115,6 @@ function initialDisplay(info) {
  * @param {{
  *   onMeta: (meta: Record<string, unknown>) => void,
  *   onVideoPacket: (packet: unknown) => Promise<void> | void,
- *   onAudioPacket: (packet: unknown) => void,
  *   onEnded: () => void,
  *   onReflowStart?: (size: { width: number, height: number }) => void,
  *   onReflowAbort?: () => void,
@@ -124,7 +128,6 @@ export async function startSession(
   {
     onMeta,
     onVideoPacket,
-    onAudioPacket,
     onEnded,
     onReflowStart,
     onReflowAbort,
@@ -139,6 +142,12 @@ export async function startSession(
   current.stopping = false;
   const adb = await acquireDeviceAdb(getServerClient(), info.serial);
   current.adb = adb;
+  current.audioHost = info.audioHost === true;
+  // 音频与画面**不在同一条会话里**（用户 2026-10-14 第三条报障的修法，机制见
+  // `electron/mirror/options.js` 的 `buildMirrorOptions`）：这台设备的音频由**唯一一条**
+  // 纯音频会话负责，它承载在该设备最早的镜像窗口里。两条会话**并行**建 —— 两份 jar 推到不同路径，
+  // 实测并行总耗时与推一份相同（~1.28s），音频首包 ~1.72s，与单条视频会话同时。
+  const companionPromise = wantsAudioCompanion() ? ensureAudioCompanion() : null;
   const { client, display: createdDisplay } = await startScrcpy({
     adb,
     serverPath: info.serverPath,
@@ -179,21 +188,18 @@ export async function startSession(
     // output 不可用不影响会话
   }
 
-  // 音频与画面在**同一条会话**里（参数见 `electron/mirror/options.js` 的 `buildMirrorOptions`：
-  // 设置页那一项决定 `audio` 开不开）。采不到就只降级成纯画面，不拖住画面（scrcpy 4.0 仅支持 Opus）。
+  // 音频（`current.audioHost` 那一档才有）：等它落地再报 `hasAudio`。起不来只降级成纯画面，
+  // 不拖住画面 —— scrcpy 4.0 起音频仅支持 Opus，采不到时服务端把流标 `disabled`（不是抛错）。
   // ⚠️ 这一档在建会话时定死：设备投屏期间不出声是服务端 `REMOTE_SUBMIX` 直采的结果，控制协议里
   // 没有任何音频路由消息 ⇒ 运行时改它只能整条会话重来，所以我们不提供「声音在电脑 / 在手机」的切换。
   let audioConfigured = false;
-  try {
-    const audioMeta = await client.audioStream;
-    if (audioMeta?.type === "success") {
-      void pumpLoop(audioMeta.stream, onAudioPacket, null);
-      audioConfigured = true;
-    } else {
-      console.warn(`[mirror] 设备音频不可用（${audioMeta?.type ?? "disabled"}），仅转发画面`);
-    }
-  } catch (error) {
-    console.warn("[mirror] 设备音频不可用：", error?.message || error);
+  if (wantsAudioCompanion()) {
+    // 起会话期间才收到「音频归你」那一条（`mirror:audioHost`）时 `companionPromise` 还是 null —— 这里补一次。
+    audioConfigured = await (companionPromise ?? ensureAudioCompanion()).catch((error) => {
+      console.warn("[mirror] 设备音频会话建立失败：", error?.message || error);
+      audioIssueSink?.(`设备音频不可用：${error?.message || error}`);
+      return false;
+    });
   }
 
   onMeta({
@@ -310,9 +316,19 @@ function ipcInvoke(channel, ...args) {
 /**
  * chrome（浅灰底 + 标题栏 + 那三颗）显形/收起。系统画的三颗 CSS 盖不住，只能请主进程开关。
  * 不 invoke 只 send：纯表现层，没有要等结果、也没有会失败的地方。
+ *
+ * ⚠️ **形态一起报过去**（`railFloating`）：三颗的**落点分两档**（窗口态钉在标题栏里、浮动态让开
+ * 画面圆角，见 `electron/mirror/options.js` 的 `mirrorTrafficLightPosition`）。主进程拿不到形态
+ * 就只能猜，翻转形态那一拍三颗会留在上一档的落点上（浮动态会重新压回圆角里）。
+ *
+ * @param {boolean} shown
+ * @param {boolean} railFloating
  */
-export function setWindowButtons(shown) {
-  ipc()?.send?.(CHANNELS.mirrorWindowButtons, shown === true);
+export function setWindowButtons(shown, railFloating) {
+  ipc()?.send?.(CHANNELS.mirrorWindowButtons, {
+    shown: shown === true,
+    railFloating: railFloating === true,
+  });
 }
 
 /**
@@ -321,6 +337,18 @@ export function setWindowButtons(shown) {
  */
 export function setHudExtra(px) {
   ipc()?.send?.(CHANNELS.mirrorWindowHud, px);
+}
+
+/**
+ * 右侧那条操作栏现在**浮在画面里没有**（画面够宽时它不再占窗口右边那一格）。
+ *
+ * 报给主进程是必须的：形态一变，窗口右边那一截**不参与拖拽比例**的余量就差一条长条宽，
+ * 主进程要按新余量重设一次 `setAspectRatio`，否则「画面 = 设备比例」当场破掉。
+ * 判据只有一处（`options.js` 的 `mirrorRailFloats`），主进程建窗口时也用它。
+ * @param {boolean} floating
+ */
+export function setRailFloating(floating) {
+  ipc()?.send?.(CHANNELS.mirrorRailFloat, floating === true);
 }
 
 /**
@@ -544,9 +572,101 @@ function watchAppStolen(onStolen) {
   return () => clearInterval(timer);
 }
 
+// ---------------------------------------------------------------------------
+// 设备级音频会话（用户 2026-10-14 第三条：「打开两个镜像声音重叠了，关掉一个镜像，
+// 声音又从电脑回到了手机」）
+//
+// 机制（真机 Mi 10 / 随包 5.0.1，`dumpsys media.audio_policy` 受控实验）：音频在 Android 上
+// 是**设备级**的 —— 只有一条 `AUDIO_DEVICE_OUT_REMOTE_SUBMIX`。两条采集同时跑时拿到的是
+// **同一份混音**（两个窗口各播一遍 = 声音重叠），而**释放任意一条**会让 AudioPolicy 把那条
+// 输出整条拆掉、应用输出回到 `SPEAKER`，剩下那条采集从此静音（声音「回到了手机」）。
+//
+// ⇒ 同一台设备同时只能有**一条**采集，且它的生命周期不能挂在某一条镜像窗口上。
+// 落地：镜像会话恒 `audio: false`；另起一条**纯音频会话**（`startAudioScrcpy`），
+// 由该设备**最早打开的镜像窗口**承载（主进程选举，见 `electron/mirror/session.js`），
+// 那个窗口关掉时主进程把这一位交给下一个幸存者（`mirror:audioHost`）——
+// **只动音频**：重开一条会话就是了，幸存者那边的画面 / 虚拟显示 / 应用归属一律不碰。
+// ---------------------------------------------------------------------------
+
+/** 当前承载的那条音频会话（不是宿主时恒为 null）。 */
+let audioCompanion = null;
+/** 正在建的那条（同一拍可能有两条路进来：`startSession` 与 `mirror:audioHost` 那条推送）。 */
+let audioCompanionPending = null;
+/** 收到过 `mirror:audioHost`（可能在会话还没起来时到达，`startSession` 结尾会补一次）。 */
+let audioHostWanted = false;
+/** `bootstrap()` 给进来的音频出口：HUD 计数 + Opus 播放器（`App.vue` 那条接线原样复用）。 */
+let audioSink = null;
+/** 音频出问题时的出口（页面上那行 `audioIssue`）。 */
+let audioIssueSink = null;
+
+function wantsAudioCompanion() {
+  return (current.audioHost || audioHostWanted) && !current.stopping;
+}
+
+/**
+ * 起/复用本窗口承载的那条设备级音频会话。幂等：已经在跑、或**正在建**都直接跟着走 ——
+ * 同一拍有两条路会进来（`startSession` 开头那条并行建，与 `mirror:audioHost` 那条推送），
+ * 不挡住的话就会在设备上开出**两条采集**（Android 上那是互相破坏的，见文件末尾那段）。
+ * @returns {Promise<boolean>} 音频流真的通了才是 true
+ */
+async function ensureAudioCompanion() {
+  if (audioCompanion) return true;
+  if (audioCompanionPending) return audioCompanionPending;
+  if (!wantsAudioCompanion() || !current.info || !current.adb) return false;
+  const pending = startAudioCompanionOnce();
+  audioCompanionPending = pending;
+  try {
+    return await pending;
+  } finally {
+    if (audioCompanionPending === pending) audioCompanionPending = null;
+  }
+}
+
+/** 真正建那一条（只由 `ensureAudioCompanion` 调用，去重那一层在它那里）。 */
+async function startAudioCompanionOnce() {
+  const info = current.info;
+  // 起之前先问一句「设备侧那条采集放开了吗」：Android 只有一条 `REMOTE_SUBMIX`，
+  // 而释放要 ~1.3s（真机实测），不等它拆干净就起来会让**新起来的这条从此静音**
+  // （两条并存时旧的那条被释放 → 新的那条包照收、设备侧输出已被拆掉 = 声音回到手机）。
+  // 主进程把轮询做完（要跑设备命令），这里只 await 一次；超时也照起，宁可试一次。
+  await ipcInvoke(CHANNELS.mirrorAudioIdle).catch(() => true);
+  const client = await startAudioScrcpy({ adb: current.adb, serverPath: info.serverPath });
+  // 会话在这中间换了（关窗 / 「接回」重建）：这条已经没有归属，当场收掉，别让它留在设备上采集。
+  if (!wantsAudioCompanion() || current.info !== info) {
+    await client.close?.().catch?.(() => {});
+    return false;
+  }
+  audioCompanion = { client };
+  // 服务端自己退出（设备断开 / 进程被杀）：清掉这一位，别把一条死会话当成还在跑。
+  client.exited?.then?.(() => {
+    if (audioCompanion?.client === client) audioCompanion = null;
+  })?.catch?.(() => {});
+
+  const meta = await client.audioStream;
+  if (meta?.type !== "success") {
+    // 服务端采不到音频时把流标 `disabled`（**不是抛错**，回来的对象没有 codec/stream）——
+    // 要显式认这一档，否则就是「点了没反应」。
+    console.warn(`[mirror] 设备音频不可用（${meta?.type ?? "disabled"}），仅转发画面`);
+    return false;
+  }
+  void pumpLoop(meta.stream, (packet) => audioSink?.(packet), null);
+  return true;
+}
+
+/** 收掉本窗口承载的音频会话（关窗 / 页面卸载 / 让位给别的窗口）。 */
+function stopAudioCompanion() {
+  const companion = audioCompanion;
+  audioCompanion = null;
+  audioHostWanted = false;
+  // 正在建的那条不在这里等：它建完会自己发现 `wantsAudioCompanion()` 已经是假，当场把会话收掉。
+  if (companion) void companion.client?.close?.().catch?.(() => {});
+}
+
 /** 关闭当前 scrcpy client（窗口 beforeunload / 主进程 stop 时调用）。 */
 export function stopSession() {
   current.stopping = true;
+  // 音频那条会话要**先**收掉：Android 上并发采集是互相破坏的，晚一步会让接手那条哑掉。
+  stopAudioCompanion();
   // Mac 键盘那条桥挂在 adb 上，会话收摊时一起断（归属由主进程在最后一个会话关掉时还原）。
   syncMacKeyboard(null);
   if (current.resizeObserver) {
@@ -589,6 +709,25 @@ let player = null;
 window.addEventListener("beforeunload", () => stopSession());
 
 /**
+ * 主进程推来的「这台设备的音频会话改由你承载」（`mirror:audioHost`）—— 原来那条窗口关掉了。
+ *
+ * **在模块求值时就注册**（不放在 `bootstrap` 里）：主进程是在原宿主窗口 `closed` 之后才发的，
+ * 而窗口刚开出来、`bootstrap` 还在路上时也可能撞上；`mirror:initGet` 那一侧会返回**当时的**
+ * `audioHost`（主进程先改位再发），所以漏掉这一条也不会真的没声音，这里只是把它做成即时生效。
+ * 会话还没起来时 `ensureAudioCompanion()` 会空转，`startSession` 结尾按 `audioHostWanted` 补一次。
+ */
+{
+  const renderer = ipc();
+  renderer?.on?.(CHANNELS.mirrorAudioHost, () => {
+    audioHostWanted = true;
+    void ensureAudioCompanion().catch((error) => {
+      console.warn("[mirror] 接管设备音频失败：", error?.message || error);
+      audioIssueSink?.(`设备音频不可用：${error?.message || error}`);
+    });
+  });
+}
+
+/**
  * 主进程推来的「进/出 macOS 全屏」（`mirror:fullscreen`）。页面据此换排法：那一屏里长条不再占窗口宽度。
  * 初值直接取启动参数里的 `prefs.fullscreen` —— 「全屏启动」那档一开就是全屏，等第一个事件会晚一拍
  * （长条先按常态排一遍再跳，看着闪一下）。
@@ -629,13 +768,16 @@ export async function bootstrap(apply) {
     onStats: (stats) => apply.audioStats?.(stats),
     onError: (message) => apply.hooks.onAudioError?.(String(message)),
   });
+  // 音频出口在这里落地（会话那两条路都往它送包）：主会话那条已经不带音频，
+  // 只有设备级音频会话（本窗口是宿主时）会调它。HUD 的「收到包」计数与 Opus 播放器是同一份接线。
+  audioSink = (packet) => {
+    apply.audio?.(packet);
+    player?.push(packet);
+  };
+  audioIssueSink = (message) => apply.hooks.onAudioError?.(String(message));
 
   return startSession(info, {
     onVideoPacket: apply.video,
-    onAudioPacket: (packet) => {
-      apply.audio?.(packet);
-      player.push(packet);
-    },
     onMeta: (meta) => apply.hooks.onMeta?.(meta),
     onReflowStart: (size) => apply.hooks.onReflowStart?.(size),
     onReflowAbort: () => apply.hooks.onReflowAbort?.(),

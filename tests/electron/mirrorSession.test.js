@@ -92,7 +92,9 @@ const env = vi.hoisted(() => {
     }
     close() {}
     isDestroyed() {
-      return false
+      // 真实 Electron 里 `closed` 事件**派发途中** `isDestroyed()` 已经是 true（窗口已经没了）。
+      // 这里用可置位的标志还原那一刻 —— 音频交接的「当场交」那条分支就靠它走到（见 `handOffAudioHost`）。
+      return this.destroyed === true
     }
     isMinimized() {
       return false
@@ -126,6 +128,9 @@ const env = vi.hoisted(() => {
     /** 设备 secure 设置（Mac 键盘要抢要还的那一格）与设备 shell 调用轨迹。 */
     secure: { default_input_method: 'com.sohu.inputmethod.sogou.xiaomi/.SogouIME' },
     shellCalls: [],
+    /** 「设备侧有没有那条 REMOTE_SUBMIX 采集」的探针轨迹与要按序回的读数。 */
+    audioCaptureProbes: [],
+    audioCaptureQueue: [],
     /** 「桌面模式」要读的手机前台应用（null = 手机停在桌面）。 */
     foregroundApp: 'com.example.fg',
     /** 本机那份应用缓存（`getCachedApps`）：新窗口的名称与图标从这里取，不碰设备。 */
@@ -213,6 +218,13 @@ vi.mock('../../electron/adb.js', () => ({
   getSecureSetting: async (_serial, key) => env.secure[key] ?? null,
   runDeviceShell: async (_serial, command) => {
     env.shellCalls.push(command)
+    // 「设备侧那条 REMOTE_SUBMIX 采集放开了吗」那条探针：按队列回读数，
+    // 用来演「释放要等一会儿」这件事（默认 `0` = 没人在采）。
+    if (command.includes('dumpsys media.audio_policy')) {
+      env.audioCaptureProbes.push(command)
+      const next = env.audioCaptureQueue.shift()
+      return { ok: true, stdout: next ?? '0' }
+    }
     if (command.startsWith('cat ')) return { ok: true, stdout: env.stash }
     const echo = /^echo (\S+) > \S+$/.exec(command)
     if (echo) env.stash = echo[1]
@@ -611,16 +623,33 @@ describe('镜像窗口的透明本体与红绿灯', () => {
   it('chrome 显形放出三颗并补设落点，收起时再藏掉', async () => {
     await startMirrorSession({ serial: 'dev-chrome', packageName: 'com.example.app' })
     const win = env.windows.at(-1)
-    env.handlers.get(CHANNELS.mirrorWindowButtons)({ sender: win.webContents }, true)
-    env.handlers.get(CHANNELS.mirrorWindowButtons)({ sender: win.webContents }, false)
+    const fire = (payload) => env.handlers.get(CHANNELS.mirrorWindowButtons)({ sender: win.webContents }, payload)
+    fire({ shown: true, railFloating: false })
+    fire({ shown: false, railFloating: false })
     expect(win.buttonCalls).toEqual([false, true, false])
     expect(win.lightTrace.map((c) => c.kind)).toEqual([
       'visibility',
       'visibility',
       'position',
       'visibility',
+      'position',
     ])
-    expect(win.lightTrace[2].value).toEqual(mirrorTrafficLightPosition())
+    expect(win.lightTrace[2].value).toEqual(mirrorTrafficLightPosition(false))
+  })
+
+  /**
+   * 落点**分两档形态**（用户 2026-10-14 第四条「mac 3 个彩虹键往右往下点，超出屏幕了」）：
+   * 渲染层每次开关都把当时的形态一起报过来，主进程按它选落点 —— 漏掉这一步，翻转形态后三颗会
+   * 留在上一档的落点上（浮动态就重新压回画面的圆角里）。
+   */
+  it('浮动态用浮动态那套落点，窗口态用标题栏那套', async () => {
+    await startMirrorSession({ serial: 'dev-chrome-float', packageName: 'com.example.app' })
+    const win = env.windows.at(-1)
+    const fire = (payload) => env.handlers.get(CHANNELS.mirrorWindowButtons)({ sender: win.webContents }, payload)
+    fire({ shown: true, railFloating: true })
+    fire({ shown: true, railFloating: false })
+    const positions = win.lightTrace.filter((c) => c.kind === 'position').map((c) => c.value)
+    expect(positions).toEqual([mirrorTrafficLightPosition(true), mirrorTrafficLightPosition(false)])
   })
 
   /**
@@ -698,6 +727,13 @@ describe('镜像窗口照设备画面比例开', () => {
     })
     expect(initFrom(win).screenSize).toBeNull()
     expect(initFrom(win).screenDpi).toBeNull()
+    // 850x600 这一档也走同一条判据（不是特例）：画面 842 宽 ≥ 640 ⇒ 长条浮在画面里，
+    // `initialCss` 右边只剩黑框（那 86px 归画面）。
+    const insets = mirrorScreenInsets(true)
+    expect(initFrom(win).initialCss).toEqual({
+      width: win.getContentBounds().width - insets.left - insets.right,
+      height: win.getContentBounds().height - insets.top - insets.bottom,
+    })
   })
 })
 
@@ -742,6 +778,35 @@ describe('镜像窗口的拖拽比例：采主屏锁、桌面模式放开', () =
     ])
     // 比例始终是画面那一个，不随边栏变。
     expect(win.aspectCalls.map((c) => c[0])).toEqual([1200 / 2608, 1200 / 2608, 1200 / 2608])
+  })
+})
+
+// 长条浮在画面里那一档（用户 2026-10-14）：那 86px 归画面 ⇒ 不参与比例的余量少一条长条宽。
+// 渲染层量 `.mirror-main` 的宽实时判（判据 `mirrorRailFloats`），翻转时报一条 `mirror:railFloat`。
+describe('长条浮起来时按新余量重设拖拽比例锁（mirror:railFloat）', () => {
+  const report = (win, flag) =>
+    env.handlers.get(CHANNELS.mirrorRailFloat)({ sender: win.webContents }, flag)
+
+  it('翻转一次重设一次；重复报同一个值不再重设（判据每帧都会调）', async () => {
+    await startMirrorSession({ serial: 'dev-rail-float', packageName: '' })
+    const win = env.windows.at(-1)
+    report(win, true)
+    report(win, true)
+    report(win, false)
+    expect(win.aspectCalls).toEqual([
+      [1200 / 2608, mirrorContentExtraSize(0, false)],
+      [1200 / 2608, mirrorContentExtraSize(0, true)],
+      [1200 / 2608, mirrorContentExtraSize(0, false)],
+    ])
+  })
+
+  /** 两件事都在余量里：边栏那一截 + 长条浮起来少掉的那一截。 */
+  it('与 dev 边栏那一截叠加', async () => {
+    await startMirrorSession({ serial: 'dev-rail-float-hud', packageName: '' })
+    const win = env.windows.at(-1)
+    report(win, true)
+    env.handlers.get(CHANNELS.mirrorWindowHud)({ sender: win.webContents }, 240)
+    expect(win.aspectCalls.at(-1)).toEqual([1200 / 2608, mirrorContentExtraSize(240, true)])
   })
 })
 
@@ -876,5 +941,154 @@ describe('Mac 键盘开关（mirror:macKeyboard）', () => {
     const stashes = env.shellCalls.filter((c) => c.startsWith('echo ')).length
     expect((await toggle(second, 'state')).state).toBe('active')
     expect(env.shellCalls.filter((c) => c.startsWith('echo ')).length).toBe(stashes)
+  })
+})
+
+/**
+ * 用户 2026-10-14 第三条：「打开两个镜像的话声音重叠了，关掉一个镜像，声音又从电脑回到了手机」。
+ *
+ * 音频在 Android 上是**设备级**的（只有一条 `AUDIO_DEVICE_OUT_REMOTE_SUBMIX`）：两条采集同时跑
+ * 拿到的是同一份混音（各播一遍 = 重叠），释放任意一条又会让 AudioPolicy 拆掉那条输出、
+ * 剩下那条从此静音（声音回到手机）。⇒ 同一台设备同时只允许**一条**采集，且它的生命周期不能
+ * 挂在某一条窗口上 —— 由该设备**最早打开的窗口**承载，关窗时交出去。
+ */
+describe('设备级音频会话的宿主选举（mirror:audioHost）', () => {
+  const audioHostSends = (win) => win.webContents.sent.filter(([c]) => c === CHANNELS.mirrorAudioHost)
+
+  it('同一台设备的第一个窗口承载音频会话，第二个不承载', async () => {
+    await startMirrorSession({ serial: 'dev-audio-basic', packageName: 'com.example.a' })
+    const first = env.windows.at(-1)
+    await startMirrorSession({ serial: 'dev-audio-basic', packageName: 'com.example.b' })
+    const second = env.windows.at(-1)
+    expect(initFrom(first).audioHost).toBe(true)
+    expect(initFrom(second).audioHost).toBe(false)
+  })
+
+  /** 不同设备各有各的那条 `REMOTE_SUBMIX`，互不影响 —— 每台都得有一个窗口承载。 */
+  it('不同设备各自承载', async () => {
+    await startMirrorSession({ serial: 'dev-audio-x', packageName: 'com.example.a' })
+    const x = env.windows.at(-1)
+    await startMirrorSession({ serial: 'dev-audio-y', packageName: 'com.example.a' })
+    const y = env.windows.at(-1)
+    expect(initFrom(x).audioHost).toBe(true)
+    expect(initFrom(y).audioHost).toBe(true)
+  })
+
+  /** 设置页那一项关掉 = 这台设备根本不该有采集（`buildAudioOnlyOptions` 那条会话压根不起）。 */
+  it('设置页关掉「声音输出」时谁都不承载', async () => {
+    await startMirrorSession({
+      serial: 'dev-audio-off',
+      packageName: 'com.example.a',
+      config: { audio: false },
+    })
+    const first = env.windows.at(-1)
+    await startMirrorSession({
+      serial: 'dev-audio-off',
+      packageName: 'com.example.b',
+      config: { audio: false },
+    })
+    const second = env.windows.at(-1)
+    expect(initFrom(first).audioHost).toBe(false)
+    expect(initFrom(second).audioHost).toBe(false)
+  })
+
+  it('承载者关掉后：等它关干净才把这一位交给幸存者，并带上当时的 audioHost', async () => {
+    const first = await startMirrorSession({ serial: 'dev-audio-hand', packageName: 'com.example.a' })
+    const firstWin = env.windows.at(-1)
+    await startMirrorSession({ serial: 'dev-audio-hand', packageName: 'com.example.b' })
+    const secondWin = env.windows.at(-1)
+    expect(initFrom(secondWin).audioHost).toBe(false)
+
+    await stopMirrorSession(first.id)
+    // ⚠️ 顺序要紧：那条窗口还在跑自己的采集，这时候接手就是两条并存（会互相破坏）。
+    expect(audioHostSends(secondWin)).toHaveLength(0)
+    firstWin.fire('closed')
+    expect(audioHostSends(secondWin)).toHaveLength(1)
+    // `mirror:initGet` 回的是**当时**的值：窗口还在加载、推送漏掉时也能补上。
+    expect(initFrom(secondWin).audioHost).toBe(true)
+  })
+
+  /**
+   * **生产里真正走的顺序**：`closed` 的处理器里调 `stopMirrorSession`（`session.js` 的
+   * `win.on("closed", () => void stopMirrorSession(session.id))`），而那一刻窗口已经销毁。
+   *
+   * ⚠️ 这条必须单独钉：`handOffAudioHost` 里 `win.once("closed", hand)` 是在 `closed` **派发途中**
+   * 挂上的，EventEmitter 对本次 emit 用的是监听器快照 ⇒ 它**永远不会为这一次触发**（只有兜底定时器
+   * 会走到，多等 1.5s）。所以真正让交接即时发生的是 `isDestroyed()` 那一条早退分支。
+   * 交接得早不要紧 —— 接手那边起采集前会问 `mirror:audioIdle`，由设备侧那条采集**真的放开**把关。
+   */
+  it('窗口已销毁（真实关窗顺序）时当场交接：不等 `closed`、不等 1.5s 兜底', async () => {
+    const first = await startMirrorSession({ serial: 'dev-audio-closed', packageName: 'com.example.a' })
+    const firstWin = env.windows.at(-1)
+    await startMirrorSession({ serial: 'dev-audio-closed', packageName: 'com.example.b' })
+    const secondWin = env.windows.at(-1)
+    expect(initFrom(secondWin).audioHost).toBe(false)
+
+    firstWin.destroyed = true // `closed` 派发途中：窗口已经没了
+    await stopMirrorSession(first.id)
+    expect(audioHostSends(secondWin)).toHaveLength(1)
+    expect(initFrom(secondWin).audioHost).toBe(true)
+  })
+
+  it('没有幸存者时安静收摊，不推给任何人', async () => {
+    const only = await startMirrorSession({ serial: 'dev-audio-last', packageName: 'com.example.a' })
+    const onlyWin = env.windows.at(-1)
+    expect(initFrom(onlyWin).audioHost).toBe(true)
+    await stopMirrorSession(only.id)
+    onlyWin.fire('closed')
+    expect(audioHostSends(onlyWin)).toHaveLength(0)
+  })
+
+  /** 三个窗口时交的是**下一个最早的**，不是「最后一个开的」—— 判据只看当前活着的集合。 */
+  it('多个幸存者时交给最早打开的那个', async () => {
+    const first = await startMirrorSession({ serial: 'dev-audio-three', packageName: 'com.example.a' })
+    const firstWin = env.windows.at(-1)
+    await startMirrorSession({ serial: 'dev-audio-three', packageName: 'com.example.b' })
+    const secondWin = env.windows.at(-1)
+    await startMirrorSession({ serial: 'dev-audio-three', packageName: 'com.example.c' })
+    const thirdWin = env.windows.at(-1)
+
+    await stopMirrorSession(first.id)
+    firstWin.fire('closed')
+    expect(audioHostSends(secondWin)).toHaveLength(1)
+    expect(audioHostSends(thirdWin)).toHaveLength(0)
+    expect(initFrom(secondWin).audioHost).toBe(true)
+    expect(initFrom(thirdWin).audioHost).toBe(false)
+  })
+})
+
+/**
+ * 起新的音频会话之前要先确认**设备侧那条采集真的拆掉了**。
+ *
+ * Android 只有一条 `AUDIO_DEVICE_OUT_REMOTE_SUBMIX`，而释放不是瞬时的 —— 真机实测
+ * （Mi 10 / 随包 5.0.1）稳定在 1.24~1.30s。这期间新采集要是已经起来了，就是
+ * 「两条并存 → 旧的被释放 → 新的那条从此静音」：实测「反序」那次新会话一直在收包（461 个），
+ * 但设备侧 `Outputs` 从 9 掉回 7、`Devices:` 不再指向 `REMOTE_SUBMIX` —— 声音回到手机、包照收。
+ */
+describe('起音频会话前等设备侧采集释放（mirror:audioIdle）', () => {
+  const idleFor = (win) => env.handlers.get(CHANNELS.mirrorAudioIdle)({ sender: win.webContents })
+
+  it('没人在采时立刻回 true，只探一次', async () => {
+    await startMirrorSession({ serial: 'dev-audio-idle', packageName: 'com.example.a' })
+    const win = env.windows.at(-1)
+    env.audioCaptureProbes.length = 0
+    expect(await idleFor(win)).toBe(true)
+    expect(env.audioCaptureProbes).toHaveLength(1)
+  })
+
+  it('还在采时轮询到放开为止', async () => {
+    await startMirrorSession({ serial: 'dev-audio-wait', packageName: 'com.example.a' })
+    const win = env.windows.at(-1)
+    env.audioCaptureProbes.length = 0
+    env.audioCaptureQueue = ['1', '1', '0']
+    expect(await idleFor(win)).toBe(true)
+    expect(env.audioCaptureProbes).toHaveLength(3)
+  })
+
+  it('读不到（设备断开 / 探测失败）当已经放开：宁可试一次，也不要永远不出声', async () => {
+    await startMirrorSession({ serial: 'dev-audio-unknown', packageName: 'com.example.a' })
+    const win = env.windows.at(-1)
+    env.audioCaptureQueue = ['']
+    expect(await idleFor(win)).toBe(true)
   })
 })

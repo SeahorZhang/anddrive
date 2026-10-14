@@ -76,6 +76,36 @@ export async function startScrcpy({ adb, serverPath, config, display, caps, devi
   return { client, display };
 }
 
+/**
+ * 建**设备级音频会话**（`audio: true` / `video: false` / `control: false`，选项见
+ * `electron/mirror/options.js` 的 `buildAudioOnlyOptions`）。
+ *
+ * 它与镜像会话是**两条独立的 scrcpy 会话**：音频在 Android 上是设备级的（只有一条
+ * `REMOTE_SUBMIX`），并发采集会互相破坏 —— 两条各播一遍就是「声音重叠」，
+ * 而释放任意一条会让剩下那条静音（「关掉一个镜像声音又回到手机」）。所以同一台设备
+ * 只跑一条音频会话，它由该设备最早的镜像窗口承载，窗口关掉时移交（见 `session.js`）。
+ *
+ * ⚠️ 用**独立的 jar 路径**（`AUDIO_SERVER_PATH`）而不是与主会话共用 `DefaultServerPath`：
+ * server 一启动就删掉自己那份 jar，两条会话推同一个路径会互相踩。两个路径下**并行**建是安全的
+ * —— 调用方应当与 `startScrcpy` 同时发起（实测并行总耗时与单条相同，见 `options.js` 那条注释）。
+ * @param {{ adb: unknown, serverPath: string }} params
+ * @returns {Promise<unknown>} Tango 的 `AdbScrcpyClient`
+ */
+export async function startAudioScrcpy({ adb, serverPath }) {
+  const { AdbScrcpyClient, AdbScrcpyOptions4_1 } = req("@yume-chan/adb-scrcpy");
+  const { ReadableStream } = req("@yume-chan/stream-extra");
+  const { createReadStream } = req("node:fs");
+  const { AUDIO_SERVER_PATH, buildAudioOnlyOptions } = await import("../../electron/mirror/options.js");
+
+  const file = ReadableStream.from(createReadStream(serverPath));
+  await AdbScrcpyClient.pushServer(adb, file, AUDIO_SERVER_PATH);
+  const options = new AdbScrcpyOptions4_1(
+    { ...buildAudioOnlyOptions(), scid: createScid() },
+    { version: SCRCPY_SERVER_VERSION },
+  );
+  return AdbScrcpyClient.start(adb, AUDIO_SERVER_PATH, options);
+}
+
 export function codecName(codec) {
   const { ScrcpyVideoCodecNameMap } = req("@yume-chan/scrcpy");
   return ScrcpyVideoCodecNameMap.get(codec) ?? "unknown";

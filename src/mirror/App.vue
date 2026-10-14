@@ -2,17 +2,17 @@
 import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { Icon } from '@iconify/vue'
 import { useMirrorInput } from './useMirrorInput.js'
-import { bootstrap, dispose as disposeSession, reclaimApp, wakeScreen, setWindowButtons, setHudExtra, getSessionInfo, setContentElement, sendControl, setScreenPower, kickSleepWatch, setMacKeyboard, watchMacKeyboardState, syncMacKeyboard, commitViaMacKeyboard, onMacKeyboardFeedback, onMacKeyboardCaret, openDesktopMode } from './direct-session.js'
+import { bootstrap, dispose as disposeSession, reclaimApp, wakeScreen, setWindowButtons, setHudExtra, setRailFloating, getSessionInfo, setContentElement, sendControl, setScreenPower, kickSleepWatch, setMacKeyboard, watchMacKeyboardState, syncMacKeyboard, commitViaMacKeyboard, onMacKeyboardFeedback, onMacKeyboardCaret, openDesktopMode } from './direct-session.js'
 import { createMacTextSink } from './macTextSink.js'
 import { caretRectToAnchor, clientToDevice, deviceToScreen, emSizePx, estimateAdvancePx, LINE_HEIGHT_RATIO } from './macTextAnchor.js'
 import { capsuleBox, capsuleRect, macTextCapsule } from './macTextCapsule.js'
 import { scaleDisplayDpi } from '../../shared/scrcpyConfig.js'
 import { aspectDiffers, createReflowGate } from './displayFollow.js'
 import { createChromeReveal, chromeZone } from './chromeReveal.js'
-import { clampRailTop } from './railDock.js'
+import { clampRailTop, railAnchorTop } from './railDock.js'
 import { FROZEN_STATES, needsRealWake, panelIsOff } from './sleepWatch.js'
 import { KEY_CODES } from '../../shared/keys.js'
-import { MIRROR_FRAME, MIRROR_RAIL, MIRROR_TITLEBAR, mirrorTitlebarNameLeft } from '../../electron/mirror/options.js'
+import { MIRROR_FRAME, MIRROR_RAIL, MIRROR_TITLEBAR, MIRROR_SCREEN_RADIUS, mirrorRailFloats, mirrorTitlebarNameLeft } from '../../electron/mirror/options.js'
 
 // 镜像窗口（渲染层直连）：adb/scrcpy 全在本进程内由 Tango 官方库建立，
 // 视频包直接写 WebCodecs 解码器、音频包直接播放，主进程不参与帧路径。
@@ -48,6 +48,11 @@ watch(showHud, (open) => setHudExtra(open ? HUD_WIDTH : 0))
  * 又把长条从**画面里面**挪到**画面外面** —— 「任何 UI 都不要在手机里出现」。
  * 挪出来意味着它**占窗口宽度**（进 `mirrorScreenInsets()` 的右边），换来的是：
  * 触发不用按坐标筛（那条本来就是它自己的格子），也不会吃掉手机画面右缘的点按。
+ *
+ * **2026-10-14 加一档**（用户：「如果手机投屏宽度足够宽，那就把手机投屏右侧的操作栏更改为全屏时
+ * 在投屏里浮动的样子」）：画面宽 ≥ `MIRROR_RAIL_FLOAT_MIN_SCREEN_WIDTH` 时换成满屏那套浮动态
+ * —— 那 86px 归画面、白胶囊浮在画面右上（判据与状态见 `railFloating`，样式见 CSS 里
+ * `.mirror-window.is-rail-float` 那一组）。窄画面（普通竖屏手机窗口）仍是上面这条「在外面」。
  */
 /**
  * 满屏那一屏（绿色按钮 zoom / 设置里的「满屏启动」）是**另一种形态**：手机要在整块屏幕正中，
@@ -74,23 +79,48 @@ const windowTitle = ref('')
  */
 const edgeToEdge = computed(() => fullscreen.value && virtualDisplay.value)
 /**
- * 长条的触发**只有一条路**：监听挂在 **window** 上，按坐标判进出。
+ * 长条的触发**只有一条路**：监听挂在 **window** 上，按坐标判进出。判据分两档：
+ *
+ * **窗口态**（长条在手机右边外面那一格）—— chrome 是一个 **L 形**（右边长条 + 上边那条），
+ * 两条臂都算触发区（用户 2026-10-12「鼠标移动到右侧和上边都要展示边框」）。进 86px（横）/ 12px（竖）
+ * 才显形，两条臂**都**越出各自 +120 才算离开，中间那一圈保持现状（迟滞，判据在 `chromeZone`）。
+ * 上臂只有 `MIRROR_TITLEBAR.revealHeight` 那一截收得到事件（顶条其余是 drag 区，drag 里 Chromium
+ * 不发指针事件），所以进线就按那一截算；出线仍多给 120px —— 鼠标停在按钮上或稍挪一点就当场收一半
+ * 再弹回，就是「一闪一闪」。
+ *
+ * **浮动态**（画面够宽、长条浮在画面里）—— 判据换成**「指针在不在画面里」**（用户 2026-10-14 第二条：
+ * 「只有鼠标移入内容区才显示出来，不要移动到右边就展示」）：浮动态没有右边那条臂了（那 86px 已经
+ * 归画面），"移到右边"在那一档根本没有对应的矩形，硬留着就是"鼠标压着画面右缘 86px 才弹"。
+ * 所以这一档按 `.mirror-main` 的矩形判（浮动态它就是画面那一格），进就 poke、出就 leave
+ * （leave 本身还延 `hideAfterMs` 才收，不用再叠一层迟滞）。
  *
  * 为什么不是「挂在长条自己那一格 + 按格子矩形判移出」（2026-10-11 之前的写法，两条都作废）：
  * - 满屏那一档长条浮在画面上，格子若吃事件就把画面右缘 86px 的点按抢走了；
  * - 格子矩形只到面板那么高（约 361px），而想摸条的人是从**任意高度**贴过来的 ⇒ 顺着边缘往下挪一点
  *   就被判「移出格子」，条当场收 —— 用户报的「移过去显示后立马消失」；
  * - 事件挂在格子上还会漏：tooltip portal 到 body，指针压到它上面时事件不经过那棵树 ⇒ 「移几次才出得来」。
- *
- * 判据带**迟滞**（`chromeZone`）：这一层 chrome 是 **L 形**（右边长条 + 顶部那条），两条臂都算触发区
- * —— 用户 2026-10-12「鼠标移动到右侧和上边都要展示边框」。进 86px（横）/ 12px（竖）才显形，
- * 两条臂**都**越出各自 +120 才算离开，中间那一圈保持现状。
- * 上臂只有 `MIRROR_TITLEBAR.revealHeight` 那一截收得到事件（顶条其余是 drag 区，drag 里 Chromium 不发指针事件），
- * 所以进线就按那一截算；出线仍多给 120px —— 鼠标停在按钮上或稍挪一点就当场收一半再弹回，就是「一闪一闪」。
+ * 浮动态这条按**坐标**判还有一条好处：tooltip 浮在画面上时坐标仍在画面里 ⇒ 不会因为它被判成"出界"。
  */
 const CHROME_ENTER = { x: MIRROR_RAIL.width, y: MIRROR_TITLEBAR.revealHeight }
 const CHROME_EXIT = { x: MIRROR_RAIL.width + 120, y: MIRROR_TITLEBAR.revealHeight + 120 }
+/** 指针在不在**画面**那一格里（浮动态的触发判据）。按矩形量，不看 DOM 归属 —— 见上面那段。 */
+function inScreenArea(event) {
+  const main = mirrorMain.value
+  if (!main) return false
+  const rect = main.getBoundingClientRect()
+  return (
+    event.clientX >= rect.left &&
+    event.clientX <= rect.right &&
+    event.clientY >= rect.top &&
+    event.clientY <= rect.bottom
+  )
+}
 function onScreenPointerMove(event) {
+  if (railFloating.value) {
+    if (inScreenArea(event)) reveal.poke()
+    else reveal.leave()
+    return
+  }
   const zone = chromeZone(event, window.innerWidth, window.innerHeight, CHROME_ENTER, CHROME_EXIT)
   if (zone === 'enter') reveal.poke()
   else if (zone === 'leave') reveal.leave()
@@ -99,15 +129,17 @@ function onScreenPointerMove(event) {
  * `relatedTarget = null` 的 `pointerout` 有**两种**来源，必须分开判：
  * ① 指针**真的离开窗口**（手一快就从右边滑出去了，之后不会再有任何 `pointermove` ⇒ 这里不补一次收线，
  *    条就永远挂着）；
- * ② 指针**踏进顶部那条 drag 区**（`-webkit-app-region: drag` 那一片 Chromium 根本不往 DOM 发事件，
- *    进来这一下只发一条 pointerout，坐标就是新位置）。
- * 按 y 分得开 —— **drag 区只有顶部那一条**（触发带 `revealHeight` 之外的 16px）：
- * 落在顶条里就当他"还在 chrome 上"（poke，否则鼠标停在标题栏上 1 秒后条自己收了），
- * 其余位置照旧走 `leave`（延 1 秒收）。
+ * ② 指针**踏进 `-webkit-app-region: drag` 那一片**（Chromium 根本不往 DOM 发事件，进来这一下只发一条
+ *    pointerout，坐标就是新位置）。
+ * 按坐标分得开 —— drag 区在**两档形态里都是窗口顶边整条**（窗口态 = 标题栏那条，
+ * 浮动态 = `MIRROR_TITLEBAR.floatDragHeight` 那条看不见的条）：落进去就当他"还在 chrome 上"
+ * （poke，否则鼠标停在拖窗区上 1 秒后条自己收了），其余位置照旧走 `leave`（延 1 秒收）。
  */
 function onScreenPointerOut(event) {
   if (event.relatedTarget) return
-  if (event.clientY <= MIRROR_TITLEBAR.height) {
+  const dragHeight = railFloating.value ? MIRROR_TITLEBAR.floatDragHeight : MIRROR_TITLEBAR.height
+  const dragZone = event.clientY <= dragHeight
+  if (dragZone) {
     reveal.poke()
     return
   }
@@ -122,12 +154,26 @@ const railShown = ref(false)
  * —— 那个口子连着 `shared/scrcpyConfig.js` 与设置界面，用户没要，先不动。
  */
 const railPinned = ref(false)
+/**
+ * 三颗彩虹键什么时候放出来 —— **两档形态两套规矩**（系统画的，CSS 盖不住，只能请主进程开关）：
+ * - **窗口态**（长条在手机右边外面那一格）：跟着那层 chrome 一起出/收 —— 窗口本体透明，
+ *   平时不藏它们就浮在桌面上，「就是个手机样子」当场破功。
+ * - **浮动态**（画面够宽）：**常驻**。落点是 `mirrorTrafficLightPosition(true)`（让开画面圆角，
+ *   用户 2026-10-14 第四条「超出屏幕了」），而浮动态窗口顶就是画面顶（标题栏整条不存在）
+ *   ⇒ 三颗落在**画面左上角**里侧（用户 2026-10-14 第二条：「mac 的 3 个按键放进投屏中」）。
+ *   这一档窗口里只剩画面，没有"浮在桌面上"那回事。
+ * - **满屏那两屏一概不碰**：那三颗归系统收放（顶边才浮出），我们插手只会打架。
+ *
+ * ⚠️ 每次都要把**当时的形态**一起报给主进程（落点分两档）；形态翻转那一拍也走这里重设一次。
+ */
+function syncWindowButtons() {
+  if (fullscreen.value) return
+  setWindowButtons(railFloating.value || railShown.value, railFloating.value)
+}
 const reveal = createChromeReveal({
   onShow: (shown) => {
     railShown.value = shown
-    // 三颗彩虹键跟着这层 chrome 一起出/收（窗口本体透明，平时不藏就会浮在桌面上，
-    // 「就是个手机样子」当场破功）。⚠️ 满屏那一屏不碰：那三颗归系统收放（顶边才浮出）。
-    if (!fullscreen.value) setWindowButtons(shown)
+    syncWindowButtons()
     if (shown) {
       // 他把鼠标移进来就是要看那颗「关屏 / 恢复亮屏」，此刻读一次真状态最划算（顺带快轮询一阵）。
       kickSleepWatch()
@@ -143,12 +189,16 @@ const reveal = createChromeReveal({
  * `matches(':hover')` 是这里唯一能同步问到"指针在不在这个元素上"的办法。
  */
 /**
- * 长条的**纵向落点**（可拖，用户 10-11：「加个可以拖拽功能」）。0 = 现在的位置（贴窗口顶）。
+ * 长条的**纵向落点**（可拖，用户 10-11：「加个可以拖拽功能」）。
  *
- * 只给纵向，横向永远钉在窗口右边缘那一格：窗口态那格在**画面外面**（10-10 定稿「任何 UI 都不
- * 要在手机里出现」），满屏态拖横向就等于把条摆到手机画面中间盖住内容。
+ * 只给纵向，横向永远钉在窗口右边缘那一格：窄画面那档它在**画面外面**（10-10 定稿「任何 UI 都不
+ * 要在手机里出现」），浮起来那一档与满屏态则浮在画面右上；允许横向拖就等于把条摆到画面中间盖内容。
  * 位移用 `translate` 表达 —— 它不吃布局，画面那块矩形一寸不动，不会白发一条 `resizeDisplay`
  * 让手机重排（判据与夹取见 `railDock.js`）。
+ *
+ * **初值分两档**：窗口态贴顶（0）—— 那一档面板与手机同高、整格占满，压根没有可落区间；
+ * **浮动态是上下居中**（用户 2026-10-14 第二条：「右侧悬浮操作栏上下居中」）⇒ 由 `railAnchorTop`
+ * 在"进浮动态"与"窗口改大小"两拍写进来，之后用户照样能拖。
  */
 const railTop = ref(0)
 const railPanel = ref(null)
@@ -175,10 +225,20 @@ function onRailHandleMove(event) {
 function onRailHandleUp(event) {
   if (railDrag && event.pointerId === railDrag.pointerId) railDrag = null
 }
-/** 窗口改大小 / 进全屏后面板可能比窗口还高：把落点重新夹回可落区间，别把条丢到抓不回来的地方。 */
-function clampRailTopToViewport() {
+/**
+ * 窗口改大小 / 进全屏后重排面板落点。两件事：
+ * ① 面板可能比窗口还高 ⇒ 夹回可落区间，别把条丢到抓不回来的地方；
+ * ② **浮动态的锚点就是"上下居中"**（`railAnchorTop`）—— 窗口一变中线就变，得跟着重锚。
+ *    ⚠️ 代价说清：用户拖出来的位移在这一拍作废。这是"上下居中"这条要求的直接结果（它是**锚点**
+ *    不是约束，只在进浮动态与改窗口大小这两拍写），换来的是浮动态永远居中、拖拽只在窗口尺寸不变时生效。
+ */
+function syncRailDock() {
   const panel = railPanel.value
-  if (panel) railTop.value = clampRailTop(railTop.value, panel.offsetHeight, window.innerHeight)
+  if (!panel) return
+  const height = panel.offsetHeight
+  railTop.value = railFloating.value
+    ? railAnchorTop(height, window.innerHeight)
+    : clampRailTop(railTop.value, height, window.innerHeight)
 }
 
 const railSlot = ref(null)
@@ -186,8 +246,50 @@ function toggleRailPinned() {
   const next = !railPinned.value
   railPinned.value = next
   reveal.setPinned(next)
-  if (!next && !railSlot.value?.matches?.(':hover')) reveal.leave()
+  // ⚠️ 「指针在不在条上」要问**面板**：长条浮在画面里时格子与面板都是 `pointer-events: none`
+  // （否则画面右缘那 86px 的点按全被它吃掉，见 CSS 那一组），问格子会回 false ⇒ 刚取消常驻就排一个
+  // 收回计时，鼠标明明还压在条上却被收走。
+  // 面板自己不吃事件、**里面的按键吃**（`pointer-events: auto`）⇒ `:hover` 会顺着命中目标往上传到面板，
+  // `matches(':hover')` 照样为真（点这颗按钮时指针必然在某颗按钮上）。
+  const hovered = railPanel.value?.matches?.(':hover') || railSlot.value?.matches?.(':hover')
+  if (!next && !hovered) reveal.leave()
 }
+
+/**
+ * 右侧那条操作栏现在是不是**浮在画面里**（用户 2026-10-14：「如果手机投屏宽度足够宽，那就把手机
+ * 投屏右侧的操作栏更改为全屏时在投屏里浮动的样子」）。
+ *
+ * 判据只有一处（`options.js` 的 `mirrorRailFloats`），主进程建窗口时用的也是它。量的是
+ * **`.mirror-main` 那一格的宽**（`flex: 1`，不含 dev 边栏）—— 别量画面本身：长条一浮起来画面自己
+ * 就宽 86px，判据会被自己的结果推着走（拖窗口到临界点时来回跳）。`previous` 传当前结论，
+ * 两条线之间的那一圈是**迟滞**（见那个函数）。
+ *
+ * 变了要**报给主进程**：形态决定窗口右边那一截不参与拖拽比例的余量（差一条长条宽）。
+ */
+const railFloating = ref(false)
+const mirrorMain = ref(null)
+let mainResize = null
+function syncRailFloating() {
+  const main = mirrorMain.value
+  if (!main) return
+  const next = mirrorRailFloats(main.clientWidth, railFloating.value)
+  if (next === railFloating.value) return
+  railFloating.value = next
+  setRailFloating(next)
+}
+/**
+ * 形态翻转要一起改的两件事，都排在 **DOM 更新之后**（`flush: 'post'`）——
+ * 这两件都要读换完类之后的真实布局，早一拍读到的是旧形态：
+ * - **纵向落点**：浮动态锚点是「上下居中」（`railAnchorTop`），退回「在外面」那一档没有可落区间
+ *   （面板与手机同高，`clampRailTop` 只会回 0），带着位移回去会挂在手机旁边/挂到窗口外。
+ *   ⚠️ 必须 `post`：面板在窗口态是**撑满整格**的（`offsetHeight` = 窗口高），拿它算居中会算出 0。
+ * - **三颗彩虹键**：浮动态常驻、窗口态跟着 chrome 显隐（判据在 `syncWindowButtons`）。
+ */
+watch(railFloating, (floating) => {
+  const panel = railPanel.value
+  railTop.value = floating ? railAnchorTop(panel?.offsetHeight ?? 0, window.innerHeight) : 0
+  syncWindowButtons()
+}, { flush: 'post' })
 /** 长条上的三个导航键：`kind:'key'` 走已经在的控制 socket（Tango `injectKeyCode`），不起 adb 进程。 */
 const RAIL_KEYS = [
   { name: 'back', label: '返回', hint: '返回上一屏', icon: 'lucide:arrow-left', keyCode: KEY_CODES.back },
@@ -295,12 +397,17 @@ const screenRatioN = ref(1)
 /** CSS 变量：黑框厚度与长条那两档数只有一个出处（`options.js`）。 */
 const windowStyle = computed(() => ({
   '--bezel': `${MIRROR_FRAME.bezel}px`,
+  /* 画面那块矩形的圆角半径：**出处是 `options.js`**（浮动态三颗的落点由它推出来，见
+     `mirrorTrafficLightPosition`）。CSS 里不再写死这个数。 */
+  '--radius': `${MIRROR_SCREEN_RADIUS}px`,
   '--rail-w': `${MIRROR_RAIL.width}px`,
   '--rail-fade-in': `${MIRROR_RAIL.fadeInMs}ms`,
   '--rail-fade-out': `${MIRROR_RAIL.fadeOutMs}ms`,
   '--titlebar-height': `${MIRROR_TITLEBAR.height}px`,
   '--titlebar-reveal-height': `${MIRROR_TITLEBAR.revealHeight}px`,
   '--titlebar-name-x': `${mirrorTitlebarNameLeft()}px`,
+  /* 浮动态没有标题栏 ⇒ 拖窗区改成窗口顶边**整条**看不见的条（见模板里 `.mirror-float-drag`）。 */
+  '--float-drag-height': `${MIRROR_TITLEBAR.floatDragHeight}px`,
   '--screen-ratio': screenRatio.value,
   '--screen-ratio-n': String(screenRatioN.value),
   '--rail-top': `${railTop.value}px`,
@@ -1041,8 +1148,9 @@ async function booted() {
       },
       onFullscreen: (value) => {
         fullscreen.value = value
-        // 进满屏：长条常驻 ⇒ 三颗一起放出来（落点由 `resize` 按新窗口宽重贴）。
-        // 出满屏：交回 hover 那套，此刻长条没收就顺手藏掉。
+        // 满屏那两屏三颗归系统收放（`syncWindowButtons` 在那一档直接返回）；**出满屏要补一次对账**
+        // —— 系统把三颗收走之后，得按"回到哪一档"重新决定放不放（浮动态常驻、窗口态跟着 chrome 走）。
+        syncWindowButtons()
       },
       onSleepChange: (_asleep, state) => {
         // 存原始读数：横幅与那颗图标都从它派生，页面自己不另记状态。
@@ -1084,13 +1192,17 @@ onMounted(() => {
     syncMacTextAnchor()
   })
   if (canvasHost.value) hostResize.observe(canvasHost.value)
+  // 长条浮没浮（画面够宽就换成浮在画面里那套）：量的是**画面区那一格**（`.mirror-main`）——
+  // 它不随长条摆在哪而变，所以这条判据不会被自己的结果推着走（量画面本身就会，见 `syncRailFloating`）。
+  mainResize = new ResizeObserver(() => syncRailFloating())
+  if (mirrorMain.value) mainResize.observe(mirrorMain.value)
   // 退格只走按键那条路（`kind:'key'`），收字字段的 `input` 事件里 `data` 是 null，翻不成文本 ——
   // 所以光标账要在这里跟着记，不然退几个字之后候选窗就停在原地了。
   window.addEventListener('keydown', onMacTextKeyDown)
   // 满屏那一档的长条触发（挂在 window 上，理由见 `onScreenPointerMove`）。
   window.addEventListener('pointermove', onScreenPointerMove, { passive: true })
   window.addEventListener('pointerout', onScreenPointerOut, { passive: true })
-  window.addEventListener('resize', clampRailTopToViewport)
+  window.addEventListener('resize', syncRailDock)
   // 设备侧报来的**手机光标矩形**（Slice 4c）：有它候选窗就贴真实光标，没有才退回上面那套估计。
   disposeMacCaret = onMacKeyboardCaret((rect) => {
     macTextDeviceCaret.value = rect
@@ -1104,10 +1216,11 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (statsTimer) clearInterval(statsTimer)
   hostResize?.disconnect()
+  mainResize?.disconnect()
   window.removeEventListener('keydown', onMacTextKeyDown)
   window.removeEventListener('pointermove', onScreenPointerMove)
   window.removeEventListener('pointerout', onScreenPointerOut)
-  window.removeEventListener('resize', clampRailTopToViewport)
+  window.removeEventListener('resize', syncRailDock)
   disposeMacCaret?.()
   disposeSizeChanged?.()
   disposeRendererType?.()
@@ -1123,7 +1236,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="h-full mirror-window text-white" :class="{ 'is-fullscreen': fullscreen, 'is-edge-to-edge': edgeToEdge, 'is-chrome': railShown }"
+  <div class="h-full mirror-window text-white" :class="{ 'is-fullscreen': fullscreen, 'is-edge-to-edge': edgeToEdge, 'is-chrome': railShown, 'is-rail-float': railFloating }"
     :style="windowStyle">
     <!-- 画面区：dev 时右侧让出一条 HUD 边栏（`aside` 与它左右排），画面上的覆盖层（遮罩/接回/提示/
          长条）都只盖画面那一块，这样调试信息永远不被盖住，也不会压在镜像画面上。 -->
@@ -1143,7 +1256,16 @@ onBeforeUnmount(() => {
         <span class="mirror-titlebar__name">{{ title }}</span>
         <div class="mirror-titlebar__reveal" aria-hidden="true"></div>
       </div>
-      <div class="mirror-main">
+      <div class="mirror-main" ref="mirrorMain">
+      <!-- 浮动态（画面够宽、长条浮在画面里）**整条标题栏不存在** ⇒ 窗口拖窗区改成**顶边整条**
+           看不见的条（高 `MIRROR_TITLEBAR.floatDragHeight`）。
+           ⚠️ 第一版是左上角 80×28 的小方块（宽 = 三颗 + 名称原本占的那一截），被用户当场打回
+           （「app 投屏后不能拖拽了」）：那块地方本来就盖着三颗彩虹键，而三颗是 AppKit 画在网页内容
+           **之上**的 ⇒ 方块中间一大块根本抓不到。现在整条铺开、三颗的落点下移到 `floatLightY`
+           （= 这条的下沿）让开它。
+           ⚠️ `-webkit-app-region: drag` 那一片 Chromium 一个指针事件都不发 ⇒ 它只负责拖窗口，
+           别指望它收 hover（浮动态的触发判据在 `onScreenPointerMove`）。 -->
+      <div v-if="railFloating && !fullscreen" class="mirror-float-drag" aria-hidden="true"></div>
       <!-- 画面：位置与尺寸固定（= 窗口减掉那圈黑框与右边那条长条，两边同一个出处 `mirrorScreenInsets()`）。 -->
       <div class="mirror-frame" @pointerdown="focusMacText()">
         <!-- 屏内各层在同一格里叠，压在画面上的是后面的兄弟节点；`attachCanvas()` 会清空
@@ -1391,9 +1513,9 @@ onBeforeUnmount(() => {
 .mirror-window {
   display: flex;
   align-items: stretch;
-  /* 手机那块的两圈圆角：`--radius` 是屏自己那圈，`--frame-radius` 是黑框**外沿**那圈（多一圈边框厚度，
-     两层才同心）。放在根上是因为窗口态补那三块楔形要用同一个数（见下面 `.mirror-main` 那组）。 */
-  --radius: 40px;
+  /* 手机那块的两圈圆角：`--radius` 是屏自己那圈（**值来自 `windowStyle`，出处 `options.js` 的
+     `MIRROR_SCREEN_RADIUS`** —— 浮动态三颗的落点由它推出来），`--frame-radius` 是黑框**外沿**那圈
+     （多一圈边框厚度，两层才同心）。放在根上是因为窗口态补那三块楔形要用同一个数（见下面 `.mirror-main` 那组）。 */
   --frame-radius: calc(var(--radius) + var(--bezel));
 }
 
@@ -1550,6 +1672,8 @@ onBeforeUnmount(() => {
 /* 长条的**格子**：手机右边外面那 86px，永远占着布局（画面那块矩形才不因显隐而动）。
    窗口态它**自己就是那条 chrome 的右臂**（用户 2026-10-12「右侧操作栏和边框写在一起，不要分成 2 个叠在一起」）
    ⇒ 面板不再画成浮在上面的白胶囊，键直接落在这格上。
+   ⚠️ 画面够宽那一档（`.is-rail-float`）这格**不再占位**、改成浮在画面上 —— 那 86px 归画面，
+   由主进程按同一档内缩算窗口尺寸，见下面那一组。
    ⚠️ 底色**不在这里画**（10-13 第四稿）：那层浅灰现在整块归 `.mirror-chrome`（一个 div 画完上臂 + 右臂
    + 手机三个圆角外侧那三块），这里只管占位与收 poke。
    poke 挂在这一格上（见模板）—— 面板收起时它是命中层，显形时面板盖住它、move 冒泡上来还是它接住，
@@ -1648,6 +1772,104 @@ onBeforeUnmount(() => {
   margin-right: 0;
   background: transparent;
   box-shadow: none;
+}
+
+/* ── 画面够宽时的窗口态：长条**浮在画面里**（用户 2026-10-14）────────────────────────────
+   「如果手机投屏宽度足够宽，那就把手机投屏右侧的操作栏更改为全屏时在投屏里浮动的样子」，
+   第二条把这一档的窗口形状也定死了：「上边头部就去掉，mac 的 3 个按键放进投屏中，标题去掉。
+   右侧悬浮操作栏上下居中，且只有鼠标移入内容区才显示出来，不要移动到右边就展示」。
+
+   判据在 `options.js` 的 `mirrorRailFloats`（画面宽 ≥ 640，带迟滞），类由 `App.vue` 的
+   `railFloating` 实时绑 —— 窗口拖宽/拖窄跨过阈值就换形态，主进程会跟着重设拖拽比例锁。
+
+   换形态意味着**两条 chrome 都不再占位**：右边那一格 86px 与上边那条标题栏 28px 一起归画面
+   （画面铺满 `.mirror-main`），窗口里只剩「手机」：黑框 + 画面 + 三颗彩虹键（落在画面左上角）。
+   长条改成像桌面模式全屏那样浮在画面**右侧、上下居中**（白胶囊 + 指针进画面才出 + 可上下拖）。
+   ⚠️ 那两截的去向由**主进程**定（`mirrorScreenInsets(true)` 一起进 `mirrorWindowBounds` 与比例锁）——
+   这里只负责把 DOM 排成同一个形状，绝不自己动画面尺寸；否则「画面 = 设备比例」这条等式两边各算一套。
+
+   ⚠️ 全部带 `:not(.is-fullscreen)`：满屏那两档有自己的排法（真全屏是两格、桌面模式是纯画面），
+   而 `railFloating` 在满屏时也可能为真（量的是满屏那一格）。 */
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-main {
+  /* 单格：画面与长条同格叠放（画面铺满，长条浮在上面）。 */
+  display: grid;
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+}
+
+/* 整条标题栏不存在（用户 2026-10-14：「上边头部就去掉……标题去掉」）：名称没了、触发带也没了
+   （这一档的触发判据换成"指针在画面里"，见 `onScreenPointerMove`），拖窗改由左上角那一小块接。
+   ⚠️ 必须与主进程的 `mirrorScreenInsets(true)`（上边只剩黑框）**同时**改 —— 只藏 DOM 不改内缩，
+   画面会比主进程算的矮 28px，圆角里当场露出 letterbox 黑条。 */
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-titlebar {
+  display: none;
+}
+
+/* 浮动态窗口顶边那条**看不见的拖窗区**（见模板里的注释）。`position: absolute` + DOM 排在画面之后
+   ⇒ 压在画面（`.mirror-screen` 是定位元素）上面；`z-index: 2` 只是把这条说死，不靠 DOM 顺序。
+   **整窗宽**（不是左上角一小块）+ 只有 `floatDragHeight` 那么高：用户 2026-10-14 第四条定的形状
+   （「像标题栏一样抓顶边就能拖」）。代价是画面顶部这 24px 收不到触控。 */
+.mirror-float-drag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: var(--float-drag-height);
+  z-index: 2;
+  -webkit-app-region: drag;
+}
+
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-main>* {
+  grid-area: 1 / 1;
+}
+
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-frame {
+  /* 画面铺满那一格：右沿就是窗口右沿（只剩黑框），右边不再留长条那一格。
+     黑框与圆角照旧（与满屏那两档不同 —— 这里仍是「就是个手机样子」那个窗口态）。 */
+  width: 100%;
+  height: 100%;
+  justify-self: stretch;
+  align-self: stretch;
+}
+
+/* 浮在画面上那一格：① 不吃点按（否则画面右缘 86px 的触控全没了），只有显形的面板接；
+   ② **必须自己也是定位元素**才画得到画面上面 —— `.mirror-screen` 带 `position: relative`，
+   定位元素在同一个层叠上下文里排在静态兄弟**之后** ⇒ 长条作为静态兄弟会被画面整个盖住
+   （DOM 查出来 `opacity:1`、矩形也对，屏幕上却什么都没有，10-11 截图实锤过）。
+   给它 `position: relative` 后两个都是 `z-index: auto` 的定位元素 ⇒ 按 DOM 顺序，后面的长条压在画面上。 */
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail {
+  position: relative;
+  justify-self: end;
+  align-self: start;
+  pointer-events: none;
+}
+
+/* 浮起来就是**满屏那套白胶囊**（面板自己是一件，不跟涂装走）：把上面那条「窗口态面板铺满整格、
+   底色交给 `.mirror-chrome`」整条撤掉。⚠️ 特异度 4 个选择器 > 那条的 3 个，改外观不会被它压回去。 */
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__panel {
+  width: calc(var(--rail-w) - 2 * var(--rail-side-gap));
+  margin: 0 var(--rail-side-gap) 0 0;
+  background: #fbfbfb;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 12%);
+}
+
+/* 浮起来之后面板不再与手机同高 ⇒ 纵向有可落区间，把手才不是个假开关（与桌面模式全屏同一条）。 */
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__handle {
+  display: block;
+}
+
+/* 浮动态面板**自己不吃点按**（用户 2026-10-14：「只有鼠标移入内容区才显示出来」）：它的显隐判据就是
+   "指针在画面里" ⇒ 人在画面里的时候它几乎总是显形的，整块面板吃事件就等于把画面右缘那 74px 的触控
+   永久拿走 —— 那不是"浮动的操作栏"，是"挡住内容的板子"。所以只有真正能点的东西吃事件：
+   按键 / 把手 / dev 那一格；面板底色与按键之间的空隙一律穿透给画面。
+   ⚠️ 特异度 4 个选择器 > `.mirror-rail__panel.is-shown`（2 个）⇒ 不会把显隐那条压回去。 */
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__panel {
+  pointer-events: none;
+}
+
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__key,
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__handle,
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__dev {
+  pointer-events: auto;
 }
 
 
@@ -1903,8 +2125,11 @@ onBeforeUnmount(() => {
   );
 }
 
-/* 两档全屏没有这层涂装（满屏那屏铺的是亮底、桌面模式那屏是纯画面），照旧由 `:not(.is-fullscreen)` 挡住。 */
-.mirror-window.is-chrome:not(.is-fullscreen) .mirror-chrome {
+/* 两档全屏没有这层涂装（满屏那屏铺的是亮底、桌面模式那屏是纯画面），照旧由 `:not(.is-fullscreen)` 挡住。
+   ⚠️ **浮动态也没有**（用户 2026-10-14 第二条把这一档的窗口定成"只剩手机"）：那层灰画的是**两条臂**
+   （上边标题栏 + 右边长条）与手机三个圆角外侧的楔形，浮动态两条臂都没了、画面铺满整格 ⇒ 只剩三块
+   孤零零的灰楔形贴在角上，看着像脏点。这一档窗口里除了手机不该有别的东西。 */
+.mirror-window.is-chrome:not(.is-fullscreen):not(.is-rail-float) .mirror-chrome {
   opacity: 1;
   transition: opacity var(--rail-fade-in) ease-out;
 }

@@ -74,6 +74,23 @@ export const CHANNELS = {
   /** 镜像窗口 → 主进程：淡入/收起边框时一起开关红绿灯（透明窗口里浮着的圆点会破坏「就是个手机」的样子）。 */
   /** 镜像窗口 → 主进程：dev 调试边栏要占多少宽（0 = 收起）。主进程把窗口撑宽同样的量，画面那块才不被挤小。 */
   mirrorWindowHud: 'mirror:windowHud',
+  /**
+   * 镜像窗口 → 主进程：右侧那条操作栏现在**浮在画面里没有**（画面够宽时它不再占窗口右边那一格）。
+   * 形态一变，不参与比例的余量就差一条长条宽 ⇒ 主进程要按新余量重设一次拖拽比例锁。
+   */
+  mirrorRailFloat: 'mirror:railFloat',
+  /**
+   * 主进程 → 镜像窗口：**这台设备的音频会话改由你承载**（原来那条窗口关掉了）。
+   * 音频是设备级的（只有一条 `REMOTE_SUBMIX`），同一台设备同时只能有一条采集 ⇒
+   * 「谁带音频」由主进程按「该设备最早的窗口」选举，窗口关掉时把这一位交出去。
+   */
+  mirrorAudioHost: 'mirror:audioHost',
+  /**
+   * 镜像窗口 → 主进程：**现在设备侧那条 `REMOTE_SUBMIX` 采集放开了吗**（起新的音频会话前问一句）。
+   * Android 只有一条采集、且释放要 ~1.3s，不等它拆干净就起来会让新那条从此静音 ——
+   * 实测读数与机制见 `electron/mirror/session.js` 的 `waitAudioCaptureReleased`。
+   */
+  mirrorAudioIdle: 'mirror:audioIdle',
   /** 镜像窗口 → 主进程：长条那颗「使用 Mac 键盘」。`on` 抢过设备输入法、`off` 还原、`state` 只问当前归属。 */
   mirrorMacKeyboard: 'mirror:macKeyboard',
   /** 主进程 → 镜像窗口：Mac 键盘的输入法归属 `{ state, token, socket }`（state: `active` / `switched_away` / `unavailable` / `parked` / `off`）。 */

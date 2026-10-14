@@ -23,12 +23,14 @@ import {
 import { sanitizeIcon } from "../iconImage.js";
 import { isValidPackageName, isValidSerial } from "../validators.js";
 import { findAppSession } from "./appSession.js";
+import { pickAudioHost } from "./audioHost.js";
 import { startKeepAwake } from "./keepAwake.js";
 import { BRIDGE_SOCKET, createMacKeyboard, SETTING_DEFAULT_IME } from "./macKeyboard.js";
 import { startMiProjection } from "./miProjection.js";
 import {
   mirrorAspectRatio,
   mirrorContentExtraSize,
+  mirrorRailFloats,
   mirrorTrafficLightPosition,
   mirrorScreenInsets,
   mirrorWindowBounds,
@@ -61,6 +63,8 @@ let sessionSeq = 0;
  * @property {number | null} codec
  * @property {string | null} codecName
  * @property {boolean} hasAudio
+ * @property {boolean} audioEnabled 设置页那一项「声音输出」开着没有（关掉时这台设备谁都不承载音频）
+ * @property {boolean} audioHost 本窗口是不是这台设备**唯一那条音频会话**的承载者（见 `audioHost.js`）
  * @property {import("electron").BrowserWindow | null} win
  * @property {Record<string, unknown> | null} pendingInit
  * @property {(() => Promise<void>) | null} miProjectionRestore
@@ -84,7 +88,14 @@ function preloadPath() {
  */
 const aspectRatios = new WeakMap();
 
-function createMirrorWindow(session, prefs, bounds, ratio) {
+/**
+ * 每扇镜像窗口右侧那条操作栏现在**浮在画面里没有**（用户 2026-10-14）。
+ * 建窗口时按 `mirrorRailFloats` 定一次，之后由渲染层实时上报（`mirror:railFloat`）——
+ * 形态决定右边那一截余量（浮起来少一条长条宽），所以每次翻转都要重设一次比例锁。
+ */
+const railFloatingStates = new WeakMap();
+
+function createMirrorWindow(session, prefs, bounds, ratio, railFloating) {
   const win = new BrowserWindow({
     // 标题栏文字（渲染层那份从 `pendingInit` 组，两边同一个式子）。
     title: session.windowTitle || session.label || session.packageName,
@@ -99,7 +110,11 @@ function createMirrorWindow(session, prefs, bounds, ratio) {
     // app 名称」；10-11 那条「恢复默认，不要有任何修改」到此为止）。落点与窗口宽无关 ⇒ `resize` 里
     // 什么都不用做（10-10 把它们贴进右侧长条时，落点 = 窗口宽 − 长条宽 + 内缩，每次改大小都得重算，
     // 漏一次就留在旧位置 —— 那条坑这次从根上没有了）。**显隐照样不碰**：常驻，不跟长条 hover 走。
-    trafficLightPosition: mirrorTrafficLightPosition(),
+    // 三颗彩虹键的落点**分两档形态**（用户 2026-10-14 第四条）：窗口态钉在顶部标题栏里垂直居中；
+    // 长条浮起来那一档标题栏整条不存在、窗口顶就是画面顶 ⇒ 落点要让开画面的圆角（见 `options.js`
+    // 的 `floatLightX/Y`）。两档都与窗口宽无关 ⇒ `resize` 里什么都不用做；**翻转形态时要重设一次**
+    // （`mirror:windowButtons` 那条）。**显隐照样不碰**：窗口态跟 chrome 显隐、浮动态常驻。
+    trafficLightPosition: mirrorTrafficLightPosition(railFloating),
     // **本体仍然透明**（2026-10-09 定稿，10-12 一度照竞品改成不透明浅灰窗，当天被否：
     // 「竞品是鼠标移到边框上才那个样子，没移上去就是个手机样子」）⇒ 那层灰底是**涂装**，
     // 由渲染层跟着长条的 hover 显隐（`.mirror-window.is-chrome`），窗口本体一个字节不改。
@@ -132,8 +147,10 @@ function createMirrorWindow(session, prefs, bounds, ratio) {
   // 见上面 `ratio` 那条：采主屏那档按手机比例锁，桌面模式那档给 0 = 不锁（可自定义拖宽高）。
   // 锁用的是上游 `setAspectRatio`（= AppKit 的 `contentAspectRatio`，拖哪条边都系统自己锁），
   // 锁的是**画面那块矩形**：窗口比它多出的黑框与右边长条走 `extraSize` 那参数。
+  // 长条浮在画面里时右边那一截不算余量（那 86px 已经归画面了），余量随形态走，见 `railFloatingStates`。
   aspectRatios.set(win, ratio);
-  if (ratio) win.setAspectRatio?.(ratio, mirrorContentExtraSize());
+  railFloatingStates.set(win, railFloating === true);
+  if (ratio) win.setAspectRatio?.(ratio, mirrorContentExtraSize(0, railFloating));
   win.once("ready-to-show", () => {
     win.show();
     // 「全屏启动」在 show 之后落地（构造参数那条路在 macOS 上不可靠，见上面 `fullscreenable` 的注释）。
@@ -169,6 +186,129 @@ function snapshot(session) {
     codecName: session.codecName ?? "unknown",
     hasAudio: session.hasAudio ?? false,
   };
+}
+
+/**
+ * 这台设备**当前**该由哪个窗口承载那条唯一的音频会话（没有候选就返回 null）。
+ *
+ * 候选 = 同一台设备、设置页开着「声音输出」、且还活着的会话。选举规则见 `audioHost.js`：
+ * 固定挑**最早打开**的那一个 —— 判据只看当前活着的集合，主进程与渲染层算的是同一件事。
+ * @param {string} serial
+ */
+function audioHostFor(serial) {
+  return pickAudioHost(
+    [...sessions.values()]
+      .filter((item) => item.serial === serial && item.audioEnabled === true)
+      .map((item) => ({ id: item.id, startedAt: item.startedAt })),
+  );
+}
+
+/**
+ * 通知某个窗口「这台设备的音频会话改由你承载」。
+ *
+ * ⚠️ **顺序要紧**：调用方必须在原来那条窗口 `closed` **之后**才发这一条（见 `stopMirrorSession`）
+ * —— Android 上并发采集是互相破坏的，接手那条要是抢在原采集释放之前起来，两边都会哑。
+ * 渲染层那条监听在模块求值时就注册好了（早于 `bootstrap`），页面还在加载时漏掉的这一条也有兜底：
+ * `mirror:initGet` 返回的是**当时**的 `audioHost`（`startMirrorSession` 已把位改过），不是建窗时那份。
+ */
+function notifyAudioHost(session) {
+  const wc = session.win?.webContents;
+  if (!wc || wc.isDestroyed?.() === true) return;
+  if (wc.isLoading?.() === true) {
+    wc.once("did-finish-load", () => {
+      if (wc.isDestroyed?.() !== true) wc.send(CHANNELS.mirrorAudioHost);
+    });
+    return;
+  }
+  wc.send(CHANNELS.mirrorAudioHost);
+}
+
+/**
+ * 承载音频的那个窗口关掉了：把这一位交给这台设备下一个幸存者；没有就什么都不做（自然收摊）。
+ *
+ * 为什么不在 `stopMirrorSession` 里直接发：那条窗口此刻还在跑自己的音频会话，
+ * 接手那条一开就是**两条采集并存**（Android 上会互相破坏，见 `options.js` 那条实测）。
+ *
+ * 两条路都要覆盖，而**生产走的是第一条**：
+ * - **关窗**（用户点红点 / ⌘W）：`closed` 的处理器里调 `stopMirrorSession`（见 `createMirrorWindow`
+ *   里那行 `win.on("closed", …)`），那一刻窗口已经销毁 ⇒ 上面 `isDestroyed()` 那条早退**当场交接**。
+ *   ⚠️ **这条路上不能再等 `closed`**：我们正处在 `closed` 的派发途中，EventEmitter 对本次 emit
+ *   用的是监听器快照，`win.once("closed", hand)` 对这一次**永远不会触发**（去掉那条早退，
+ *   交接就只剩 1.5s 兜底定时器 —— `tests/electron/mirrorSession.test.js` 有一条钉着它）。
+ *   交得早不要紧：接手那边起采集前会问 `mirror:audioIdle`，由设备侧那条采集**真的放开**把关。
+ * - **窗口还活着**（断开设备 / 菜单退出 / `mirrorStop`）：这时才需要真的等 `closed`，
+ *   否则两条采集会并存；窗口卡住关不掉时兜一条定时器，别把音频永远吊着。
+ * @param {MirrorSession} gone
+ */
+function handOffAudioHost(gone) {
+  const serial = gone.serial;
+  let handed = false;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let fallback = null;
+  const hand = () => {
+    if (handed) return;
+    handed = true;
+    if (fallback) clearTimeout(fallback);
+    // ⚠️ 在这里现算，不用关窗那一刻的结果：这中间可能已经有新窗口开出来了，
+    // 而它按 `startMirrorSession` 的选举本来就是宿主 —— 那时这一条只是幂等确认。
+    const nextId = audioHostFor(serial);
+    const next = nextId ? sessions.get(nextId) : null;
+    if (!next) return;
+    next.audioHost = true;
+    notifyAudioHost(next);
+  };
+  const win = gone.win;
+  if (!win || win.isDestroyed?.() === true) {
+    hand();
+    return;
+  }
+  win.once("closed", hand);
+  // 兜底：`beforeunload` 里卡住（或窗口已经不在了但没派发 `closed`）时也不能把音频永远吊着。
+  fallback = setTimeout(hand, AUDIO_HANDOFF_FALLBACK_MS);
+  fallback?.unref?.();
+}
+
+/** 移交的兜底时限：关窗正常是几十毫秒，超过这个数就当它已经走了。 */
+const AUDIO_HANDOFF_FALLBACK_MS = 1500;
+
+/**
+ * 设备侧那条 `REMOTE_SUBMIX` 采集的探针。
+ * `Devices: {AUDIO_DEVICE_OUT_REMOTE_SUBMIX` 只在**采集生效**时出现在 `Outputs` 段
+ * （`Audio Patches` 那一段里的同名字符串是静态配置，一直在，所以必须带上 `Devices: {` 前缀）。
+ * `grep -c` 没匹配时回 `0` 但退出码是 1 —— 所以判据只看 stdout 里的数字，不看 `ok`。
+ */
+const AUDIO_CAPTURE_PROBE =
+  "dumpsys media.audio_policy | grep -c 'Devices: {AUDIO_DEVICE_OUT_REMOTE_SUBMIX'";
+/** 等采集释放的上限与轮询间隔（真机实测释放稳定在 ~1.3s）。 */
+const AUDIO_RELEASE_TIMEOUT_MS = 4000;
+const AUDIO_RELEASE_POLL_MS = 350;
+
+/** @param {number} ms */
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 等设备侧那条采集真的拆掉；返回 true = 现在可以起新采集。
+ *
+ * **为什么必须等**：Android 只有一条 `AUDIO_DEVICE_OUT_REMOTE_SUBMIX`，而释放**不是瞬时的** ——
+ * 真机实测（Mi 10 / 随包 5.0.1）稳定在 1.24~1.30s。这期间新采集要是已经起来了，就是
+ * 「两条并存 → 旧的那条被释放 → 新的那条从此静音」：实测「反序」那次新会话一直在收包（461 个），
+ * 但设备侧 `Outputs` 从 9 掉回 7、`Devices:` 不再指向 `REMOTE_SUBMIX` ——
+ * **声音回到手机、包照收**，正是用户 2026-10-14 报的那个症状。
+ *
+ * 读不到（设备断开 / 探测失败）就当已经放开：宁可试一次，也不要永远不出声。
+ * @param {string} serial
+ */
+async function waitAudioCaptureReleased(serial) {
+  const until = Date.now() + AUDIO_RELEASE_TIMEOUT_MS;
+  for (;;) {
+    const { stdout } = await runDeviceShell(serial, AUDIO_CAPTURE_PROBE).catch(() => ({ stdout: "" }));
+    const active = Number.parseInt(String(stdout ?? "").trim(), 10);
+    if (!Number.isFinite(active) || active <= 0) return true;
+    if (Date.now() >= until) return false;
+    await sleep(AUDIO_RELEASE_POLL_MS);
+  }
 }
 
 /** 会话被用户 / 断开流程之外的意外退出时，通知主窗口。 */
@@ -239,7 +379,18 @@ export async function startMirrorSession(request) {
   ]);
   const deviceMirror = wholeDevice || mirrorsMainDisplay(sdk);
   const serverPath = scrcpyServerPath(deviceMirror ? { largeScreenDisplay: false } : undefined);
-  const bounds = mirrorWindowBounds(screenSize, screen.getPrimaryDisplay().workArea);
+  const workArea = screen.getPrimaryDisplay().workArea;
+  // 长条摆在哪（用户 2026-10-14：「投屏宽度足够宽就改成全屏那种浮在画面里的样子」）：
+  // **建窗口时先算一次**，之后由渲染层实时跟着窗口宽改（`mirror:railFloat`）。
+  // 判据全项目只有一处（`mirrorRailFloats`），`previous = false` 就是「长条在外面」那套几何 ——
+  // 窗口刚开出来正是这个形态，所以这一步与渲染层第一拍量出来的结论同源同值。
+  const baseBounds = mirrorWindowBounds(screenSize, workArea);
+  const baseInsets = mirrorScreenInsets();
+  const railFloating = mirrorRailFloats(baseBounds.width - baseInsets.left - baseInsets.right);
+  // 浮起来之后右边那条 86px 归画面 ⇒ 按新内缩重 fit 一次（同一个 `screenSize` / `workArea`）。
+  // 窗口不会因此变大：宽不够（横形显示）时是画面吃掉这 86px，宽够（竖形显示）时窗口跟着窄 86px。
+  const bounds = railFloating ? mirrorWindowBounds(screenSize, workArea, true) : baseBounds;
+  const insets = mirrorScreenInsets(railFloating);
   // 拖拽锁比例用的画面比例：与上面的初始尺寸同源（同一个 `screenSize`），两处各读一次会打架。
   // ⚠️ **只有采主屏那一档锁**（整机镜像、13 及以下点应用）：那块屏的形状归手机，窗口拖成别的比例
   // 只会露黑边或裁切（用户 10-11：「不可以随意更改，只能按手机比例拖拽宽度和高度」）。
@@ -252,6 +403,11 @@ export async function startMirrorSession(request) {
 
   /** @type {MirrorSession} */
   const windowTitle = deviceName ? `${label} - ${deviceName}` : label;
+  // 这台设备那条**唯一的**音频会话归谁（用户 2026-10-14 第三条）：同一台设备同时只允许一条采集，
+  // 所以由**最早打开的那个窗口**承载。此刻 `sessions` 里还没有本会话 ⇒ 这台设备没别的窗口时
+  // 算出来的就是「我自己」。关窗时由 `handOffAudioHost` 交出去。
+  const audioEnabled = prefs.audio === true;
+  const audioHost = audioEnabled && audioHostFor(serial) === null;
   /** @type {MirrorSession} */
   const session = {
     id: `mirror-${++sessionSeq}`,
@@ -264,6 +420,8 @@ export async function startMirrorSession(request) {
     codec: null,
     codecName: null,
     hasAudio: false,
+    audioEnabled,
+    audioHost,
     win: null,
     pendingInit: null,
     miProjectionRestore: null,
@@ -276,7 +434,7 @@ export async function startMirrorSession(request) {
   sessions.set(session.id, session);
 
   try {
-    session.win = createMirrorWindow(session, prefs, bounds, ratio);
+    session.win = createMirrorWindow(session, prefs, bounds, ratio, railFloating);
   } catch (error) {
     sessions.delete(session.id);
     throw error;
@@ -287,8 +445,8 @@ export async function startMirrorSession(request) {
   // 渲染层拿它算第一块虚拟显示。黑框只有 6px，但它占着布局，所以不能整窗内容区直接给。
   // 不能让它读 DOM —— 深链冷启动时页面还没排版完，`clientWidth` 会读到 Electron 默认的 512x512，
   // 于是开出一块和窗口完全不符的显示（2026-09-28 实测）。
+  // ⚠️ 这里的 `insets` 与上面算窗口尺寸、比例锁用的是**同一份**（含长条浮没浮那一档）。
   const content = session.win.getContentBounds();
-  const insets = mirrorScreenInsets();
   session.pendingInit = {
     id: session.id,
     serial,
@@ -310,6 +468,9 @@ export async function startMirrorSession(request) {
     serverPath,
     config: request?.config ?? null,
     prefs,
+    // 这个窗口是不是这台设备**唯一那条音频会话**的承载者（渲染层据此决定要不要起那条会话）。
+    // 与 `deviceMirror` 同一条规矩：判据在主进程定一次，渲染层不重复判断。
+    audioHost,
     initialCss: {
       width: Math.max(1, content.width - insets.left - insets.right),
       height: Math.max(1, content.height - insets.top - insets.bottom),
@@ -364,6 +525,10 @@ export async function stopMirrorSession(id) {
   const session = sessions.get(id);
   if (!session) return false;
   sessions.delete(id);
+  // 这台设备那条唯一的音频会话要是挂在这个窗口上，就交给下一个幸存者（没有就自然收摊）。
+  // 放在 `sessions.delete` 之后：选举只看**当前还活着的窗口**。真正发通知要等它关干净
+  // （见 `handOffAudioHost`）—— 两条采集并存会让接手那条哑掉。
+  if (session.audioHost) handOffAudioHost(session);
   // 两条设备侧登记都要还原（关窗 / 断开设备 / ⌘Q 都走这里）。
   const restoreMiProjection = session.miProjectionRestore;
   session.miProjectionRestore = null;
@@ -468,12 +633,27 @@ async function releaseMacKeyboard(serial) {
 
 ipcMain.handle(CHANNELS.mirrorStart, (_, options) => startMirrorSession(options));
 ipcMain.handle(CHANNELS.mirrorInitGet, (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
   for (const session of sessions.values()) {
-    if (session.win === BrowserWindow.fromWebContents(event.sender)) return session.pendingInit;
+    if (session.win !== win) continue;
+    // `audioHost` 用**当时**的值而不是建窗那一刻的快照：窗口刚开出来、页面还在 `bootstrap`
+    // 路上时，原宿主可能已经关掉并把这一位交过来了（`mirror:audioHost` 那条推送会漏）。
+    return { ...session.pendingInit, audioHost: session.audioHost === true };
   }
   return null;
 });
 ipcMain.handle(CHANNELS.mirrorList, () => listMirrorSessions());
+
+/**
+ * 「现在设备侧那条采集放开了吗」：起新的音频会话之前问一句（见 `waitAudioCaptureReleased`）。
+ * 主进程在这里把轮询做完，渲染层只 await 一次 —— 轮询要跑设备命令，不适合放在页面里。
+ */
+ipcMain.handle(CHANNELS.mirrorAudioIdle, async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const session = [...sessions.values()].find((item) => item.win === win);
+  if (!session) return true;
+  return waitAudioCaptureReleased(session.serial);
+});
 
 /**
  * 长条上那颗「使用 Mac 键盘」：`on` 把设备输入法抢过来、`off` 还原、`state` 只是问一句
@@ -494,14 +674,20 @@ ipcMain.handle(CHANNELS.mirrorMacKeyboard, async (event, action) => {
 /**
  * 渲染层显隐那层 chrome（浅灰底 + 标题栏 + 长条）时，把系统那三颗一起开关。
  * 用 `on` 不用 `handle`：纯表现层的一刀，没有要等结果的地方。
+ *
+ * 载荷是 `{ shown, railFloating }` 而不是单个布尔 —— 三颗的**落点分两档形态**（窗口态钉在标题栏里、
+ * 浮动态让开画面圆角，见 `mirrorTrafficLightPosition`），所以每次开关都要按当时的形态重设一次位置：
+ * 只改显隐不重设，翻转形态后三颗会留在上一档的落点上（浮动态就会重新压回圆角里）。
  */
-ipcMain.on(CHANNELS.mirrorWindowButtons, (event, shown) => {
+ipcMain.on(CHANNELS.mirrorWindowButtons, (event, payload) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win || win.isDestroyed()) return;
-  const visible = shown === true;
+  const visible = payload?.shown === true;
+  const railFloating = payload?.railFloating === true;
   win.setWindowButtonVisibility?.(visible);
-  // 放出来之后必须重设落点，否则三颗回到 AppKit 默认的左上角（≠ 我们要的标题栏居中位）。
-  if (visible) win.setWindowButtonPosition?.(mirrorTrafficLightPosition());
+  // 落点与显隐无关地一起设：放出来之后必须重设（`setWindowButtonVisibility(true)` 会把三颗打回
+  // AppKit 默认的左上角），收起来时设了也无害 —— 这样翻转形态那一拍不会漏掉位置更新。
+  win.setWindowButtonPosition?.(mirrorTrafficLightPosition(railFloating));
 });
 
 ipcMain.on(CHANNELS.mirrorMacKeyboardYield, (event) => {
@@ -562,6 +748,21 @@ ipcMain.handle(CHANNELS.mirrorDesktopMode, async (event) => {
  * 状态自己会纠正（不会重复撑宽）。全屏时不动窗口尺寸。
  */
 const hudExtras = new WeakMap();
+
+/**
+ * 按当前「dev 边栏占多宽 + 长条浮在画面里没有」重设一次拖拽比例锁。
+ * 余量（`mirrorContentExtraSize`）随这两件事变，漏设一次「画面 = 设备比例」这条等式就破了
+ * —— 采主屏那档画面会比设备比例宽/窄一截，圆角里当场露出 letterbox 黑条。
+ */
+function relockAspect(win) {
+  const ratio = aspectRatios.get(win) ?? 0;
+  if (!ratio) return;
+  win.setAspectRatio?.(
+    ratio,
+    mirrorContentExtraSize(hudExtras.get(win) ?? 0, railFloatingStates.get(win) ?? false),
+  );
+}
+
 ipcMain.on(CHANNELS.mirrorWindowHud, (event, extra) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (!win || win.isDestroyed() || win.isFullScreen()) return;
@@ -573,8 +774,23 @@ ipcMain.on(CHANNELS.mirrorWindowHud, (event, extra) => {
   win.setContentSize(Math.max(1, width + delta), height);
   // 边栏这一截是**窗口**多出来的、不参与比例的余量（跟黑框与长条同一类）：不重设的话，
   // 撑宽之后再拖一次边，系统会按老余量把窗口收回去 —— 边栏那一格当场被挤没。
-  const ratio = aspectRatios.get(win) ?? 0;
-  if (ratio) win.setAspectRatio?.(ratio, mirrorContentExtraSize(next));
+  relockAspect(win);
+});
+
+/**
+ * 渲染层报「长条现在浮在画面里没有」（它量 `.mirror-main` 的宽实时判，判据 `mirrorRailFloats`）。
+ *
+ * 形态一变，窗口右边那一截不参与比例的余量就差一条长条宽（浮起来那 86px 归画面）⇒ 比例锁要按新余量
+ * 重设一次，否则「画面 = 设备比例」当场破掉。⚠️ **这里不动窗口尺寸**：窗口宽正是那条判据的输入，
+ * 一动它就会在阈值附近自己来回跳（浮起来画面宽 86 ⇒ 又越过阈值 ⇒ 再收回去）。
+ */
+ipcMain.on(CHANNELS.mirrorRailFloat, (event, railFloating) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || win.isDestroyed()) return;
+  const next = railFloating === true;
+  if ((railFloatingStates.get(win) ?? false) === next) return;
+  railFloatingStates.set(win, next);
+  relockAspect(win);
 });
 
 /**
