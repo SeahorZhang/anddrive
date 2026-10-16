@@ -1,111 +1,46 @@
 # MEMORY.md —— AndDrive 项目长期笔记
 
-（按主题沉淀，跨会话复用。日期日志在 `YYYY-MM-DD.md`，这里只留"下次还会用到"的结论。）
+（只留"下次还会用到"的铁律与唯一出处；实测读数与过程在 `docs/NATIVE_MIRROR.md`、`docs/TODO.md`，日期流水在 `YYYY-MM-DD.md`。）
 
-## 镜像页（`mirror.html`）的 CSS 是**独立产物**
+## 铁律（别退回）
 
-- 入口：`mirror.html` → `src/mirror/main.js` → `import '../styles/index.css'`（与主窗口共用同一份源文件，但**产物是两份**：`dist/assets/mirror-*.css`）。
-- ⚠️ **Tailwind v4 的 `@theme` 只发出"真正被用到"的令牌。** 镜像页一个 Tailwind 工具类都没有（`App.vue` 全用 `<style scoped>` 里的普通 CSS），所以 `dist/assets/mirror-*.css` 里**没有 `:root` 段、没有任何 `--color-*` 定义**。
-- ⇒ **在镜像页里写 `var(--color-accent)` 这类令牌，取不到值**：`background` 变成无效值 = 透明。2026-10-11 长条按键高亮就差点这样上线（白图标贴白面板 = 完全看不见）。
-- **规矩**：镜像页的 chrome 不跟主题走（面板底色是写死的 `#fbfbfb`），色值也**写在组件里**；需要复用就在组件内声明局部变量（如 `.mirror-rail__panel` 的 `--rail-accent: #007aff`）。
-- **用之前先验**（静默失效，构建/lint/单测全绿也发现不了）：
-  ```
-  npx vite build
-  grep -o -- '--color-[a-z0-9-]*:' dist/assets/mirror-*.css   # 定义
-  grep -o -- 'var(--color-[a-z0-9-]*)' dist/assets/mirror-*.css  # 引用
-  ```
-  引用有、定义无 ⇒ 那个变量是悬空的。
+- **收摊只有一个入口**：`electron/mirror/session.js` 的 `stopMirrorSession(id)`（还原 synergy / keepAwake / macKeyboard、关窗、goHome）。别在别处 `sessions.delete()` —— 还原函数挂在会话记录上，记录一删就再也调不到，设备的 `synergy_mode` / `stay_on_while_plugged_in` / 默认输入法会永远留在我们改过的值上（10-11 修过一次）。重复调用安全（`if (!session) return false`）。⚠️ 它在窗口 `closed` 处理器里被调 ⇒ 那一刻窗口已销毁，**"等这个窗口真关掉再做事"不能靠在这里挂 `once("closed")`**（emit 用监听器快照）：要么 `isDestroyed()` 早退走"当场做"，要么挂 `close`（早一拍）。
+- **镜像页的 CSS 是独立产物**（`mirror.html` → 与主窗口共用 `styles/index.css`，但 Tailwind v4 的 `@theme` 只发**被用到**的令牌；镜像页没有 Tailwind 类 ⇒ `dist/assets/mirror-*.css` 里没有 `:root`、没有任何 `--color-*`）。**在镜像页写 `var(--color-*)` 取不到值 = 透明**（构建 / lint / 单测全绿也发现不了）。规矩：镜像页的 chrome 不跟主题走（面板底色写死 `#fbfbfb`），色值写在组件里，要复用就声明局部变量。验证：`npx vite build` 后 `grep -o -- '--color-[a-z0-9-]*:' dist/assets/mirror-*.css`（定义）vs `grep -o -- 'var(--color-[a-z0-9-]*)' …`（引用），有引用无定义 = 悬空。⚠️ 同一条链上的第二个坑（2026-10-16 真机实测）：**别手写 `-webkit-backdrop-filter`** —— lightningcss 会把它和标准 `backdrop-filter` 当成**同一属性的重复声明**，留下前缀版、**删掉标准版**，而 Electron 44 / Chromium 138 **不认那个前缀版**（`el.style.webkitBackdropFilter = 'blur(4px)'` 赋不进去、`getComputedStyle` 读回 `none`）⇒ 玻璃质感**全失效**（肉眼是半透明白底，构建 / lint / 单测全绿）。**只写标准属性**，前缀交给 lightningcss（它会两条都留）；用 `var()` 也绕不过（它按属性名处理）。验：`grep -o -- '[;{]-\?\(webkit-\)\?backdrop-filter:[^;}]*' dist/assets/mirror-*.css`，只有前缀版 = 已失效。
+- **几何/时长只有一个出处**：`electron/mirror/options.js` 的 `MIRROR_FRAME` / `MIRROR_RAIL` / `MIRROR_TITLEBAR` / `MIRROR_SCREEN_RADIUS`(=28) / `MIRROR_TRAFFIC_LIGHT_SIZE`(=14)，经 `windowStyle` 注入 CSS 变量。⚠️ **2026-10-16 起窗口里只剩画面**：`MIRROR_FRAME.bezel = 0`（黑框那圈"手机样子"已退场）、`MIRROR_SCREEN_RADIUS` 40 → 12 → 20 → **28**（10-16 用户先点「改成 12px 小圆角」、看过后又点「圆角稍微大点」；10-17 再点「投屏圆角再圆一点」）、`mirrorScreenInsets()` **恒 `{0,0,0,0}` 且参数已删**（画面 = 窗口）、`mirrorRailFloats()` **恒 true 且参数已删**（两档形态退场 ⇒ **所有窗口都是"浮动态"**：无标题栏、三颗常驻落在画面左上角 `(20,16)`（10-16 用户「彩虹见靠左一点」36 → 26，10-17 又点「左上角 mac 3 个彩虹按钮再往左移一点」⇒ 26 → **20**；同日「可拖拽高度再加4px」⇒ 顶边那条 12 → **16**、三颗纵坐标**跟着** 12 → 16；同日「可拖拽区域再加高5px」⇒ **16 → 21**、三颗跟着 16 → 21（当时那条等式是硬的）；**同日「3个彩虹按钮和悬浮操作栏往上移一点，拖拽高度再加5px」⇒ 三颗自己上移回 `floatLightY = 16`、那条 `floatDragHeight` 21 → 26 ⇒ 三颗压进它里面 10px、等式作废**，见下面「三颗只吃按下」那条）、顶边整条 **26px** 是头部那条）。⚠️ 这几个**函数与 `railFloating` 状态 / `mirror:railFloat` / `relockAspect` 那条链都保留**（值恒定），删它要一起动 IPC —— 这一轮只改外观。⚠️ **窗口形状仍两档两套**（`session.js` 里 `deviceMirror` 那一条）：**采主屏**那档照设备画面比例 fit 可用区（`mirrorWindowBounds`，**只 fit 一次** —— 「浮动态再按新内缩重 fit 一次」那一步已删）；**独立虚拟屏**那档走 `mirrorVirtualWindowSize` —— **920 x 660 两个常量**（`MIRROR_VIRTUAL_WINDOW_WIDTH` / `MIRROR_VIRTUAL_WINDOW_HEIGHT`；用户 2026-10-16 四条点单一路收口到这里），**不读设备分辨率也不读 Mac 分辨率**，**不重 fit**（尺寸是用户点名的固定值）。这一档的形状与任何屏幕无关（那是我们自己建的 flex 显示），设备分辨率只剩「算密度」与「读不到就退 850x600」两个用途。⚠️ 早前试过的「缩 0.75 档」（`MIRROR_VIRTUAL_WINDOW_SCALE`）、「设备比例转置」（`mirrorLandscapeSize`）、「宽 920 + 高按 Mac 屏比例」（读 `getPrimaryDisplay().size`）**都已删除**，别照着旧记录找。`MIRROR_SCREEN_RADIUS` **同时是几何**（圆角切掉那块 = `[0,r]×[0,r]` 方角里、以 `(r,r)` 为圆心半径 r 的弧外侧）：改它要回头验 `floatLightX/Y` 还在那块之外 —— ⚠️ **判据只能用定义式**：整组离弧心最近的角（= 左上角 `(floatLightX, floatLightY)`）到 `(r,r)` 的距离 ≤ r 就没被啃掉（现 `(20,16)`→`(28,28)` ≈ 14.4 < 28 ✓，余量 ~13.6px）。⚠️ **别用「落点横或纵 ≥ 半径」那条捷径** —— 半径 20 那会儿它是充分条件、能用；**半径 28 + 落点 20 之后 `x < r`，它已失效**。`tests/electron/mirrorOptions.test.js` 钉着「四角 + 中心不在切掉区」与「离弧心余量 > 5px」两条，`r` 是动态取的 ⇒ 换半径自动跟（余量那条会先红，提醒你重算落点）。
+- **操作条（`.mirror-rail`）现在是「画面顶部右侧一条横向玻璃胶囊」**（2026-10-16 第四版，同日第二轮又小改四条 —— 圆角 20 / 三颗靠左 / 气泡收小改从下方弹 / **胶囊可拖**；前三版：右侧外面占位 86px / 浮在画面右侧上下居中 / 黑框常驻）：**不占布局**（宽度由内容撑开，按钮数随条件渲染），纵向与三颗**中线对齐**（`mirrorRailTop()` = **9px** = `floatLightY + 尺寸/2 − height/2`，两者中心都在 23px；`floatLightY` 2026-10-17 挪过三次：12 → 16 → 21 → 16，胶囊一路自动跟）。⚠️ **玻璃只有浮在画面上才成立**（`backdrop-filter` 背后要有投屏内容可模糊）。**触发挂在两块 DOM 上**（2026-10-17 第八轮起）：① **头部那条 `.mirror-float-drag`**（整窗宽 × `floatDragHeight`，用户「鼠标移动到头部可拖拽的地方就展示出来」）② 胶囊自己的命中区（`.mirror-rail`，= 胶囊 + `hitPad` 一圈外扩，接着管"贴着胶囊上下挪"那一段）—— 两处都走元素**自己**的 `pointerenter` / `pointerleave`；窗口态 `onScreenPointerMove` 直接 `return`，`inScreenArea()` 已删；`chromeZone` 只剩**两档满屏**在用。⚠️ 命中区**必须自己 `no-drag`** 且**必须是定位元素**（否则被 `.mirror-screen` 整个盖住：DOM 查得对、屏幕上什么都没有）。⚠️ 光标**停在头部条上不自动收**（那条上事件是连续的，`pointerenter` 之后没有 `leave` ⇒ 不排收回计时）—— 这正是"靠 drag 区那条边界信号"做不到的。⚠️⚠️ **窗口态那一组选择器都是 (0,4,0) 起步，会把"按状态成对表达"的基础规则静默压掉一半**（2026-10-16 用户报「悬浮按钮点击后变为白色，和背景同色了」）：`.mirror-rail__key { background: transparent }` 压掉了 `.is-active { background: var(--rail-accent) }`，**却压不掉同一组的 `color: #fff`** ⇒ 「开着」那三颗（关屏 / 常驻 / Mac 键盘）= 透明底 + 白图标，在 `rgba(255,255,255,0.46)` 的玻璃上当场消失（真机实测 `bg: rgba(0,0,0,0)` / `color: rgb(255,255,255)`）。⇒ 已在这一组显式补回 `background`（含 `:hover`，不补则悬停又变透明）；**以后在这一组里动 `background` / `color` / `border` 这类成对属性，都要回头确认状态规则没被压掉一半**。⚠️ 色值写死（镜像页是独立 CSS 产物，`var(--color-*)` 取不到值 = 透明）。⚠️ 别用 `-h` 结尾的 CSS 变量名（lightningcss minify 会把整份 CSS 判成 `Unexpected end of input`，只有 `vite build` 会炸 —— `--rail-capsule-h` 踩过，改成 `--rail-capsule-height`）。⚠️ `mirror:windowButtons` 载荷仍带 `railFloating`（现在恒 true，只用来选落点，恒 `(20,16)`）。⚠️ **三颗的显隐 = `railShown`**（2026-10-17 用户：「3个彩虹按钮没有跟着右边悬浮栏显示隐藏」）：原来是 `railFloating || railShown` —— 两档形态时代的推导（"浮动态窗口里只剩画面、常驻"），两档退场后 `railFloating` 恒真把它钉成了**永远显形**。现在 `App.vue` 的 `syncWindowButtons()` 里只认 `railShown`，**收要延 `MIRROR_RAIL.fadeOutMs`（260ms）**（三颗没有淡出可跟，面板还没淡完就收会看到"条还在半透明、三颗已经没了"）+ `buttonsShown` 让开窗第一拍直接报收（否则先闪 260ms）。⚠️ 连带：**红点（关闭）平时也看不见了**，要先把鼠标移到画面右上那条命中区。⚠️ 头部那条第一版是左上角 80×28 小方块，被用户打回（那块盖着 AppKit 画的三颗，抓不到）——别退回。⚠️⚠️ **头部那条的拖窗是自己做的**（2026-10-17 第八轮）：`-webkit-app-region: drag` 那一整片是 Chromium 的**事件黑洞** —— 真光标实测：进顶边只发**一条** `pointerout(relatedTarget=null)`、之后连 `pointermove` 都没有；从 drag 区**滑出窗口**更是一个事件都没有（⇒ 靠它做"指针还在不在头上"会永久卡住）。同一条带**既收 hover 又要能拖只能二选一**，用户要的是 hover ⇒ 改成 `no-drag` + `onFloatDragDown/Move/Up` 自己拖，位移走渲染层 **`window.moveTo()`**（实测生效、位移逐像素准、跟手，`hiddenInset`/`transparent`/`setAspectRatio` 都不影响）。代价：**丢了系统的双击顶边缩放 / 拖到别的显示器或空间**（记在 `docs/TODO.md` §3）。⚠️ 别想着"再压一层 `pointer-events:none` 的 drag 层" —— 实测 drag 照样赢。⚠️ `railAnchorTop` / `watch(railFloating, …, { flush: 'post' })` 那套现在只服务满屏那两档。
+- **三颗彩虹键只吃"按下"、不吃"移动"**（2026-10-17 探针台实测，把仓库里一直写错的那条钉死）：AppKit 画的 NSButton 处理 `mouseDown` ⇒ 灯上按下 DOM **收不到 `pointerdown`**（点上去就是点灯）；但 `mouseMoved` **照常进 DOM** ⇒ 指针从头部那条滑到三颗上**只发 `pointermove`、不发 `pointerleave`**（停在灯上 1.5s 也一条都不发；真机复核一致）。⚠️ 所以「三颗压进拖拽带」**不会让 hover 闪断**，代价只有灯本身那一小块按下拖不动窗口。**别再照"三颗那一列收不到指针"这条旧说法去守 `floatLightY === floatDragHeight`** —— 那条硬等式 2026-10-17 第九轮已作废（三颗压进那条 10px，顶上仍留 16px 干净带面）。
+- **胶囊可拖**（用户 2026-10-16：「右侧操作栏可拖动」）：`railPos`（胶囊左上角、窗口内容区坐标）⇒ `--rail-x/y` + 根节点 `is-rail-moved`，CSS 从 `inset: 0 0 auto auto` 换成 `left/top + translate`（translate 里要**退一圈 `hitPad`** —— `--rail-x/y` 存的是**胶囊**左上角，而 padding 是命中区外扩）。**阈值拖动**（`RAIL_DRAG_THRESHOLD = 4`，真机验收后定的：胶囊里 6 颗键把 159px 占满、只剩 3px padding 能抓，只认"抓空白处"等于没法拖）—— 按在按钮上不动 = 点它，按住挪过 4px = 拖整条，且拖起来那一拍才写 `railPos`（按下就写会让按钮白闪）+ `@click.capture` 守卫吃掉拖完那一下 `click`（不然拖过"返回"键就返回一次）；**双击回默认位置**、`setPointerCapture` 防脱手（合成事件下会抛，`try/catch` 是必需的）、`syncRailDock` 在窗口 resize 时重夹；纯换算 = `railDock.js` 的 **`clampRailPos`**（`pad = 0`，露到窗口外那截会被裁）。⚠️ 不改窗口尺寸 / 画面矩形（浮在画面上）⇒ 不会白发 `resizeDisplay`；**不持久化**（与 `railPinned` 同类）。⚠️ 窗口态 `.mirror-rail` **必须显式 `width: max-content`**：基础样式那条 `width: var(--rail-w)`（= 满屏档的 86）会把命中区钉得比胶囊还窄（胶囊宽是内容撑开的），也会把拖动那套 `left/top` 钉死。⚠️ 气泡 `railTipSide`：窗口态 `bottom`/8、满屏那两档 `left`/12（那边是纵向一列，从下边出来会盖住它下面那几颗）；`TIP_CLASS` 同日收小一档（`px-2.5 py-1.5 text-[11px]`）。⚠️⚠️ **`TooltipProvider` 必须带 `disable-hoverable-content`**（2026-10-17 用户报「胶囊也跟着右侧悬浮栏隐藏」的真身）：默认 `false` 时 reka 走 `TooltipContentHoverable`，用 `useGraceArea` 把**气泡自己的矩形**算进"过渡区"（几何凸包，不是 hit-test）⇒ 指针落在气泡上就算"还没离开"、气泡一直不收。而气泡 portal 到 `body`、落在**命中区之外**（真机：面板 `[237,5,159,28]`、命中区 `[229,0,179,41]`、气泡 `[186,38,132,31]`）⇒ 鼠标从按钮**往下滑到气泡上**这一下同时做了两件事：离开命中区（长条开始淡出）+ 落进气泡（气泡把自己钉住）= **长条收了、气泡还挂着**。开着这一位 ⇒ `TooltipRoot.onTriggerLeave()` 从 `clearTimer()` 改走 `handleClose()`、Content 换成 `TooltipContentImpl`（无过渡区），指针一离开按钮气泡就收，结构上不可能比长条活得久（气泡里只有一行纯文字、本来也不需要悬停交互）。⚠️ **`pointer-events: none` 不管用**（过渡区是几何算的，指针停在那个坐标上照样在区内）。⚠️⚠️ **别在 `pointerdown` 里 `setPointerCapture`**（2026-10-16 用户报「悬浮的操作栏按钮不能点了」的根因）：Chromium 会把**兼容鼠标事件一起重定向**到捕获元素 ⇒ `mousedown` / `mouseup` 都落在面板上、`click` 派发到两者的最近公共祖先 = 面板本身，**按钮一个都收不到**（最小复现台 4 档对照：按下即捕获 `clickBtn: []` / `clickPanel: 1` ✗；挪过阈值才捕获 `clickBtn: ["b1"]` ✓ 且拖动时仍 `captured: 1` ✓）。**捕获只在"真的拖起来那一拍"要**。⚠️ 拖动那对 `pointermove` / `pointerup` / `pointercancel` 挂 **`window`**（`attachRailDragWatch` / `detachRailDragWatch`，`onBeforeUnmount` 里成对摘）—— 挂面板上时"按住往外拖"会在迈过 4px 阈值**之前**就滑出胶囊那 3px 边距、收不到 move、当场哑掉；捕获之后 move 仍会从面板冒泡到 window，两条不打架。
+- **三颗开关（关屏 / 常驻 / Mac 键盘）都不跨会话保存**（10-11 用户点单"记住我点的选项"、当天撤销）—— **别再当需求捡回来**。要恢复得进 `prefs`，且「关屏使用」那颗**永远不该进**（它画的是设备实时电源状态，持久化只会跟用户的电源键打架）。
+- **声音是设备级一条会话**：镜像会话恒 `audio:false`（`buildMirrorOptions` 写死），另起纯音频会话（`buildAudioOnlyOptions`，jar 走独立路径 `AUDIO_SERVER_PATH`）由该设备**最早打开的镜像窗口**承载（`audioHost.js` 的 `pickAudioHost`），关窗时移交下一个（`mirror:audioHost`，**等旧窗 `closed` 之后才发**）。⚠️ 同一设备并发两条 REMOTE_SUBMIX 采集会互相破坏（路由按"最近一次采集的生死"重置，**不是引用计数**）⇒ 同时只能有一条。⚠️ 起新采集前必须等设备侧拆干净（`mirror:audioIdle` 轮询 `dumpsys media.audio_policy | grep -c 'Devices: {AUDIO_DEVICE_OUT_REMOTE_SUBMIX'`，释放要 ~1.3s；`Devices: {` 前缀不能省 —— `Audio Patches` 段里那个同名字符串是静态配置）。机制：① 每条会话都要自己推一次 jar（server 一启动就 `unlinkSelf()` 删掉自己那份，一次 ~1.25s，所以两条会话必须用不同路径）；② 音频-only 必须 `sendDeviceMeta:false`（上游把 64 字节设备名写在第一个 socket 上，没视频时那就是音频 socket）；③ 采不到音频时服务端把流标 `disabled`（**不是抛错**）⇒ 要显式认这一档。**没有运行时切换**（10-11 明确删掉 `openAudioSession` / 悬浮栏那颗按钮 / `pnpm audio:spike`，别照着旧记录找）。⚠️ 设备投屏期间不出声是 scrcpy 建会话时定死的（`audio_source=output` → `REMOTE_SUBMIX` 直采），控制协议里没有任何音频路由消息 ⇒ 想改只能整条重来（**不会因为升 scrcpy 而改变**）。`mic*` / `voice*` 是采麦克风，`audio_dup` 只作用于 `playback` 源（对 `output` 直采是空操作）。
+- **电源 / 屏灭判据**：`electron/adb.js` 的 `getPowerState` 一次 adb 拿 `mWakefulness`（`dumpsys power`）+ SurfaceFlinger `powerMode`。⚠️ **`Hangup` 下 `powerMode` 报 `On`** ⇒ 不能拿它判 Hangup 的屏灭。`sleepWatch.js`：`FROZEN_STATES={Asleep,Dozing}`（弹"已休眠"）与 `PANEL_OFF_STATES=FROZEN+Hangup`（`panelIsOff()`）**语义不同别合并**。`Hangup` 只在 bedtime 那条路上出现（按电源键走 `Asleep`）；`mStayOn=true` 会让 bedtime 压根不发生。把屏弄亮：设备非 `Awake` 必须 `input keyevent 224`（`setDisplayPower(Normal)` 唤不动）；`Awake` 时回 `Normal` 即可。手工复现 `Hangup`：`settings put `**`secure`**` synergy_mode 1`（写 `global` 静默无效）+ `stay_on_while_plugged_in=0`。
+- **"插电不休眠"泄漏**：症状 = 退出镜像后手机最暗且不灭（是卡在 `DIM` 档，**不是亮度被调低**，全仓库没有写设备亮度的地方）。查 `adb shell settings get global stay_on_while_plugged_in`（停在 **7** 基本可判我们的残留），修 = `put 0`。
 
-## 镜像窗右侧长条（`.mirror-rail`）
+## 全屏画面为什么"放不到最大"（2026-10-16 实测）
 
-- 显隐状态机在 `src/mirror/chromeReveal.js`（纯函数 + `tests/mirror/chromeReveal.test.js`）：进格子就弹、离开格子 1 秒后收；`setPinned` 是那颗「一直显示」的常驻开关。
-- 几何/时长数只有一个出处：`electron/mirror/options.js` 的 `MIRROR_FRAME` / `MIRROR_RAIL`，经 `App.vue` 的 `windowStyle` 注入成 CSS 变量（主进程算窗口尺寸也要用同一份数）。
-- 开关型按键（关屏 / 常驻 / Mac 键盘）的"开着"态 = `.mirror-rail__key.is-active`（填实主色 + 白图标）。
-- **贴边浮出的那层浅灰涂装（`is-chrome`）= 一个元素 `.mirror-chrome`**（2026-10-13 第四稿）。用户口径：「上边和右边的边框以及左上角右上角右下角的圆角不协调，**不是一个图层**」→「改成一个 div」—— 他指的是 **DOM 结构**（上一版是 `.mirror-titlebar` 一条臂 + `.mirror-rail` 一条臂 + `.mirror-main` 三层 `radial-gradient` 补三个角，三个元素在画同一层涂装，连淡入都分两套）。现在：那层铺满 `.mirror-body` 填 `#dcdfe3`，`.mirror-titlebar` / `.mirror-main` 抬到 `z-index: 1` ⇒ **手机轮廓自己把中间挖掉**，剩下就是上臂 + 右臂 + 黑框三个圆角外侧那三块；左下角那块用 `clip-path` 切一个 `--frame-radius` 见方的方口（多出的部分落在黑框里被手机盖住，所以不必按圆弧裁）。
-- ⚠️ 因此：**`.mirror-titlebar` 与 `.mirror-rail` 的底色必须保持 `transparent`**（灰只有一个出处），`.mirror-rail__panel` 的白胶囊只剩两档全屏（那条 `:not(.is-fullscreen)` 覆盖照旧）。
-- **2026-10-14 起长条有第二档形态**（用户：「投屏宽度足够宽就改成全屏时在投屏里浮动的样子」）：**画面宽 ≥ 640** 时它不再占窗口右边那一格，改成像桌面模式全屏那样**浮在画面右上**（白胶囊 + hover 才出 + 可上下拖）；窄画面（普通竖屏手机窗口，画面约 360–420）仍是「在外面」那一档。类 = `.mirror-window.is-rail-float:not(.is-fullscreen)`，判据 = `options.js` 的 **`mirrorRailFloats(画面区那一格的宽, previous)`**（唯一出处，主进程建窗时算一次、渲染层实时跟）。
-  - ⚠️ **量 `.mirror-main` 的宽，别量画面本身**：浮起来画面自己就宽 86px，拿画面判会被自己的结果推着走。
-  - ⚠️ **两条线（迟滞）**：`previous` 决定按哪套内缩扣长条那一截（在外面扣 94、浮着扣 8）⇒「浮起来要 ≥640、收回去要 <640」。一条线时拖上下边会抖（比例锁余量也跟着形态差一条长条宽，而拖上下边时窗口宽是由高推出来的）。
-  - ⚠️ **跨进程契约**：内缩是「一档两值」，主进程的窗口尺寸 / 比例锁余量 / `initialCss` 与渲染层判据必须用**同一个** `railFloating`；翻转由 `mirror:railFloat` 从渲染层报回主进程重设比例锁（`session.js` 的 `relockAspect`）。**这条 IPC 绝不动窗口尺寸** —— 窗口宽正是判据的输入，一动它就在阈值附近自己来回跳。以后再加「哪一档少占一截（宽度或高度）」的东西，要么走同一条上报，要么把判据整个搬到一侧。
-  - **同一天第二条把这一档的窗口定成"只剩手机"**（用户：「上边头部就去掉，mac 的 3 个按键放进投屏中，标题去掉。右侧悬浮操作栏上下居中，且只有鼠标移入内容区才显示出来，不要移动到右边就展示」）：`mirrorScreenInsets(true)` 的 `top` 也只剩黑框（**右 86 + 上 28 两截一起让掉**）；`.mirror-titlebar` 整条 `display: none`、名称不画；三颗彩虹键**常驻**（落点走 `mirrorTrafficLightPosition(true)`，**两档形态两个落点**，见下面那条「第六条」）；长条**上下居中**（`railDock.js` 的 `railAnchorTop`）；触发改成「指针在 `.mirror-main` 里」。
-  - ⚠️ 浮动态的三条坑（都踩过）：
-    1. **没有标题栏 = 没有拖窗区** ⇒ 补了 `.mirror-float-drag`（**顶边整条**：`width: 100%` × `MIRROR_TITLEBAR.floatDragHeight = 24`）。⚠️ 第一版是左上角 80×28 的小方块，被用户当场打回，见下面那条「第六条」。
-    2. **`watch(railFloating, …, { flush: 'post' })` 是必须的**：窗口态面板撑满整格（`offsetHeight` = 窗口高），换完类之前读它算居中会算出 0。**同步读 `--rail-top` 也读不到新值**（Vue 的 DOM 更新是异步的）—— 离屏核对时我一度以为拖拽坏了。
-    3. **`railAnchorTop` 是"写一次"的锚点，不是每帧约束**：只在"进浮动态 / 改窗口大小"两拍写进 `railTop`，否则用户拖出来的位移每次重算就被抹掉。代价：改窗口大小会抹掉拖拽位移（注释里写清了）。
-  - 连带：浮动态**整层浅灰涂装都不画**（只剩三块孤零零的楔形，像脏点）；长条格子与**面板**都是 `pointer-events: none`，只有 `.mirror-rail__key` / `__handle` / `__dev` 是 `auto`（面板浮在画面右缘，吃事件 = 把画面右缘 74px 的触控永久拿走）。⚠️ 这样改之后 `panel.matches(':hover')` **照样为真**（`:hover` 顺着命中目标往上传），`toggleRailPinned` 那条判据不用换写法 —— 离屏实测确认过。
-- **第六条（2026-10-14）：浮动态的「三颗落点」与「拖窗区」都被报障修过一遍，两条都别退回**：
-  - **三颗落点分两档形态**：`mirrorTrafficLightPosition(railFloating)` —— 窗口态 `{12, 7}`（在标题栏里）、浮动态 `{24, 24}`（挪进画面）。⚠️ 浮动态**不能**用 `{12, 7}`：它距画面圆角圆心 `(44, 44)` 是 48.9 > 半径 40（`MIRROR_SCREEN_RADIUS`）⇒ 红灯一半压在黑色圆角**外面**，正是用户报的「mac3 个彩虹见往右往下点，超出屏幕了」。⇒ **改画面圆角半径就得回头验 `floatLightX/Y` 还在圆内**（`tests/electron/mirrorOptions.test.js` 有一条钉着这条几何）。
-  - **拖窗区两档都是「顶边整条」**：窗口态 = `.mirror-titlebar` 那条；浮动态 = `.mirror-float-drag`（`width: 100%` × `floatDragHeight = 24`）。⚠️ **第一版左上角 80×28 的小方块已被打回**（「app 投屏后不能拖拽了」）—— 那块地方本来就盖着 AppKit 画的**三颗彩虹键**（画在网页内容**之上**、CSS 盖不住也**命中不到**），方块中间根本抓不到，可抓的只剩几条缝。代价：浮动态手机画面最顶 24px 收不到触控（用户从三个候选里**明确选定**并接受）。
-  - ⚠️ **`mirror:windowButtons` 的载荷带 `railFloating`**（`{shown, railFloating}`）：落点分两档 ⇒ **翻转形态那一拍也要重设一次**（`setWindowButtonVisibility(true)` 会把三颗打回 AppKit 默认左上角）。别退回成只传一个布尔。
-  - ⚠️ **画面圆角半径的唯一出处是 `options.js` 的 `MIRROR_SCREEN_RADIUS = 40`**（渲染层从 `windowStyle` 取 `--radius`），因为它同时是**几何**（圆角切掉那块 = 圆心 `(bezel + r, bezel + r)`、半径 `r` 的四分之一圆）。别再写回 CSS 里一份。
-  - 验「拖窗区在哪」**只能靠命中测试**（`DOM.getNodeForLocation`）：**合成鼠标事件驱动不了原生拖窗**（在拖窗块里按下 + 移动 `120,90` ⇒ 窗口位移 `0,0`）。真机读数：`.mirror-float-drag` = `[0,0,841,24]`，沿顶边 7 个点全命中它、`y ≥ 26` 命中 `canvas`。
-- ⚠️ **这三颗开关的状态都不跨会话保存**（窗口级一次性开关）：用户 2026-10-11 一度点单「记住我点的选项」、已实现后又当天撤销 —— **别再把它当需求捡回来**。要恢复得进 `prefs`（`shared/scrcpyConfig.js` 的 `normalizeScrcpyConfig` + `resolveRuntimePrefs`），且「关屏使用」那颗**永远不该进** —— 它画的是设备实时电源状态（`mWakefulness` / `powerMode`），持久化它只会跟用户的电源键打架。
+- 全屏那一屏（`.mirror-window.is-fullscreen`）画面框**严格等于视频流比例**：`--screen-ratio` 由 `syncCanvasBox()` 量**解码尺寸**喂进来（不是 `wm size`，也不是 `meta`），canvas 在其中 contain ⇒ **我们这层不裁不拉**。显示器比流"矮胖"时按宽铺满、上下留浅薄荷 `#d1e4e4`。窗口态看不出，是因为比例锁让窗口本身就是手机形状；全屏尺寸由系统给，锁不生效。
+- 手机里播放器的 letterbox 照播：Mi 10（2340×1080 = 19.5:9）放 16:9 视频 ⇒ 左右各 210 设备像素纯黑边（2026-10-16 截图实测：黑框 2.16，内容 1449×815 = 1.7779）。
+- **Android 13 及以下（`mirrorsMainDisplay`，≤33）点应用 = 采手机主屏**（`deviceMirror`，连 `new_display` 都不发）⇒ 那块屏不能重排、不能 resize，比例被设备定死；Android 14+ 桌面模式（`is-edge-to-edge`，`DESKTOP_MODE_MIN_SDK=34`）建虚拟显示 + flexDisplay，窗口一全屏就把显示**重排成显示器形状**（`displayFollow` 发 `resizeDisplay`）⇒ 铺满无留白。**"能放到最大"那档在 13 上没有**，是这条路的能力边界，不是 bug。
 
-## 声音在哪出声：**设备级一条会话，每台设备只有一个窗口承载它**（2026-10-14 定稿）
+## 真机验收怎么跑（2026-10-14 跑通，照抄）
 
-- **2026-10-14 实测确认：同一台设备上并发两条 REMOTE_SUBMIX 采集会互相破坏。** 用户报「打开两个镜像声音重叠、关掉一个声音又回到手机」。设备侧受控实验（`af3d7abd`，`dumpsys media.audio_policy`）：
-  - 一条采集时正常：多一个 `IOProfile name:r_submix output`、`Devices: {AUDIO_DEVICE_OUT_REMOTE_SUBMIX}` 的输出 ⇒ 应用音频被截走（手机静音、电脑出声）。
-  - 再起一条采集（音频-only 探针）：**两条都被接受**（`Inputs (2)`，各自 1 个 `State: Active` 的 `AudioRecord` client），路由仍指着 r_submix ⇒ **两条都拿到同一份混音 ⇒ 两个窗口都放 = 重叠**。
-  - **释放其中任意一条**（我的探针结束）：剩下那条**仍是 `Active`**，但 `AUDIO_DEVICE_OUT_REMOTE_SUBMIX` 那个输出**整条消失**（应用输出被挪回 `deep_buffer_out → SPEAKER`）⇒ 声音回到手机扬声器，电脑那边只剩静音。**路由是按"最近一次采集的生死"重置的，不是按引用计数。**
-  - ⇒ 结论：**音频是设备级的一条流，不是窗口级的**。同一台设备**同时只能有一条采集**，且它的生命周期不能挂在某一条窗口上。
-- **2026-10-14 落地（第三条，已全绿）**：镜像会话**恒 `audio: false`**（`buildMirrorOptions` 写死）；另起一条**纯音频会话**（`buildAudioOnlyOptions` = `{video:false, audio:true, control:false, sendDeviceMeta:false, sendStreamMeta:true, audioCodec:'opus', audioSource:'output'}`，jar 走**独立路径** `AUDIO_SERVER_PATH = /data/local/tmp/scrcpy-server-audio.jar`），由该设备**最早打开的镜像窗口**承载（`electron/mirror/audioHost.js` 的 `pickAudioHost`，纯函数 + 单测），那个窗口关掉时交给下一个幸存者（`mirror:audioHost`，**等旧窗口 `closed` 之后才发**）。设置页「声音输出」现在的语义 = **要不要起那条音频会话**（`resolveRuntimePrefs().audio`）。
-  - ⚠️ **起新采集前必须先确认设备侧把旧的拆干净了**（`mirror:audioIdle` → 主进程轮询 `dumpsys media.audio_policy | grep -c 'Devices: {AUDIO_DEVICE_OUT_REMOTE_SUBMIX'`，上限 4s）：**释放要 1.24~1.30s，不是瞬时的**（三轮 1283/1241/1298ms）。反序实测（新采集先起、旧的随后释放）：新会话**一直在收包**（461 个）但设备侧 `Outputs` 从 9 掉回 7、`Devices:` 不再指向 `REMOTE_SUBMIX` ⇒ **声音回手机、包照收** = 用户报的那个症状。
-  - ⚠️ `Devices: {` 前缀不能省：`Audio Patches` 段里那个同名字符串是**静态配置**，一直在。
-- **并行建两条会话几乎免费**（实测）：并行推两份 733KB jar 与推一份同为 ~1.28s，两条 `start()` 合计 ~0.31s，第一条音频包 ~1.72s —— 与单条视频会话（~1.65s）同时。所以「单窗口也走伴随会话」不亏，而且**只有一条音频路径**更好维护。
-- 未做的优化（`docs/TODO.md` 与 `NATIVE_MIRROR.md` 都记了）：接管空档 ≈ 1.3（等放开）+ 1.6（推 jar + start）≈ 2.9s；把音频 jar 在建镜像会话时**顺手并行预推**能降到 ~1.6s（代价：每窗口多推一份 733KB，并行时几乎免费；且要处理「宿主的音频 server 启动时会删掉自己那份 jar」这个竞态）。用户没提，先不做。
-- 用户口径最终版（10-11 深夜）：「这个不要抄了，把现在音频这个功能切换相关的代码删掉，就保留默认」⇒ **仍然没有运行时切换**（`openAudioSession` / `setAudioOnComputer` / 悬浮栏那颗按钮 / 探针 `pnpm audio:spike` 都不存在，别照着旧记录找）。10-11 删它是因为「切到电脑」一次要 1.8–3.5s（推 jar 1245ms + 起 server ~290ms + 音频元数据 ~280ms + 编码器首包 ~1.2s）—— **2026-10-14 那个形态又回来了，但理由完全不同**（修并发破坏，不是为了切换）。
-- ⚠️ **设备在投屏期间不出声，是 scrcpy 建会话时给音频路由定死的**（默认 `audio_source=output` → `AudioDirectCapture` 走 `REMOTE_SUBMIX`，采到回环就不再渲染到设备），控制协议里**没有任何音频路由消息**（随包 5.0.1 `Controller.java` 的 23 种 `TYPE_*` 里没有一项管音频）⇒ 想让某条**已经在跑**的会话开始/停止出声只能整条重来 —— 这正是音频要单独一条会话的原因（接管时只动音频，画面/虚拟显示/应用归属一律不碰）。**这条不会因为升 scrcpy 而改变**。
-- 机制事实（都在用）：① **每条会话都要自己推一次 jar** —— `Server.java:249` 建会话就 `CleanUp.unlinkSelf()` 删掉自己那份（所以两条会话必须用**不同路径**，不然互相踩，实测第二条不重推直接 `Aborted`），一次 1.25s；② **音频-only 会话必须 `sendDeviceMeta: false`** —— 上游把 64 字节设备名写在**第一个 socket** 上，没视频时那就是音频 socket，客户端会把设备名头 4 字节当编码号（真机报 `Unknown audio codec metadata value: 1298735153` = `0x4D692031` = "Mi 1"）；③ 服务端采不到音频时把流标 `disabled`（**不是抛错**，`audioStream` 回来的对象没有 `codec`/`stream`）⇒ 要显式认这一档，否则就是「点了没反应」。
-- 澄清两条源名口径（免得被带偏）：`mic` / `mic-*` / `voice-*` 全是**采麦克风**，与「手机出声还是电脑出声」无关；`audio_dup` 只作用于 `playback` 源，对默认 `output` 直采源是空操作。Tango 从 2.6 起就暴露 `audioSource: "playback"` 与 `audioDup`（旧结论「得先让 Tango 暴露它」是错的）。
-- 「静音」那一档（`capture on` + 本地 `gain 0`，与「电脑」一样让设备静音）用户 10-11 明确**先不做** —— 别当需求捡回来。
-## 设备电源状态：`Hangup` 与「屏灭」判据
+- ⚠️ 一律 `env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS <cmd>`（WorkBuddy 自己是 Electron，不清掉会被当 node 跑）。
+- `pnpm dev` 的 vite 与它拉起的 Electron 同生共死 ⇒ 要给 Electron 加参数就走**生产包**：`env -u … npx electron . --no-sandbox --remote-debugging-port=9333`（**9222 常被 Chrome 占**）。
+- 驱动 = CDP + 生产 IPC：`curl 127.0.0.1:9333/json/list` 拿目标 → `Runtime.evaluate` 调 `window.electronAPI.mirror.*`；镜像窗另有 `window.__anddriveIpc`。**关窗用渲染层 `window.close()`**（= 用户点红点）。⚠️ `startMirrorSession` 会**复用**同 `serial + packageName` 的会话 ⇒ 开第二个窗必须换包名（`com.miui.calculator` / `com.miui.notes`）。收摊：删临时脚本、把用户的 `pnpm dev` 起回来。
+- ⚠️ **Node 内置 `WebSocket` 就够**（不必装库），但脚本末尾一定要 `process.exit(0)`，否则连接挂着进程不退出、命令永远不返回。**`start` 别用 `awaitPromise`**（推 jar + 建会话要十几秒，evaluate 会一直挂着）⇒ 改成"fire and forget + 轮询 `window.__startResult`"。
+- ⚠️ **要验"真实输入语义"（指针捕获 / hover 链 / 点击链 / 原生拖拽）必须用 CDP `Input.dispatchMouseEvent`**（2026-10-16 第三轮实测**确实到达 renderer**，同轮推翻了上一轮"到不了 renderer"那条错结论 —— 当时八成发在了别的 target，或 `button` / `buttons` 没带全）。序列：`mouseMoved{buttons:0}` → `mousePressed{button:'left',buttons:1,clickCount:1}` → `mouseReleased{buttons:0,clickCount:1}`（拖拽就在中间插几步 `mouseMoved{buttons:1}`）。⚠️ **合成 `PointerEvent` 测不出捕获语义**：`setPointerCapture` 对不在活跃指针表里的 id 会抛、直接走 `catch` ⇒ 上一轮"验过按钮还能点"是**假绿**，回归漏到了用户手里。合成事件只在"只想触发一遍 Vue 处理链"时才用。⚠️ 读 computed style 要**分两次 evaluate**：Vue 的更新在微任务，同一个同步块里读到的还是旧值。
+- ⚠️ **`screencapture -R x,y,w,h` 不是不能用，是要先摆对**（2026-10-17 跑通）：坐标单位是**点**，且窗口被别的窗口盖住时截到的是别人的内容 ⇒ ① 先把目标窗 `mirror.focus(id)` 提到前台；② 矩形别猜 —— 在渲染层读 `window.screenX/screenY + innerWidth/innerHeight`（实测与屏幕坐标一致，`dpr=2` ⇒ 截出来是 2 倍像素）；③ `screencapture -x -R "$L,$T,$W,$H" out.png`。**这是唯一能验 AppKit 画的东西（三颗彩虹键、窗口圆角外的透明区）的办法** —— CDP 看不到它们（`Browser.getWindowForTarget` 在 Electron 里**不存在**，别找）。CDP 仍然更适合量 DOM 几何。⚠️⚠️ **窗口没聚焦时 macOS 把三颗画成灰色空心圈**（不是彩色）⇒ 按 macOS 原色 `#FF5F57/#FEBC2E/#28C840` 数像素会**一张都数不到**（2026-10-17 差点据此判成"改坏了"）。**每张截屏前都要 `mirror.focus(id)`** —— 只在脚本开头 focus 一次不够。三颗在窗口内容区 `(20,21)`、直径 14（`-R` 是 2 倍像素）。⚠️⚠️ **要动真光标就用 Quartz，别指望 CDP**（2026-10-17 第八轮跑通）：`CGEventPost` 的 `mouseMoved` 会更新 OS 光标位置、**真的会触发原生 hover 链**（CDP 的 `Input.dispatchMouseEvent` 只发 MouseEvent、不动光标 ⇒ 验不了"指针在不在窗口里"这类判据）。`pyobjc-framework-Quartz` 装进托管 venv 即可（`CGWarpMouseCursorPosition` 也行，但它之后系统会短暂压制事件，优先用 `CGEventPost`）。两个新坑：① **窗口不是 key window 时收不到 `mouseMoved`**（探针台第一版一个事件都没有，`win.focus()` 之后全回来了；真机那一侧就是每张截屏前的 `mirror.focus(id)`）；② **合成的双击认不出来** —— `CGEventCreateMouseEvent` 造的点击 `clickState` 恒为 1，必须 `CGEventSetIntegerValueField(ev, kCGMouseEventClickState, 2)` 补第二下，否则 `dblclick` 永远不来（第一版据此差点判成"双击回位坏了"）。
+- ⚠️ **想验 `-webkit-app-region` 的行为，最小探针台比真机快得多**（2026-10-17 第八轮）：`/tmp` 里放一对 `main.js` + `index.html`，建窗参数照抄 `createMirrorWindow`，`nodeIntegration: true` 就够（页面里 `require('electron').ipcRenderer.invoke('bounds'|'focus'|'move')`）。**drag 区的结论（进它只发一条 `pointerout`、从它滑出窗口一个事件都没有、`no-drag` 层压上去事件照常到 DOM、`pointer-events:none` 的 drag 层照样赢）全是在这儿钉死的**，不用连设备、不用建会话。⚠️ 关窗后复查设备：`settings get secure synergy_mode` 回到 **0** = 收摊链跑通了；`stay_on_while_plugged_in` 停在 **7** 若与 synergy 同时正常，多半是**那台机原本的值**（还原是"读原值→写 7→关会话写回原值"），别乱 `put 0`。
 
-- 设备两条一手读数（一次 adb 调用一起拿，见 `electron/adb.js` 的 `getPowerState`）：`mWakefulness`（`dumpsys power`）+ SurfaceFlinger 的 `powerMode`（`dumpsys SurfaceFlinger`）。
-- ⚠️ **`Hangup` 态下 `powerMode` 报的是 `On`**（面板物理灭着、合成照跑）—— 所以**不能拿 `powerMode` 判 `Hangup` 的屏灭**，要按 `mWakefulness` 认。
-- 判据分两个集合（`src/mirror/sleepWatch.js`，**语义不同别合并**）：
-  - `FROZEN_STATES = {Asleep, Dozing}` → 「要不要弹『已休眠』」（画面是否停帧）。
-  - `PANEL_OFF_STATES = FROZEN_STATES + Hangup` → `panelIsOff()` 用它判「算不算屏灭」。
-- **`Hangup` 只在 bedtime（超时灭屏）那条路上出现**；**按电源键**走 `goToSleep` → `Asleep`。而 `mStayOn=true`（`stay_on_while_plugged_in=7` + 插电）会让 bedtime 压根不发生 —— 复现 `Hangup` 前先确认这两点。
-- **把屏弄亮的两条路能力不同**（`needsRealWake()` 分流）：设备不是 `Awake`（`Asleep`/`Dozing`/`Hangup`）时必须走**真唤醒** `input keyevent 224`（`setDisplayPower(Normal)` 唤不动，实测 `Hangup` 下发后 8 秒仍 `Hangup`）；设备 `Awake` 时屏是我们用 `setDisplayPower(OFF)` 关的，回 `Normal` 就对（不占 `INJECT_EVENTS`，更稳）。
-- **`Hangup` 下触摸注入不会被丢弃**（10-11 实测）：注入「下拉通知栏」、**不唤醒**直接 `screencap`（Hangup 下 SF 照常合成，截图有效）能拿到已展开的通知栏。**但注入触摸不是唤醒路径** —— 普通 `Asleep` 下同样唤不醒（对照组），非 `Hangup` 特有。⇒ 镜像里点击/滑动能用，但点一下不会把手机点醒；唯一唤醒入口仍是 `input keyevent 224`。
-- **手工复现 `Hangup` 的命名空间**：`settings put `**`secure`**` synergy_mode 1` —— 写成 `global` **静默无效**（`beginSynergy()` 读 `Settings.Secure`），设备会照常走普通 `Asleep`。配 `stay_on_while_plugged_in=0`，唤醒后静置过 `screen_off_timeout` 即进 `Hangup`。
+- ⚠️ **"屏幕上还留着东西"一律扫 `document.body`，别只扫 `.mirror-window *`**（2026-10-17 踩过）：**portal / Teleport 出去的东西在窗外** —— reka 的 tooltip 气泡就挂在 `body` 上，只扫窗口那棵子树永远看不见它，差点把真凶判成"命中区"。⚠️ 同一条勘查里还有两个坑：① 扫可见元素要**沿祖先链查 `opacity`**（`.mirror-rail__panel` 自己 `opacity: 0`，里面的 `.mirror-rail__key` 仍是 `opacity: 1`，只看自身会当成"按键还露着"）；② **CDP 的 `mouseMoved` 单发一条逼不出 reka 的气泡**，要连续几条（模拟真实轨迹）才会出来 —— 悬停只等 600ms 也白等。
+- ⚠️ **收摊前别 `kill` 进程**：`kill` 掉 Electron 就绕过了 `stopMirrorSession`，设备的 `synergy_mode` / `stay_on_while_plugged_in` 会留在我们改过的值上。**先走生产 IPC `mirror.stopAll()`、复查设备（`synergy_mode` 回 0），再关实例。**
 
-## 镜像会话的收摊：只有一个入口
+## 设备
 
-- `electron/mirror/session.js` 的 **`stopMirrorSession(id)` 是唯一收摊入口**（还原 `miProjectionRestore` / `keepAwakeRestore`、`releaseMacKeyboard`、关窗、`goHome`）。关窗 / 断开设备 / ⌘Q / **server 意外退出**四条路都走它。
-- ⚠️ **别在别处 `sessions.delete(...)` 代替它**：还原函数挂在会话记录上，记录一删就再也调不到，设备的 `synergy_mode` / `stay_on_while_plugged_in` / 默认输入法会永远留在我们改过的值上（2026-10-11 修过一次：`mirror:state` 的 `exit` 分支就踩了这个）。
-- 重复调用安全：`if (!session) return false` ⇒ 后到的那个自然空转，所以两条路撞上不用加锁。
-- ⚠️ **`stopMirrorSession` 是在窗口 `closed` 的处理器里被调的**（`createMirrorWindow` 里那行 `win.on("closed", …)`）⇒ 那一刻窗口**已经销毁**（`isDestroyed()` 为真）。**任何"等这个窗口真的关掉再做事"的逻辑，都不能指望在 `closed` 派发途中挂上去的 `once("closed")` 监听** —— `emit` 对本次用的是监听器快照，它永远不会为这一次触发。要么用 `isDestroyed()` 早退走"当场做"，要么挂 `close`（早一拍）。（2026-10-14 音频移交给接手的那个窗口就踩在这上面：早退分支才是生产路径，`once("closed")` 只兜「窗口还活着」那条路。）
+- **Mi 10（`umi`，serial `fb637d72`）**：Android 13 / SDK 33 / `wm size` 1080×2340 / density 440（2026-10-16 用户这台就是它）。
+- **`af3d7abd`** = model 2509FPN0BC / Android 17 / SDK 37（旧记录把它写成 Mi 10 / 13 是错的，设备换过）。音频判据：采集数 `dumpsys media.audio_policy | grep -c 'Devices: {AUDIO_DEVICE_OUT_REMOTE_SUBMIX'`（`grep -c` 无匹配退出码 1，要 `|| true`）；"在实时收"看 `dumpsys media.audio_flinger` 里 REMOTE_SUBMIX 输入线程（`type 3 (RECORD)`）的 `Frames read` 增量；进程 `ps -A -o ARGS | grep 'scrcpy.Server'`。
 
-## 「插电不休眠」泄漏的症状与判据（排障用）
+## 工程约定
 
-- 症状：**退出镜像后手机亮度像被调到最低、而且屏幕不灭**。
-- 判据（别去翻亮度代码 —— 全仓库没有任何写设备亮度的地方）：
-  ```
-  adb shell settings get global stay_on_while_plugged_in   # 停在 7 = 我们的残留
-  adb shell dumpsys power   | grep -E "mStayOn=|mWakeLockSummary=|mUserActivityTimeoutOverride"
-  adb shell dumpsys display | grep -E "policy=|mBrightness="
-  ```
-  典型读数：`mStayOn=true`、`mWakeLockSummary=0x0`（不是 wakelock）、`policy=DIM`、`mBrightness == mScreenBrightnessDimConfig`。
-- 机制：`mStayOn=true` ⇒ `isItBedTimeYetLocked()` 为假 ⇒ 超时那条路走不到 `goToSleep` ⇒ 显示策略**永远停在息屏前的 `DIM`** ⇒ 屏幕亮着、最暗、不灭。**是"卡在变暗档"，不是"亮度被调低"。**
-- 修：`adb shell settings put global stay_on_while_plugged_in 0`（AOSP 默认；7 是 app 写的值，所以 7 基本可判定为我们的残留）。
-
-## 从本 agent 里把应用跑起来做真机验收（2026-10-14 跑通过，照抄这套）
-
-- ⚠️ **`ELECTRON_RUN_AS_NODE=1` 会继承进来**（WorkBuddy 自己是 Electron）。不清掉的话 Electron 会**当 node 跑**，报 `The requested module 'electron' does not provide an export named 'BrowserWindow'`。⇒ 一律 `env -u ELECTRON_RUN_AS_NODE -u NODE_OPTIONS <cmd>`。
-- ⚠️ **`pnpm dev` 的 vite 与它拉起的 Electron 同生共死**（杀掉 Electron，vite 也退）⇒ 给 Electron 加参数（`--remote-debugging-port`）不能"杀子留父"，走**生产包**：`env -u ... npx electron . --no-sandbox --remote-debugging-port=9333`（`dist/` + `dist-electron/` 建好即可，无 `VITE_DEV_SERVER_URL` 就走 file://）。**9222 常被 Chrome 占，用 9333。**
-- 驱动 = **CDP + 生产 IPC**：`curl 127.0.0.1:9333/json/list` 拿目标 → `Runtime.evaluate`（`awaitPromise`）里调 `window.electronAPI.mirror.*`（`config` 从 `electronAPI.scrcpyConfig.get()` 拿）。**镜像窗**另有 `window.__anddriveIpc`（非隔离窗口 preload 才挂）：`invoke('mirror:initGet')` 认身份 / 埋 `ipc.on('mirror:audioHost')` 探针。**关窗用渲染层 `window.close()`**（= 用户点红点那条路，比 `mirror:stop` 更真）。
-- ⚠️ `startMirrorSession` 会**复用**同 `serial + packageName` 的既有会话 ⇒ 开第二个窗口必须**换包名**（`com.miui.calculator` / `com.miui.notes` 好用）。
-- 收摊记得：删临时脚本（用完即删）、把用户的 `pnpm dev` 起回来。
-
-## 设备与音频实测基线（2026-10-14 更新）
-
-- 当前测试设备 `af3d7abd` 报的是 **model 2509FPN0BC / Android 17 / SDK 37** —— 旧记录里同一个 serial 写的是 **Mi 10 / Android 13**，**设备换过了**，别再按 Mi 10 的口径推。
-- 判据（都真机验过）：采集数 = `adb shell "dumpsys media.audio_policy | grep -c 'Devices: {AUDIO_DEVICE_OUT_REMOTE_SUBMIX'"`（**`grep -c` 无匹配时退出码 1，要 `|| true`**，只看 stdout 数字）；"在实时收"看 `dumpsys media.audio_flinger` 里 REMOTE_SUBMIX **输入**线程（`type 3 (RECORD)`）的 `Frames read` 增量（48kHz 下 4 秒 ≈ 19.2 万帧）；进程用 `ps -A -o ARGS | grep 'scrcpy.Server'`（`ps -A | grep com.genymobile.scrcpy` 匹配不到）。
-- **双窗口音频已端到端验收通过**（两窗共存时设备侧恒 1 条采集、关宿主窗后 +276ms 推送到幸存者、采集 1422ms→0 / 1745ms→1、新音频会话 scid 换新、关非宿主窗全程无波动）。全部读数见 `docs/NATIVE_MIRROR.md` §3「音频转发」那条。
-
-## 工程约定（本仓库）
-
-- 纯换算/判据抽成可测模块（`src/mirror/*.js` + `tests/mirror/*.test.js`），组件里只绑样式。
-- 改完必跑：`pnpm lint`、`pnpm typecheck`、`pnpm test`、`npx vite build`。
+- 纯换算 / 判据抽成可测模块（`src/mirror/*.js` + `tests/mirror/*.test.js`），组件里只绑样式。
+- 改完必跑 `pnpm lint` / `pnpm typecheck` / `pnpm test` / `npx vite build`。
 - 改动同步 `docs/NATIVE_MIRROR.md`（按 Slice 编号累加"第 N 轮"）与 `docs/TODO.md` §6.2。

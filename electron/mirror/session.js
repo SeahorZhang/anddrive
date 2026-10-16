@@ -33,6 +33,7 @@ import {
   mirrorRailFloats,
   mirrorTrafficLightPosition,
   mirrorScreenInsets,
+  mirrorVirtualWindowSize,
   mirrorWindowBounds,
   mirrorsMainDisplay,
   resolveRuntimePrefs,
@@ -109,11 +110,13 @@ function createMirrorWindow(session, prefs, bounds, ratio, railFloating) {
     // 三颗彩虹键钉进**顶部那条标题栏**（用户 2026-10-12：「试试 a 的变体，上边加一条专门放三个按钮和
     // app 名称」；10-11 那条「恢复默认，不要有任何修改」到此为止）。落点与窗口宽无关 ⇒ `resize` 里
     // 什么都不用做（10-10 把它们贴进右侧长条时，落点 = 窗口宽 − 长条宽 + 内缩，每次改大小都得重算，
-    // 漏一次就留在旧位置 —— 那条坑这次从根上没有了）。**显隐照样不碰**：常驻，不跟长条 hover 走。
+    // 漏一次就留在旧位置 —— 那条坑这次从根上没有了）。**显隐跟着长条走**（见 `mirror:windowButtons`，
+    // 2026-10-17 用户：「3个彩虹按钮没有跟着右边悬浮栏显示隐藏」）。
     // 三颗彩虹键的落点**分两档形态**（用户 2026-10-14 第四条）：窗口态钉在顶部标题栏里垂直居中；
     // 长条浮起来那一档标题栏整条不存在、窗口顶就是画面顶 ⇒ 落点要让开画面的圆角（见 `options.js`
     // 的 `floatLightX/Y`）。两档都与窗口宽无关 ⇒ `resize` 里什么都不用做；**翻转形态时要重设一次**
-    // （`mirror:windowButtons` 那条）。**显隐照样不碰**：窗口态跟 chrome 显隐、浮动态常驻。
+    // （`mirror:windowButtons` 那条）。**显隐也跟着长条走**（`railShown`；收那一拍渲染层会延
+    // `MIRROR_RAIL.fadeOutMs` 等面板淡完，理由见 `App.vue` 的 `syncWindowButtons`）。
     trafficLightPosition: mirrorTrafficLightPosition(railFloating),
     // **本体仍然透明**（2026-10-09 定稿，10-12 一度照竞品改成不透明浅灰窗，当天被否：
     // 「竞品是鼠标移到边框上才那个样子，没移上去就是个手机样子」）⇒ 那层灰底是**涂装**，
@@ -150,7 +153,7 @@ function createMirrorWindow(session, prefs, bounds, ratio, railFloating) {
   // 长条浮在画面里时右边那一截不算余量（那 86px 已经归画面了），余量随形态走，见 `railFloatingStates`。
   aspectRatios.set(win, ratio);
   railFloatingStates.set(win, railFloating === true);
-  if (ratio) win.setAspectRatio?.(ratio, mirrorContentExtraSize(0, railFloating));
+  if (ratio) win.setAspectRatio?.(ratio, mirrorContentExtraSize(0));
   win.once("ready-to-show", () => {
     win.show();
     // 「全屏启动」在 show 之后落地（构造参数那条路在 macOS 上不可靠，见上面 `fullscreenable` 的注释）。
@@ -380,17 +383,23 @@ export async function startMirrorSession(request) {
   const deviceMirror = wholeDevice || mirrorsMainDisplay(sdk);
   const serverPath = scrcpyServerPath(deviceMirror ? { largeScreenDisplay: false } : undefined);
   const workArea = screen.getPrimaryDisplay().workArea;
-  // 长条摆在哪（用户 2026-10-14：「投屏宽度足够宽就改成全屏那种浮在画面里的样子」）：
-  // **建窗口时先算一次**，之后由渲染层实时跟着窗口宽改（`mirror:railFloat`）。
-  // 判据全项目只有一处（`mirrorRailFloats`），`previous = false` 就是「长条在外面」那套几何 ——
-  // 窗口刚开出来正是这个形态，所以这一步与渲染层第一拍量出来的结论同源同值。
-  const baseBounds = mirrorWindowBounds(screenSize, workArea);
-  const baseInsets = mirrorScreenInsets();
-  const railFloating = mirrorRailFloats(baseBounds.width - baseInsets.left - baseInsets.right);
-  // 浮起来之后右边那条 86px 归画面 ⇒ 按新内缩重 fit 一次（同一个 `screenSize` / `workArea`）。
-  // 窗口不会因此变大：宽不够（横形显示）时是画面吃掉这 86px，宽够（竖形显示）时窗口跟着窄 86px。
-  const bounds = railFloating ? mirrorWindowBounds(screenSize, workArea, true) : baseBounds;
-  const insets = mirrorScreenInsets(railFloating);
+  // 窗口开多大 —— **两档两套形状**（默认模式的虚拟显示尺寸取自窗口画面区的物理像素，
+  // 窗口形状不对会开出一块错形状的显示，里面的 app 第一帧就按错形状排版）：
+  // - **采主屏那档**（整机镜像 / 13 及以下点应用）：照**设备画面比例** fit 到可用区 ——
+  //   窗口形状与手机那块屏一一对应（还要按它锁拖拽比例，见下面的 `ratio`）。
+  // - **独立虚拟屏那档**（14+ 点应用 / 桌面模式建的 flex 显示）：**920 x 660 两个点名值**
+  //   （用户 2026-10-16：「宽度调成920px。高度按 mac 屏幕比例调整」→「高度调整到660」）。
+  //   这一档的窗口形状与手机那块屏没有对应关系 —— 那是我们自己建的显示，窗口什么形状它就什么形状。
+  // ⚠️ 2026-10-16 起内缩恒为 0（黑框去掉、长条改成浮在画面上的胶囊、标题栏退场）⇒ **窗口 = 画面**：
+  // 不再有"浮起来之后按新内缩重 fit 一次"那回事（右边那条 86px 已经不存在了）。
+  const bounds = deviceMirror
+    ? mirrorWindowBounds(screenSize, workArea)
+    : mirrorVirtualWindowSize(screenSize);
+  // 长条浮没浮：**2026-10-16 起恒真**（长条改成浮在画面顶部右侧的小胶囊，不再占布局，
+  // 两档形态的分化随之退场，判据失去分辨力 —— 见 `mirrorRailFloats`）。
+  // 这一拍仍然要算一次：三颗彩虹键的落点与比例锁余量都读它（`createMirrorWindow`）。
+  const railFloating = mirrorRailFloats();
+  const insets = mirrorScreenInsets();
   // 拖拽锁比例用的画面比例：与上面的初始尺寸同源（同一个 `screenSize`），两处各读一次会打架。
   // ⚠️ **只有采主屏那一档锁**（整机镜像、13 及以下点应用）：那块屏的形状归手机，窗口拖成别的比例
   // 只会露黑边或裁切（用户 10-11：「不可以随意更改，只能按手机比例拖拽宽度和高度」）。
@@ -672,12 +681,16 @@ ipcMain.handle(CHANNELS.mirrorMacKeyboard, async (event, action) => {
 
 /** 设备侧按了胶囊上的 ×（渲染层的桥收到 `yield` 转过来）：让出，不再抢也不再送字。 */
 /**
- * 渲染层显隐那层 chrome（浅灰底 + 标题栏 + 长条）时，把系统那三颗一起开关。
+ * 渲染层显隐那层 chrome（长条 + 那三颗）时，把系统那三颗一起开关。
  * 用 `on` 不用 `handle`：纯表现层的一刀，没有要等结果的地方。
  *
- * 载荷是 `{ shown, railFloating }` 而不是单个布尔 —— 三颗的**落点分两档形态**（窗口态钉在标题栏里、
+ * 载荷是 `{ shown, railFloating }` 而不是单个布尔 —— 三颗的**落点**跟形态走（窗口态钉在标题栏里、
  * 浮动态让开画面圆角，见 `mirrorTrafficLightPosition`），所以每次开关都要按当时的形态重设一次位置：
  * 只改显隐不重设，翻转形态后三颗会留在上一档的落点上（浮动态就会重新压回圆角里）。
+ *
+ * ⚠️ **显隐的时机由渲染层定**（`App.vue` 的 `syncWindowButtons`）：`shown` 就是 `railShown` ——
+ * 长条显形它们才在。**收那一拍渲染层会延 `MIRROR_RAIL.fadeOutMs`**（三颗是 AppKit 画的、没有淡出可跟，
+ * 面板还没淡完就收会看到"条还在半透明、三颗已经没了"）。这里只管照办，不自己加计时。
  */
 ipcMain.on(CHANNELS.mirrorWindowButtons, (event, payload) => {
   const win = BrowserWindow.fromWebContents(event.sender);
@@ -750,17 +763,16 @@ ipcMain.handle(CHANNELS.mirrorDesktopMode, async (event) => {
 const hudExtras = new WeakMap();
 
 /**
- * 按当前「dev 边栏占多宽 + 长条浮在画面里没有」重设一次拖拽比例锁。
- * 余量（`mirrorContentExtraSize`）随这两件事变，漏设一次「画面 = 设备比例」这条等式就破了
+ * 按当前「dev 边栏占多宽」重设一次拖拽比例锁。
+ * 余量（`mirrorContentExtraSize`）随它变，漏设一次「画面 = 设备比例」这条等式就破了
  * —— 采主屏那档画面会比设备比例宽/窄一截，圆角里当场露出 letterbox 黑条。
+ * ⚠️ 2026-10-16 起内缩恒为 0（画面 = 窗口）⇒ 余量只剩 dev 边栏那一截；
+ * 以前还有「长条浮没浮」这一项，随两档形态的分化一起退场了。
  */
 function relockAspect(win) {
   const ratio = aspectRatios.get(win) ?? 0;
   if (!ratio) return;
-  win.setAspectRatio?.(
-    ratio,
-    mirrorContentExtraSize(hudExtras.get(win) ?? 0, railFloatingStates.get(win) ?? false),
-  );
+  win.setAspectRatio?.(ratio, mirrorContentExtraSize(hudExtras.get(win) ?? 0));
 }
 
 ipcMain.on(CHANNELS.mirrorWindowHud, (event, extra) => {

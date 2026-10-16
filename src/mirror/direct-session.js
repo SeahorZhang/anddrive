@@ -314,8 +314,12 @@ function ipcInvoke(channel, ...args) {
 }
 
 /**
- * chrome（浅灰底 + 标题栏 + 那三颗）显形/收起。系统画的三颗 CSS 盖不住，只能请主进程开关。
+ * chrome（长条 + 那三颗）显形/收起。系统画的三颗 CSS 盖不住，只能请主进程开关。
  * 不 invoke 只 send：纯表现层，没有要等结果、也没有会失败的地方。
+ *
+ * ⚠️ **显隐跟着长条走**（`shown` = `railShown`）：长条显形它们才在。**收那一拍由调用方延
+ * `MIRROR_RAIL.fadeOutMs`** —— 三颗是 AppKit 画的、没有淡出可跟，面板还没淡完就收会看到
+ * "条还在半透明、三颗已经没了"（见 `App.vue` 的 `syncWindowButtons`）。这里只管转发。
  *
  * ⚠️ **形态一起报过去**（`railFloating`）：三颗的**落点分两档**（窗口态钉在标题栏里、浮动态让开
  * 画面圆角，见 `electron/mirror/options.js` 的 `mirrorTrafficLightPosition`）。主进程拿不到形态

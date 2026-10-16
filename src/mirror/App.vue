@@ -9,10 +9,10 @@ import { capsuleBox, capsuleRect, macTextCapsule } from './macTextCapsule.js'
 import { scaleDisplayDpi } from '../../shared/scrcpyConfig.js'
 import { aspectDiffers, createReflowGate } from './displayFollow.js'
 import { createChromeReveal, chromeZone } from './chromeReveal.js'
-import { clampRailTop, railAnchorTop } from './railDock.js'
+import { clampRailPos, clampRailTop, railAnchorTop, RAIL_DRAG_THRESHOLD } from './railDock.js'
 import { FROZEN_STATES, needsRealWake, panelIsOff } from './sleepWatch.js'
 import { KEY_CODES } from '../../shared/keys.js'
-import { MIRROR_FRAME, MIRROR_RAIL, MIRROR_TITLEBAR, MIRROR_SCREEN_RADIUS, mirrorRailFloats, mirrorTitlebarNameLeft } from '../../electron/mirror/options.js'
+import { MIRROR_FRAME, MIRROR_RAIL, MIRROR_TITLEBAR, MIRROR_SCREEN_RADIUS, mirrorRailFloats, mirrorRailTop, mirrorTitlebarNameLeft } from '../../electron/mirror/options.js'
 
 // 镜像窗口（渲染层直连）：adb/scrcpy 全在本进程内由 Tango 官方库建立，
 // 视频包直接写 WebCodecs 解码器、音频包直接播放，主进程不参与帧路径。
@@ -36,23 +36,21 @@ const HUD_WIDTH = 240
  */
 watch(showHud, (open) => setHudExtra(open ? HUD_WIDTH : 0))
 /**
- * 手机**右边外面**那条悬浮长条（返回/Home/多任务 + 那几颗开关）：平时不画，鼠标进到窗口右边那一条
- * 才淡入，**离开那一条 1 秒后收回**（用户 2026-10-10 第三次改，作废「只有移出窗口才收」；
- * 状态机在 `chromeReveal.js`）。红绿灯不跟着开关 —— 用户 2026-10-11 定「恢复默认，不要有任何修改」，
+ * 操作条（返回/Home/多任务 + 那几颗开关）：平时不画，鼠标进到它的区域才淡入，**离开 1 秒后收回**
+ * （状态机在 `chromeReveal.js`）。红绿灯不跟着开关 —— 用户 2026-10-11 定「恢复默认，不要有任何修改」，
  * 落点与显隐全归 AppKit。
  *
  * 条上那颗**「一直显示」**（2026-10-11 用户点单）：按下去常驻、不再自动收，再按一次回到上面那套
  * hover 显隐（状态在 `railPinned`，判据在 `chromeReveal.js` 的 `setPinned`）。
  *
- * 2026-10-10 三轮定稿：先把外面那圈「hover 才往外扩」的浅色窗口底整块删了（黑框那圈留着常驻），
- * 又把长条从**画面里面**挪到**画面外面** —— 「任何 UI 都不要在手机里出现」。
- * 挪出来意味着它**占窗口宽度**（进 `mirrorScreenInsets()` 的右边），换来的是：
- * 触发不用按坐标筛（那条本来就是它自己的格子），也不会吃掉手机画面右缘的点按。
- *
- * **2026-10-14 加一档**（用户：「如果手机投屏宽度足够宽，那就把手机投屏右侧的操作栏更改为全屏时
- * 在投屏里浮动的样子」）：画面宽 ≥ `MIRROR_RAIL_FLOAT_MIN_SCREEN_WIDTH` 时换成满屏那套浮动态
- * —— 那 86px 归画面、白胶囊浮在画面右上（判据与状态见 `railFloating`，样式见 CSS 里
- * `.mirror-window.is-rail-float` 那一组）。窄画面（普通竖屏手机窗口）仍是上面这条「在外面」。
+ * **2026-10-16 换成现在这个形态**（用户：「镜像投屏的时候将黑色手机边框去掉，右侧悬浮更改为上方很小
+ * 的悬浮，有一种透明玻璃质感」+「浮动到画面顶部右边，跟 mac 3 个彩虹按键对齐」+「鼠标移入到上边悬浮
+ * 按钮区域才显示」）：它是**浮在画面顶部右侧的一条横向玻璃胶囊**，纵向与三颗彩虹键中线对齐，
+ * 不占布局。前几版都已作废，别照着旧记录找：
+ * - 2026-10-10：挪到**画面右边外面**（占窗口宽度、按坐标筛触发）；
+ * - 2026-10-14：画面够宽时再换成"浮在画面右侧、上下居中"（`MIRROR_RAIL_FLOAT_MIN_SCREEN_WIDTH`）。
+ * 两者连同"两档形态"一起退场（判据 `mirrorRailFloats` 现在恒真，见 `railFloating`）。
+ * 样式在 CSS 里 `.mirror-window.is-rail-float` 那一组，几何出处是 `options.js` 的 `MIRROR_RAIL`。
  */
 /**
  * 满屏那一屏（绿色按钮 zoom / 设置里的「满屏启动」）是**另一种形态**：手机要在整块屏幕正中，
@@ -79,67 +77,61 @@ const windowTitle = ref('')
  */
 const edgeToEdge = computed(() => fullscreen.value && virtualDisplay.value)
 /**
- * 长条的触发**只有一条路**：监听挂在 **window** 上，按坐标判进出。判据分两档：
+ * 长条的触发判据。**2026-10-16 起分两条路**（用户这一轮点的显隐方式是「鼠标移入到上边悬浮按钮区域才显示」）：
  *
- * **窗口态**（长条在手机右边外面那一格）—— chrome 是一个 **L 形**（右边长条 + 上边那条），
- * 两条臂都算触发区（用户 2026-10-12「鼠标移动到右侧和上边都要展示边框」）。进 86px（横）/ 12px（竖）
- * 才显形，两条臂**都**越出各自 +120 才算离开，中间那一圈保持现状（迟滞，判据在 `chromeZone`）。
- * 上臂只有 `MIRROR_TITLEBAR.revealHeight` 那一截收得到事件（顶条其余是 drag 区，drag 里 Chromium
- * 不发指针事件），所以进线就按那一截算；出线仍多给 120px —— 鼠标停在按钮上或稍挪一点就当场收一半
- * 再弹回，就是「一闪一闪」。
+ * **窗口态**（唯一形态：窗口 = 画面，操作条是浮在画面顶部右侧的一条玻璃胶囊）——
+ * 触发区是**两块 DOM**，都由元素自己的 `pointerenter` / `pointerleave` 接，**不走坐标判**：
+ * ① 头部那条（`.mirror-float-drag`，整窗宽 × `floatDragHeight`）—— 用户 2026-10-17
+ *    「鼠标移动到头部可拖拽的地方就展示出来」；
+ * ② 胶囊自己的命中区（`.mirror-rail` = 胶囊 + 一圈外扩）—— 让它"贴着胶囊上下挪"时也保持显形。
+ * 理由：胶囊浮在画面上、宽度随内容变（按钮数随条件渲染：桌面模式那颗只在采主屏那档出、
+ * dev 那格只在开发时出），它的命中区正是 DOM 自己知道的那个矩形；按坐标另算一套只会两边漂。
+ * 这一路**不进** `onScreenPointerMove`（坐标判只服务满屏那两档）。
  *
- * **浮动态**（画面够宽、长条浮在画面里）—— 判据换成**「指针在不在画面里」**（用户 2026-10-14 第二条：
- * 「只有鼠标移入内容区才显示出来，不要移动到右边就展示」）：浮动态没有右边那条臂了（那 86px 已经
- * 归画面），"移到右边"在那一档根本没有对应的矩形，硬留着就是"鼠标压着画面右缘 86px 才弹"。
- * 所以这一档按 `.mirror-main` 的矩形判（浮动态它就是画面那一格），进就 poke、出就 leave
- * （leave 本身还延 `hideAfterMs` 才收，不用再叠一层迟滞）。
+ * **满屏那两档**仍按坐标判 —— chrome 是一个 **L 形**（右边长条 + 上边那条），两条臂都算触发区
+ * （用户 2026-10-12「鼠标移动到右侧和上边都要展示边框」）。进 `fullscreenWidth`（横）/
+ * `revealHeight`（竖）才显形，两条臂**都**越出各自 +120 才算离开，中间那一圈保持现状（迟滞，
+ * 判据在 `chromeZone`）。上臂只有 `MIRROR_TITLEBAR.revealHeight` 那一截收得到事件（顶条其余是
+ * drag 区，drag 里 Chromium 不发指针事件），所以进线就按那一截算；出线仍多给 120px ——
+ * 鼠标停在按钮上或稍挪一点就当场收一半再弹回，就是「一闪一闪」。
  *
- * 为什么不是「挂在长条自己那一格 + 按格子矩形判移出」（2026-10-11 之前的写法，两条都作废）：
- * - 满屏那一档长条浮在画面上，格子若吃事件就把画面右缘 86px 的点按抢走了；
+ * 为什么满屏那两档不改成「挂在长条自己那一格 + 按格子矩形判移出」（2026-10-11 之前的写法，作废过）：
+ * - 那一档长条浮在画面上，格子若吃事件就把画面右缘那一截的点按抢走了；
  * - 格子矩形只到面板那么高（约 361px），而想摸条的人是从**任意高度**贴过来的 ⇒ 顺着边缘往下挪一点
  *   就被判「移出格子」，条当场收 —— 用户报的「移过去显示后立马消失」；
  * - 事件挂在格子上还会漏：tooltip portal 到 body，指针压到它上面时事件不经过那棵树 ⇒ 「移几次才出得来」。
- * 浮动态这条按**坐标**判还有一条好处：tooltip 浮在画面上时坐标仍在画面里 ⇒ 不会因为它被判成"出界"。
+ * 按**坐标**判还有一条好处：tooltip 浮在画面上时坐标仍在画面里 ⇒ 不会因为它被判成"出界"。
  */
-const CHROME_ENTER = { x: MIRROR_RAIL.width, y: MIRROR_TITLEBAR.revealHeight }
-const CHROME_EXIT = { x: MIRROR_RAIL.width + 120, y: MIRROR_TITLEBAR.revealHeight + 120 }
-/** 指针在不在**画面**那一格里（浮动态的触发判据）。按矩形量，不看 DOM 归属 —— 见上面那段。 */
-function inScreenArea(event) {
-  const main = mirrorMain.value
-  if (!main) return false
-  const rect = main.getBoundingClientRect()
-  return (
-    event.clientX >= rect.left &&
-    event.clientX <= rect.right &&
-    event.clientY >= rect.top &&
-    event.clientY <= rect.bottom
-  )
+const CHROME_ENTER = { x: MIRROR_RAIL.fullscreenWidth, y: MIRROR_TITLEBAR.revealHeight }
+const CHROME_EXIT = {
+  x: MIRROR_RAIL.fullscreenWidth + 120,
+  y: MIRROR_TITLEBAR.revealHeight + 120,
 }
 function onScreenPointerMove(event) {
-  if (railFloating.value) {
-    if (inScreenArea(event)) reveal.poke()
-    else reveal.leave()
-    return
-  }
+  // 窗口态：触发区是那条胶囊的命中区，由它自己的 `pointerenter` / `pointerleave` 接（见模板）。
+  if (!fullscreen.value) return
   const zone = chromeZone(event, window.innerWidth, window.innerHeight, CHROME_ENTER, CHROME_EXIT)
   if (zone === 'enter') reveal.poke()
   else if (zone === 'leave') reveal.leave()
 }
 /**
  * `relatedTarget = null` 的 `pointerout` 有**两种**来源，必须分开判：
- * ① 指针**真的离开窗口**（手一快就从右边滑出去了，之后不会再有任何 `pointermove` ⇒ 这里不补一次收线，
+ * ① 指针**真的离开窗口**（手一快就滑出去了，之后不会再有任何 `pointermove` ⇒ 这里不补一次收线，
  *    条就永远挂着）；
  * ② 指针**踏进 `-webkit-app-region: drag` 那一片**（Chromium 根本不往 DOM 发事件，进来这一下只发一条
  *    pointerout，坐标就是新位置）。
- * 按坐标分得开 —— drag 区在**两档形态里都是窗口顶边整条**（窗口态 = 标题栏那条，
- * 浮动态 = `MIRROR_TITLEBAR.floatDragHeight` 那条看不见的条）：落进去就当他"还在 chrome 上"
+ *
+ * ⚠️ **2026-10-16 起这条只服务满屏那两档**：窗口态的显隐完全由那两块 DOM 的
+ * `pointerenter` / `pointerleave` 说话（见 `onScreenPointerMove` 上面那段）。
+ * 窗口态走到这里是"指针离开了窗口"那一档（`relatedTarget = null`），照旧 `leave` 收线。
+ * 满屏那两档仍按老规矩：落在 `MIRROR_TITLEBAR.floatDragHeight` 那一条里就当他"还在 chrome 上"
  * （poke，否则鼠标停在拖窗区上 1 秒后条自己收了），其余位置照旧走 `leave`（延 1 秒收）。
+ * ⚠️ 这个界读的是**浮动态**那条的高度（满屏那一档的顶条是 `MIRROR_TITLEBAR.height`），
+ * 数值变动会连带挪一点满屏那档的判定带 —— 无害（都是"顶上那一条算 chrome"），先记在这里。
  */
 function onScreenPointerOut(event) {
   if (event.relatedTarget) return
-  const dragHeight = railFloating.value ? MIRROR_TITLEBAR.floatDragHeight : MIRROR_TITLEBAR.height
-  const dragZone = event.clientY <= dragHeight
-  if (dragZone) {
+  if (fullscreen.value && event.clientY <= MIRROR_TITLEBAR.floatDragHeight) {
     reveal.poke()
     return
   }
@@ -155,20 +147,44 @@ const railShown = ref(false)
  */
 const railPinned = ref(false)
 /**
- * 三颗彩虹键什么时候放出来 —— **两档形态两套规矩**（系统画的，CSS 盖不住，只能请主进程开关）：
- * - **窗口态**（长条在手机右边外面那一格）：跟着那层 chrome 一起出/收 —— 窗口本体透明，
- *   平时不藏它们就浮在桌面上，「就是个手机样子」当场破功。
- * - **浮动态**（画面够宽）：**常驻**。落点是 `mirrorTrafficLightPosition(true)`（让开画面圆角，
- *   用户 2026-10-14 第四条「超出屏幕了」），而浮动态窗口顶就是画面顶（标题栏整条不存在）
- *   ⇒ 三颗落在**画面左上角**里侧（用户 2026-10-14 第二条：「mac 的 3 个按键放进投屏中」）。
- *   这一档窗口里只剩画面，没有"浮在桌面上"那回事。
- * - **满屏那两屏一概不碰**：那三颗归系统收放（顶边才浮出），我们插手只会打架。
+ * 三颗彩虹键什么时候放出来（系统画的，CSS 盖不住，只能请主进程开关）：
+ * **跟着长条走** —— 长条显形它们才在，长条收了它们也收（用户 2026-10-17：
+ * 「3个彩虹按钮没有跟着右边悬浮栏显示隐藏」）。
  *
- * ⚠️ 每次都要把**当时的形态**一起报给主进程（落点分两档）；形态翻转那一拍也走这里重设一次。
+ * 历史（别照着旧记录找）：两档形态那会儿写的是「窗口态跟 chrome 显隐、浮动态**常驻**」，
+ * 理由是"浮动态窗口里只剩画面，没有'浮在桌面上'这回事"—— 那是**我们自己推的**，不是他点的。
+ * 2026-10-16 两档退场之后 `railFloating` 恒真 ⇒ 那句推导把它钉成了**永远显形**，
+ * 于是长条收了三颗还在（他这一轮报的就是这个）。现在只有一条规矩：`railShown` 说放就放、说收就收。
+ * ⚠️ **落点照旧跟形态走**（`mirrorTrafficLightPosition(railFloating)`），与显隐无关。
+ *
+ * ⚠️ **收要延 `MIRROR_RAIL.fadeOutMs`（260ms）**：面板是淡出的，而三颗是 AppKit 画的、**没有淡出可跟**
+ * —— 立刻收会看到"条还在半透明、三颗已经啪地没了"（10-10 他就报过这个不协调）。这 260ms 里又显形就撤掉这次收。
+ * ⚠️ **满屏那两屏一概不碰**：那三颗归系统收放（顶边才浮出），我们插手只会打架。
  */
+/** 上一次真正报给主进程的显隐（窗口开出来时系统默认是**显形**，但这里按"收着"起步：第一拍就报一次收）。 */
+let buttonsShown = false
+/** 延后收三颗的计时器（`fadeOutMs`）。窗口关掉 / 进满屏都要撤掉。 */
+let hideButtonsTimer = 0
 function syncWindowButtons() {
+  window.clearTimeout(hideButtonsTimer)
+  hideButtonsTimer = 0
   if (fullscreen.value) return
-  setWindowButtons(railFloating.value || railShown.value, railFloating.value)
+  if (railShown.value) {
+    // 放出来：**跟手**，不等淡入跑完（面板正在淡入，三颗早到一拍没有违和感）。
+    buttonsShown = true
+    setWindowButtons(true, railFloating.value)
+    return
+  }
+  if (!buttonsShown) {
+    // 本来就收着（开窗第一拍）：没有"面板正在淡出"这回事，直接报 —— 否则三颗会先闪 260ms。
+    setWindowButtons(false, railFloating.value)
+    return
+  }
+  hideButtonsTimer = window.setTimeout(() => {
+    hideButtonsTimer = 0
+    buttonsShown = false
+    setWindowButtons(false, railFloating.value)
+  }, MIRROR_RAIL.fadeOutMs)
 }
 const reveal = createChromeReveal({
   onShow: (shown) => {
@@ -180,6 +196,58 @@ const reveal = createChromeReveal({
     }
   },
 })
+/**
+ * **浮动态顶边那条：拖窗由我们自己实现**（用户 2026-10-17 第八条：「鼠标移动到头部可拖拽的地方
+ * 就展示出来 3 个彩虹按钮和悬浮栏」）。
+ *
+ * 为什么不用 `-webkit-app-region: drag`：那一整片是 Chromium 的**事件黑洞** —— 指针进去一个事件
+ * 都不发（2026-10-17 真光标探针实测，三档都试过）：
+ * - 进顶边：只发**一条** `pointerout`（`relatedTarget = null`），之后连 `pointermove` 都没有；
+ * - 从顶边**滑出窗口**：一个事件都没有（`pointerout` 也没有）⇒ 想靠它做"指针还在不在头上"的判据
+ *   会留一个**永久卡住**的状态（探针台实测）。
+ * 而这一轮要的是"同一条带既收 hover 又能拖" ⇒ 二选一：留 drag 就收不到 hover。
+ * 于是改成渲染层自己拖：`no-drag` 的命中层压在原来那条上（顶层元素的 `app-region` 说了算，
+ * 探针实测事件照常送到 DOM），拖动时 `window.moveTo()`。
+ *
+ * 实测（探针台：真光标 + `win.getBounds()`，窗口参数照抄 `createMirrorWindow`）：
+ * - `window.moveTo` 在 Electron 44 里**生效**，位移逐像素一致（(200,200) → (300,340)，拖的是 +100/+140）；
+ * - 拖拽期间 client 坐标恒定 ⇒ **跟手**；连续第二次拖不跳（`window.screenX/Y` 与真实 bounds 同步）；
+ * - `titleBarStyle: 'hiddenInset'` + `transparent` + `setAspectRatio` 这三样都不影响它。
+ *
+ * ⚠️ 代价（记在 `docs/TODO.md` §3）：系统给 drag 区的附加行为没了 —— **双击顶边缩放**、
+ * 把窗口拖到别的显示器/空间。自己 `moveTo` 只有位移。
+ * ⚠️ 三颗彩虹键那一片**只吃掉"按下"**（AppKit 的 NSButton 处理 mouseDown），**移动事件照常进 DOM**
+ * （探针台实测 2026-10-17：指针滑到三颗上时 `pointermove` 照发、`pointerleave` 不触发）⇒
+ * `floatLightY === floatDragHeight` 那条让位等式**不再是必须的**：2026-10-17 第十一条起三颗压进
+ * 这条里 10px，hover 不受影响，只有灯本身那一小块按下是点灯（取舍见 `options.js` 的 `floatDragHeight`）。
+ * ⚠️ 胶囊那一格（右上角）在命中层之上，按下去拖的是**胶囊**不是窗口（见 `onRailDragDown`）——
+ * 与换实现之前一样（那时那一格是 `no-drag`，本来也不归拖窗区）。
+ */
+/** 一次顶边拖窗的现场：按下时指针相对**窗口左上角**的偏移（拖起来之后拿它反算窗口该挪到哪）。 */
+let floatDrag = null
+function onFloatDragDown(event) {
+  if (event.button !== 0) return
+  floatDrag = {
+    pointerId: event.pointerId,
+    offsetX: event.screenX - window.screenX,
+    offsetY: event.screenY - window.screenY,
+  }
+  // 捕获：指针滑出窗口也继续跟手（自己拖窗没有系统那套 modal drag loop）。
+  // 这一条上没有可点的东西，所以在 `pointerdown` 里捕获是安全的（胶囊那条不能这么干，见 `onRailDragMove`）。
+  try {
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+  } catch {
+    // 捕获不上也能拖（只是滑出窗口就脱手），不因此吞掉这次拖拽
+  }
+}
+function onFloatDragMove(event) {
+  if (!floatDrag || event.pointerId !== floatDrag.pointerId) return
+  // 绝对定位（不是"累加位移"）：窗口跟不跟得上都不会漂，松手前后落点都准。
+  window.moveTo(event.screenX - floatDrag.offsetX, event.screenY - floatDrag.offsetY)
+}
+function onFloatDragUp(event) {
+  if (floatDrag && event.pointerId === floatDrag.pointerId) floatDrag = null
+}
 /**
  * 长条上那颗「一直显示」按钮。常驻交给状态机（`setPinned`），这里只镜像一份给模板。
  *
@@ -239,6 +307,137 @@ function syncRailDock() {
   railTop.value = railFloating.value
     ? railAnchorTop(height, window.innerHeight)
     : clampRailTop(railTop.value, height, window.innerHeight)
+  // 窗口态那条胶囊被拖过之后也要跟着重夹：窗口变小 / 被拖窄时它可能已经落在窗口外面。
+  if (railPos.value) {
+    railPos.value = clampRailPos(
+      railPos.value,
+      { width: panel.offsetWidth, height },
+      { width: window.innerWidth, height: window.innerHeight },
+      0,
+    )
+  }
+}
+
+/**
+ * **窗口态那条胶囊的落点**（用户 2026-10-16：「右侧操作栏可拖动」）。
+ *
+ * `null` = 没拖过 ⇒ 用默认位置：贴画面右上、与三颗彩虹键中线对齐（几何在 `options.js` 的
+ * `mirrorRailTop()` 与 `MIRROR_RAIL.right`，CSS 用 `inset: 0 0 auto auto` 表达）。
+ * **拖起来之后**变成 `{ x, y }` = 胶囊**左上角**在窗口内容区里的坐标，CSS 换成 `left/top + translate`
+ * 那一套（见样式里 `.is-moved` 那组）。
+ *
+ * ⚠️ 写进去的时机是**真的拖起来那一刻**（位移过 `RAIL_DRAG_THRESHOLD`），不是按下：胶囊里几乎全是
+ * 按钮，按在按钮上那一下得原样留给按钮（按下就切定位会让它白闪一下）。写的是**按下时量到的矩形**
+ * ⇒ 与默认位置逐像素相同，切过去不跳。
+ * ⚠️ 拖动**不改窗口尺寸、也不改画面矩形**（胶囊浮在画面上、不占布局）⇒ 不会白发一条 `resizeDisplay`。
+ * ⚠️ 不持久化（与 `railPinned` 同类）：换一扇窗口 / 重开应用回到默认位置。要跨会话记住得动 `prefs`。
+ */
+const railPos = ref(null)
+/** 一次胶囊拖拽的现场：按下点、按下时的落点、胶囊尺寸（拖拽期间不变）、有没有真的动过。 */
+let railMove = null
+/**
+ * 拖过之后要吃掉紧随的那一下 `click`。
+ * 没有它，在按钮上按住拖一把、松手时会顺手把那个按钮按一下（拖过"返回"键就是返回一次）。
+ */
+let railClickGuard = false
+/**
+ * 一次拖拽期间挂在 **`window`** 上的两个监听（不是挂在面板上）。
+ * ⚠️ 理由：按下之后指针可能**立刻滑出胶囊**（胶囊只有 3px 边距 + 2px 缝是空白），挂在面板上就再也
+ * 收不到 `pointermove` ⇒ 「按住往外拖」当场哑掉、阈值永远迈不过去。挂 `window` 则只要指针还在窗口
+ * 里就一直跟手；挪过阈值后再补一条 `setPointerCapture`，连拖出窗口也继续跟。
+ * ⚠️ 摘下必须成对（`onBeforeUnmount` 里也摘一次），别留悬空监听。
+ */
+function attachRailDragWatch() {
+  window.addEventListener('pointermove', onRailDragMove)
+  window.addEventListener('pointerup', onRailDragUp)
+  window.addEventListener('pointercancel', onRailDragUp)
+}
+function detachRailDragWatch() {
+  window.removeEventListener('pointermove', onRailDragMove)
+  window.removeEventListener('pointerup', onRailDragUp)
+  window.removeEventListener('pointercancel', onRailDragUp)
+}
+function onRailDragDown(event) {
+  // 满屏那两档不归这条路（它们的长条贴窗口右缘、纵向拖拽走把手），可拖的只有窗口态那条胶囊。
+  if (fullscreen.value || !railFloating.value) return
+  if (event.button !== 0) return
+  // 把手自己那套纵向拖拽在隔壁（窗口态不画把手，这条是给满屏那两档留的）。
+  if (event.target?.closest?.('.mirror-rail__handle')) return
+  const panel = railPanel.value
+  if (!panel) return
+  const rect = panel.getBoundingClientRect()
+  railMove = {
+    pointerId: event.pointerId,
+    fromX: event.clientX,
+    fromY: event.clientY,
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height,
+    moved: false,
+  }
+  // ⚠️ **按下这一拍不写 `railPos`、不 `preventDefault`、也不 `setPointerCapture`** ——
+  // 前两条：按在按钮上那一下得原样留给按钮（写了定位会当场把胶囊切成 `left/top` 那套，白闪一下）。
+  // 第三条是 2026-10-16 真机报回来的 bug（见下面 move 里那段），这一拍捕获 = 按钮全点不动。
+  attachRailDragWatch()
+}
+function onRailDragMove(event) {
+  if (!railMove || event.pointerId !== railMove.pointerId) return
+  const dx = event.clientX - railMove.fromX
+  const dy = event.clientY - railMove.fromY
+  if (!railMove.moved) {
+    // 还没到阈值：既不算点、也不算拖，什么都别做（手抖不该把条挪走）。
+    if (Math.hypot(dx, dy) < RAIL_DRAG_THRESHOLD) return
+    railMove.moved = true
+    // 真的拖起来了才切定位，写的是**按下那一刻量到的矩形** ⇒ 与默认位置逐像素相同，不会跳。
+    railPos.value = { x: railMove.x, y: railMove.y }
+    // ⚠️ **捕获只能在"真的拖起来"这一拍要，绝不能放在 `pointerdown` 里**（2026-10-16 用户报
+    // 「悬浮的操作栏按钮不能点了」的根因，最小复现台实测）：
+    // Chromium 里 `setPointerCapture` 会把**兼容鼠标事件一起重定向**到捕获元素 ⇒ 在 `pointerdown`
+    // 里捕获时，`mousedown` / `mouseup` 都落在面板上，`click` 于是派发到「两者的最近公共祖先」
+    // = 面板本身，**按钮一个都收不到**（实测 `clickBtn: []` / `clickPanel: 1`）。
+    // 改成挪过阈值才捕获：点 = 点（不捕获，`click` 照常落在按钮上）、拖 = 拖（捕获住、滑出窗口也跟手）。
+    // ⚠️ 上一轮"验过按钮还能点"是**假绿**：那次用 `dispatchEvent(new PointerEvent(...))` 合成事件，
+    // 指针 id 不在活跃表里 ⇒ `setPointerCapture` 直接抛、走 `catch`，真实鼠标那条路根本没跑到。
+    // ⚠️ 捕获之后 `pointermove` 仍会从面板冒泡到 `window` ⇒ 上面那对 window 监听照收，不会打架。
+    try {
+      railPanel.value?.setPointerCapture?.(event.pointerId)
+    } catch {
+      // 捕获不上也能拖（window 那对监听兜着），只是拖出窗口外会脱手
+    }
+  }
+  // `pad = 0`：胶囊不许露到窗口外面 —— 它浮在画面上，露出去那截会被窗口裁掉（半个按钮看不见）。
+  railPos.value = clampRailPos(
+    { x: railMove.x + dx, y: railMove.y + dy },
+    { width: railMove.width, height: railMove.height },
+    { width: window.innerWidth, height: window.innerHeight },
+    0,
+  )
+}
+function onRailDragUp(event) {
+  if (!railMove || event.pointerId !== railMove.pointerId) return
+  detachRailDragWatch()
+  if (railMove.moved) {
+    // `click` 紧跟 `pointerup` 派发 ⇒ 下一拍再放开这个闸。
+    // ⚠️ 捕获成功时 `click` 本来就会落到面板上（按钮收不到），这条闸是**兜底**：捕获失败 /
+    // 指针在按下与捕获之间换了目标那几条路，仍然可能把 `click` 派回按钮上。
+    railClickGuard = true
+    setTimeout(() => {
+      railClickGuard = false
+    }, 0)
+  }
+  railMove = null
+}
+/** 拖完那一下的 `click` 不许落到按钮上（挂在面板的**捕获**阶段，比按钮先看到）。 */
+function onRailClickCapture(event) {
+  if (!railClickGuard) return
+  event.stopPropagation()
+  event.preventDefault()
+}
+/** 双击胶囊回到默认位置（拖到哪都能收回来；按在按钮上时不算，那是双击那个按钮）。 */
+function onRailReset(event) {
+  if (event.target?.closest?.('button, .mirror-rail__handle')) return
+  railPos.value = null
 }
 
 const railSlot = ref(null)
@@ -259,12 +458,12 @@ function toggleRailPinned() {
  * 右侧那条操作栏现在是不是**浮在画面里**（用户 2026-10-14：「如果手机投屏宽度足够宽，那就把手机
  * 投屏右侧的操作栏更改为全屏时在投屏里浮动的样子」）。
  *
- * 判据只有一处（`options.js` 的 `mirrorRailFloats`），主进程建窗口时用的也是它。量的是
- * **`.mirror-main` 那一格的宽**（`flex: 1`，不含 dev 边栏）—— 别量画面本身：长条一浮起来画面自己
- * 就宽 86px，判据会被自己的结果推着走（拖窗口到临界点时来回跳）。`previous` 传当前结论，
- * 两条线之间的那一圈是**迟滞**（见那个函数）。
+ * ⚠️ **2026-10-16 起这个判据恒为 `true`**（`mirrorRailFloats` 恒真）：长条从"画面右边那一条
+ * （占窗口宽，画面够宽才浮起来）"整个换成"浮在画面顶部右侧的小胶囊"，两档形态的分化随之退场。
  *
- * 变了要**报给主进程**：形态决定窗口右边那一截不参与拖拽比例的余量（差一条长条宽）。
+ * 状态与下面那条 `watch` 都**保留**：模板与样式还按它挂 `is-rail-float` 那一组（现在恒挂），
+ * 三颗彩虹键的落点也要靠它报给主进程（`syncWindowButtons`）。删它要一起动 IPC 链路 ——
+ * 这一轮只改外观，没动。
  */
 const railFloating = ref(false)
 const mirrorMain = ref(null)
@@ -278,12 +477,11 @@ function syncRailFloating() {
   setRailFloating(next)
 }
 /**
- * 形态翻转要一起改的两件事，都排在 **DOM 更新之后**（`flush: 'post'`）——
- * 这两件都要读换完类之后的真实布局，早一拍读到的是旧形态：
- * - **纵向落点**：浮动态锚点是「上下居中」（`railAnchorTop`），退回「在外面」那一档没有可落区间
- *   （面板与手机同高，`clampRailTop` 只会回 0），带着位移回去会挂在手机旁边/挂到窗口外。
- *   ⚠️ 必须 `post`：面板在窗口态是**撑满整格**的（`offsetHeight` = 窗口高），拿它算居中会算出 0。
- * - **三颗彩虹键**：浮动态常驻、窗口态跟着 chrome 显隐（判据在 `syncWindowButtons`）。
+ * 形态翻转要一起改的两件事，都排在 **DOM 更新之后**（`flush: 'post'`）。
+ *
+ * ⚠️ 2026-10-16 起判据恒真 ⇒ 这条 watch 只会在**第一拍**跑一次（`false → true`）。留着是因为
+ * 满屏那两档仍要 `railTop`（它们的长条可以上下拖），而 `syncWindowButtons` 每次都得把三颗的落点
+ * 报给主进程。窗口态的胶囊钉在顶部右侧，那份 `railTop` 被 CSS 的 `translate: none` 压掉。
  */
 watch(railFloating, (floating) => {
   const panel = railPanel.value
@@ -306,9 +504,21 @@ function pressRailKey(keyCode) {
  * 长说明放文档里不塞进气泡。
  * ⚠️ 参照图里气泡带图标，但 `@iconify/vue` 的 `Icon` 放进 reka 的 `TooltipContent` 里渲染不出来
  * （实测 `svgCount: 0`，连占位节点都没有）；图标本来就在按钮上，气泡里重复也没必要 ⇒ 纯文字。
+ *
+ * ⚠️ **2026-10-16 收小一档**（用户：「提醒小一点」）：内边距 `3.5/2 → 2.5/1.5`、字号 `12 → 11`、
+ * 阴影跟着收。原来的尺寸是照参照图做的，挂在按钮上比按钮本身还大一圈。
  */
 const TIP_CLASS =
-  'z-50 whitespace-nowrap rounded-full border border-black/10 bg-white px-3.5 py-2 text-[12px] font-medium text-black/75 shadow-[0_8px_24px_rgba(0,0,0,0.18),0_1px_2px_rgba(0,0,0,0.10)]'
+  'z-50 whitespace-nowrap rounded-full border border-black/10 bg-white px-2.5 py-1.5 text-[11px] font-medium text-black/75 shadow-[0_6px_18px_rgba(0,0,0,0.16),0_1px_2px_rgba(0,0,0,0.08)]'
+/**
+ * 气泡往哪边展开 + 离按键多远。
+ * - **窗口态**（胶囊浮在画面顶部）：`bottom` / 8 —— 从胶囊**下边**出来（用户 2026-10-16：
+ *   「…提醒小一点，从下边展示」）。胶囊本来就贴着画面顶边，气泡摆在它上面会顶出窗口。
+ * - **满屏那两档**：`left` / 12 —— 长条是贴窗口右缘的纵向一列，往左边展开（用户 10-10 点名）；
+ *   改成从下边出来会盖住它自己下面那几颗按钮。
+ */
+const railTipSide = computed(() => (fullscreen.value ? 'left' : 'bottom'))
+const railTipOffset = computed(() => (fullscreen.value ? 12 : 8))
 /**
  * 设备的两条电源读数（`wakefulness` = `mWakefulness` 睡没睡，`screen` = SurfaceFlinger 的 `powerMode` 面板亮没亮），
  * 由 `sleepWatch` 轮询 + 我们点按钮时 `kickSleepWatch()` 快轮询喂进来。
@@ -397,19 +607,31 @@ const screenRatioN = ref(1)
 /** CSS 变量：黑框厚度与长条那两档数只有一个出处（`options.js`）。 */
 const windowStyle = computed(() => ({
   '--bezel': `${MIRROR_FRAME.bezel}px`,
-  /* 画面那块矩形的圆角半径：**出处是 `options.js`**（浮动态三颗的落点由它推出来，见
+  /* 画面那块矩形的圆角半径：**出处是 `options.js`**（三颗的落点由它推出来，见
      `mirrorTrafficLightPosition`）。CSS 里不再写死这个数。 */
   '--radius': `${MIRROR_SCREEN_RADIUS}px`,
-  '--rail-w': `${MIRROR_RAIL.width}px`,
+  /* ⚠️ **满屏那一档**长条占的那一格宽（真全屏是「画面一格 + 长条一格」两格排法）。
+     窗口态不再用它 —— 那条胶囊浮在画面上、不占布局，宽度由内容撑开。 */
+  '--rail-w': `${MIRROR_RAIL.fullscreenWidth}px`,
+  /* 窗口态那条**顶部胶囊**的几何（浮在画面上，不进任何布局计算）。 */
+  '--rail-capsule-top': `${mirrorRailTop()}px`,
+  '--rail-capsule-right': `${MIRROR_RAIL.right}px`,
+  '--rail-capsule-height': `${MIRROR_RAIL.height}px`,
+  '--rail-hit-pad': `${MIRROR_RAIL.hitPad}px`,
+  /* 胶囊被拖过之后的落点（`null` = 没拖过 ⇒ 用上面那两个默认值，CSS 走 `inset: 0 0 auto auto`）。
+     ⚠️ 只在根节点带 `is-rail-moved` 时才被读到（见样式里那组），平时这两个变量是死值。 */
+  '--rail-x': `${railPos.value?.x ?? 0}px`,
+  '--rail-y': `${railPos.value?.y ?? 0}px`,
   '--rail-fade-in': `${MIRROR_RAIL.fadeInMs}ms`,
   '--rail-fade-out': `${MIRROR_RAIL.fadeOutMs}ms`,
   '--titlebar-height': `${MIRROR_TITLEBAR.height}px`,
   '--titlebar-reveal-height': `${MIRROR_TITLEBAR.revealHeight}px`,
   '--titlebar-name-x': `${mirrorTitlebarNameLeft()}px`,
-  /* 浮动态没有标题栏 ⇒ 拖窗区改成窗口顶边**整条**看不见的条（见模板里 `.mirror-float-drag`）。 */
+  /* 窗口态没有标题栏 ⇒ 拖窗区改成窗口顶边**整条**看不见的条（见模板里 `.mirror-float-drag`）。 */
   '--float-drag-height': `${MIRROR_TITLEBAR.floatDragHeight}px`,
   '--screen-ratio': screenRatio.value,
   '--screen-ratio-n': String(screenRatioN.value),
+  /* 满屏那档长条的纵向拖拽位移（窗口态用不上：胶囊钉在顶部右侧）。 */
   '--rail-top': `${railTop.value}px`,
 }))
 /** 字节数 → 人类可读（HUD 显示用，保留一位小数）。 */
@@ -1149,7 +1371,7 @@ async function booted() {
       onFullscreen: (value) => {
         fullscreen.value = value
         // 满屏那两屏三颗归系统收放（`syncWindowButtons` 在那一档直接返回）；**出满屏要补一次对账**
-        // —— 系统把三颗收走之后，得按"回到哪一档"重新决定放不放（浮动态常驻、窗口态跟着 chrome 走）。
+        // —— 系统把三颗收走之后，得按"回到哪一档"重新决定放不放（窗口态 = 跟着长条，长条没收就放）。
         syncWindowButtons()
       },
       onSleepChange: (_asleep, state) => {
@@ -1215,12 +1437,19 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   if (statsTimer) clearInterval(statsTimer)
+  // 延后收三颗那一拍还没到就关窗了：撤掉，别让它对着一扇已经没了的窗口发 IPC。
+  window.clearTimeout(hideButtonsTimer)
+  hideButtonsTimer = 0
+  // 顶边拖到一半窗口就关了：把现场丢掉（指针捕获随元素一起没，`moveTo` 不会再被调）。
+  floatDrag = null
   hostResize?.disconnect()
   mainResize?.disconnect()
   window.removeEventListener('keydown', onMacTextKeyDown)
   window.removeEventListener('pointermove', onScreenPointerMove)
   window.removeEventListener('pointerout', onScreenPointerOut)
   window.removeEventListener('resize', syncRailDock)
+  // 胶囊拖到一半窗口就关了：那对 window 监听得摘掉，别留给下一个（同进程里还有别的镜像窗）。
+  detachRailDragWatch()
   disposeMacCaret?.()
   disposeSizeChanged?.()
   disposeRendererType?.()
@@ -1236,7 +1465,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="h-full mirror-window text-white" :class="{ 'is-fullscreen': fullscreen, 'is-edge-to-edge': edgeToEdge, 'is-chrome': railShown, 'is-rail-float': railFloating }"
+  <div class="h-full mirror-window text-white" :class="{ 'is-fullscreen': fullscreen, 'is-edge-to-edge': edgeToEdge, 'is-chrome': railShown, 'is-rail-float': railFloating, 'is-rail-moved': !!railPos }"
     :style="windowStyle">
     <!-- 画面区：dev 时右侧让出一条 HUD 边栏（`aside` 与它左右排），画面上的覆盖层（遮罩/接回/提示/
          长条）都只盖画面那一块，这样调试信息永远不被盖住，也不会压在镜像画面上。 -->
@@ -1257,15 +1486,21 @@ onBeforeUnmount(() => {
         <div class="mirror-titlebar__reveal" aria-hidden="true"></div>
       </div>
       <div class="mirror-main" ref="mirrorMain">
-      <!-- 浮动态（画面够宽、长条浮在画面里）**整条标题栏不存在** ⇒ 窗口拖窗区改成**顶边整条**
-           看不见的条（高 `MIRROR_TITLEBAR.floatDragHeight`）。
+      <!-- **头部那条**（高 `MIRROR_TITLEBAR.floatDragHeight`，整窗宽）：浮动态整条标题栏不存在
+           ⇒ 拖窗区与 chrome 的显形触发区都归它。
            ⚠️ 第一版是左上角 80×28 的小方块（宽 = 三颗 + 名称原本占的那一截），被用户当场打回
            （「app 投屏后不能拖拽了」）：那块地方本来就盖着三颗彩虹键，而三颗是 AppKit 画在网页内容
-           **之上**的 ⇒ 方块中间一大块根本抓不到。现在整条铺开、三颗的落点下移到 `floatLightY`
-           （= 这条的下沿）让开它。
-           ⚠️ `-webkit-app-region: drag` 那一片 Chromium 一个指针事件都不发 ⇒ 它只负责拖窗口，
-           别指望它收 hover（浮动态的触发判据在 `onScreenPointerMove`）。 -->
-      <div v-if="railFloating && !fullscreen" class="mirror-float-drag" aria-hidden="true"></div>
+           **之上**的 ⇒ 方块中间一大块根本抓不到。现在整条铺开、三颗的落点收进 `floatLightX/Y`。
+           ⚠️ 2026-10-17 第十一条起三颗**压进这条里**（不再"让开"）：那条让位等式的理由只对了一半
+           —— 三颗只吃"按下"、不吃"移动"（探针台实测）⇒ hover 照常，只有灯本身那一小块按下去是点灯。
+           ⚠️ **`pointerenter/leave` 挂在这里**（用户 2026-10-17：「鼠标移动到头部可拖拽的地方就展示
+           出来」）：进这一条就弹、离开就收。胶囊那一格另有自己的命中区（`.mirror-rail`，在它**上面**），
+           所以"贴着胶囊上下挪"也不会被这条判成离开 —— 两边都 poke，谁先谁后都不影响结果。
+           ⚠️ **拖窗也是这里自己做的**（`onFloatDragDown` 那一组）：这条**不是** `-webkit-app-region:
+           drag`，理由见那组函数上面那段（drag 区一个指针事件都不发，收不到 hover）。 -->
+      <div v-if="railFloating && !fullscreen" class="mirror-float-drag" aria-hidden="true"
+        @pointerenter="reveal.poke()" @pointerleave="reveal.leave()" @pointerdown="onFloatDragDown"
+        @pointermove="onFloatDragMove" @pointerup="onFloatDragUp" @pointercancel="onFloatDragUp"></div>
       <!-- 画面：位置与尺寸固定（= 窗口减掉那圈黑框与右边那条长条，两边同一个出处 `mirrorScreenInsets()`）。 -->
       <div class="mirror-frame" @pointerdown="focusMacText()">
         <!-- 屏内各层在同一格里叠，压在画面上的是后面的兄弟节点；`attachCanvas()` 会清空
@@ -1349,19 +1584,49 @@ onBeforeUnmount(() => {
            它自己不画东西，只负责收 poke —— 鼠标一进这一格就弹，不用按坐标筛。
            poke 挂在格子上而不是面板上：面板收起时 `pointer-events: none`，显形时又盖住格子，
            挂格子上两种状态都由同一条 `pointermove`（冒泡上来）接住。 -->
-      <div class="mirror-rail" ref="railSlot">
-        <!-- 面板：按键从面板顶往下排。红绿灯（那三颗彩虹键）归系统放左上角，不再给它留一截。 -->
-        <div ref="railPanel" class="mirror-rail__panel" :class="{ 'is-shown': railShown }">
-          <!-- 拖拽把手：只有这一格能拖（按在按钮上是点按钮，不该顺手把条拖走）。
-               按住走 pointer capture ⇒ 鼠标滑出把手也继续跟，不会拖到一半脱手。 -->
+      <!-- 操作条：**命中区 + 胶囊**两层。
+           窗口态（唯一形态）它是浮在画面顶部右侧的一条玻璃胶囊（`.is-rail-float` 那一组样式），
+           鼠标**移进头部那条或这一块**才淡入：进头部（`.mirror-float-drag`）弹出来是用户 2026-10-17
+           点的「鼠标移动到头部可拖拽的地方就展示出来」；这里的命中区（= 胶囊 + 一圈外扩
+           `MIRROR_RAIL.hitPad`）接着管"贴着胶囊上下挪"那一段 —— 它比头部那条高，指针压在胶囊上时
+           仍算"还在 chrome 上"。它自己不接点按，只有显形的面板与按键接（见样式那两条）。
+           两处触发都不走 window 的坐标判据：命中区正是 DOM 自己知道的那个矩形，按坐标另算只会两边漂。
+           满屏那两档另有排法（真全屏占一格、桌面模式浮在右上），触发仍走坐标判（`onScreenPointerMove`），
+           这里的 `pointerenter/leave` 对它们无害：那一档指针本来就在画面里。 -->
+      <div class="mirror-rail" ref="railSlot" @pointerenter="reveal.poke()" @pointerleave="reveal.leave()">
+        <!-- 面板：窗口态是**横向一条**（开关组 + 分隔线 + 导航组）；满屏那两档仍是纵向一列。
+             红绿灯（那三颗彩虹键）归系统放左上角，不给它留一截。
+             窗口态这条胶囊**可拖**（用户 2026-10-16：「右侧操作栏可拖动」）：**按住它挪过 4px** 就拖
+             （按在按钮上不动仍是点那个按钮 —— 胶囊里几乎全是按钮，只认"抓空白处"等于没法拖），
+             落点写进 `--rail-x/y`；双击空白处回默认位置。满屏那两档不进这条路。 -->
+        <div ref="railPanel" class="mirror-rail__panel" :class="{ 'is-shown': railShown }"
+          @pointerdown="onRailDragDown" @click.capture="onRailClickCapture" @dblclick="onRailReset">
+          <!-- ⚠️ 拖动**不在这里挂 `pointermove/up`**：按下之后指针可能立刻滑出胶囊（空白只有
+               3px 边距 + 2px 缝），挂面板上就收不到 move、"按住往外拖"当场哑掉。那两条按需挂到
+               `window` 上（`attachRailDragWatch`），松手/取消时摘下。`pointerdown` 只记现场，
+               **不捕获**（捕获会让按钮点不动，见 `onRailDragMove` 里那段）。 -->
+          <!-- 拖拽把手：**只有满屏那档画**（窗口态的胶囊钉在顶部右侧，纵向没有可落区间 —— 画个把手
+               就是骗人抓的假开关）。按住走 pointer capture ⇒ 鼠标滑出把手也继续跟，不会拖到一半脱手。 -->
           <div class="mirror-rail__handle" aria-label="上下拖动这条" role="separator"
             @pointerdown="onRailHandleDown" @pointermove="onRailHandleMove" @pointerup="onRailHandleUp"
             @pointercancel="onRailHandleUp"></div>
           <!-- 按键说明：reka-ui 的 Tooltip（与主窗口 `PageHeader.vue` 同一套写法）。
-               `delay-duration=0` = 一移上就出；`side="left"` = 往按键左边展开（用户 10-10 点名）。
+               `delay-duration=0` = 一移上就出；气泡往哪边展开看 `railTipSide`（窗口态从**下边**出、
+               满屏那两档仍往左边，理由见那个 computed 上面那段）。
                所以按钮上**不再挂 `title`** —— 两个都留着会同时弹系统气泡和这个气泡。
-               Provider 是纯上下文组件，不产生元素，长条的 flex 排布不受影响。 -->
-          <TooltipProvider :delay-duration="0">
+               Provider 是纯上下文组件，不产生元素，长条的 flex 排布不受影响。
+
+               ⚠️ **`disable-hoverable-content` 是必须的**（2026-10-17 用户：「胶囊也跟着右侧悬浮栏隐藏」）。
+               默认（false）时 reka 走 `TooltipContentHoverable`：它用 `useGraceArea` 把**气泡自己的矩形**
+               一起算进"过渡区"，指针落在气泡上就算"还没离开"，气泡一直不收。
+               而气泡是 portal 到 `body` 的、落在**命中区之外**（真机读数：胶囊 `[237,5,159,28]`、
+               命中区 `[229,0,179,41]`、气泡 `[186,38,132,31]`）⇒ 鼠标从按钮**往下滑到气泡上**这一下
+               同时做了两件事：离开命中区（长条开始淡出）+ 落在气泡里（气泡把自己钉住）。
+               实测：长条 `opacity` 已到 0，气泡仍 `opacity: 1 / display: block` 挂在画面上。
+               打开这一位后 reka 改走 `TooltipContentImpl`（没有过渡区），
+               `TooltipRoot.onTriggerLeave()` 直接 `handleClose()` ⇒ 指针一离开按钮气泡就收，
+               结构上不可能比长条活得久。气泡里只有一行纯文字、本来也不需要悬停交互。 -->
+          <TooltipProvider :delay-duration="0" disable-hoverable-content>
             <!-- 关屏使用：按键区的第一格（用户 10-10 点名放最上）。
                  按下去关手机屏，再点一次恢复亮屏。
                  ⚠️ 图标与高亮画的是**现在的状态**（亮着 = 正常显示器；灭着 = 带斜杠那台 + `is-active`），
@@ -1371,11 +1636,11 @@ onBeforeUnmount(() => {
                 <button type="button" class="mirror-rail__key" :class="{ 'is-active': screenIsOff }"
                   :disabled="screenBusy" :aria-label="screenIsOff ? '恢复亮屏' : '关屏使用'" :aria-pressed="screenIsOff"
                   @click="toggleScreenPower">
-                  <Icon :icon="screenIsOff ? 'lucide:monitor-off' : 'lucide:monitor'" :width="18" :height="18" />
+                  <Icon :icon="screenIsOff ? 'lucide:monitor-off' : 'lucide:monitor'" :width="16" :height="16" />
                 </button>
               </TooltipTrigger>
               <TooltipPortal>
-                <TooltipContent side="left" :side-offset="12" :class="TIP_CLASS">{{
+                <TooltipContent :side="railTipSide" :side-offset="railTipOffset" :class="TIP_CLASS">{{
                   screenIsOff ? '恢复手机亮屏' : '关掉手机屏，镜像继续'
                 }}</TooltipContent>
               </TooltipPortal>
@@ -1387,11 +1652,11 @@ onBeforeUnmount(() => {
               <TooltipTrigger as-child>
                 <button type="button" class="mirror-rail__key" :disabled="desktopBusy" aria-label="桌面模式"
                   @click="openDesktopModeWindow">
-                  <Icon icon="lucide:app-window" :width="18" :height="18" />
+                  <Icon icon="lucide:app-window" :width="16" :height="16" />
                 </button>
               </TooltipTrigger>
               <TooltipPortal>
-                <TooltipContent side="left" :side-offset="12" :class="TIP_CLASS">把手机上正在用的应用移进独立窗口</TooltipContent>
+                <TooltipContent :side="railTipSide" :side-offset="railTipOffset" :class="TIP_CLASS">把手机上正在用的应用移进独立窗口</TooltipContent>
               </TooltipPortal>
             </TooltipRoot>
             <!-- 长条**常驻**（2026-10-11 用户点单：「侧边悬浮按钮栏加一个始终显示悬浮的按钮」）：
@@ -1404,11 +1669,11 @@ onBeforeUnmount(() => {
                 <button type="button" class="mirror-rail__key" :class="{ 'is-active': railPinned }"
                   :aria-label="railPinned ? '恢复自动收起' : '一直显示悬浮栏'" :aria-pressed="railPinned"
                   @click="toggleRailPinned">
-                  <Icon icon="lucide:pin" :width="18" :height="18" />
+                  <Icon icon="lucide:pin" :width="16" :height="16" />
                 </button>
               </TooltipTrigger>
               <TooltipPortal>
-                <TooltipContent side="left" :side-offset="12" :class="TIP_CLASS">{{
+                <TooltipContent :side="railTipSide" :side-offset="railTipOffset" :class="TIP_CLASS">{{
                   railPinned ? '恢复自动收起' : '让这条一直显示'
                 }}</TooltipContent>
               </TooltipPortal>
@@ -1421,11 +1686,11 @@ onBeforeUnmount(() => {
                 <button type="button" class="mirror-rail__key" :class="{ 'is-active': macKeyboard === 'active' }"
                   :disabled="macKeyboardBusy" aria-label="使用 Mac 键盘" :aria-pressed="macKeyboard === 'active'"
                   @click="toggleMacKeyboard">
-                  <Icon icon="lucide:keyboard" :width="18" :height="18" />
+                  <Icon icon="lucide:keyboard" :width="16" :height="16" />
                 </button>
               </TooltipTrigger>
               <TooltipPortal>
-                <TooltipContent side="left" :side-offset="12" :class="TIP_CLASS">{{
+                <TooltipContent :side="railTipSide" :side-offset="railTipOffset" :class="TIP_CLASS">{{
                   MAC_KEYBOARD_TIPS[macKeyboard]
                 }}</TooltipContent>
               </TooltipPortal>
@@ -1437,7 +1702,7 @@ onBeforeUnmount(() => {
                   @click="showHud = !showHud">tools</button>
               </TooltipTrigger>
               <TooltipPortal>
-                <TooltipContent side="left" :side-offset="12" :class="TIP_CLASS">调试信息（dev）</TooltipContent>
+                <TooltipContent :side="railTipSide" :side-offset="railTipOffset" :class="TIP_CLASS">调试信息（dev）</TooltipContent>
               </TooltipPortal>
             </TooltipRoot>
             <!-- 安卓的返回 / 桌面 / 多任务：贴到长条**最底部**（用户 2026-10-10）。 -->
@@ -1446,11 +1711,11 @@ onBeforeUnmount(() => {
                 <TooltipTrigger as-child>
                   <button type="button" class="mirror-rail__key" :aria-label="key.label"
                     @click="pressRailKey(key.keyCode)">
-                    <Icon :icon="key.icon" :width="18" :height="18" />
+                    <Icon :icon="key.icon" :width="16" :height="16" />
                   </button>
                 </TooltipTrigger>
                 <TooltipPortal>
-                  <TooltipContent side="left" :side-offset="12" :class="TIP_CLASS">{{ key.hint }}</TooltipContent>
+                  <TooltipContent :side="railTipSide" :side-offset="railTipOffset" :class="TIP_CLASS">{{ key.hint }}</TooltipContent>
                 </TooltipPortal>
               </TooltipRoot>
             </div>
@@ -1680,6 +1945,9 @@ onBeforeUnmount(() => {
    两种状态同一条判据，不用按坐标筛。 */
 .mirror-rail {
   flex: none;
+  /* ⚠️ 这是**满屏那两档**的布局宽度（真全屏是「画面一格 + 长条一格」的两格排法）。
+     窗口态那条胶囊浮在画面上、不占布局，由下面 `.is-rail-float` 那组把宽度改成 `max-content`
+     —— 留着这个 86 会把命中区钉得比胶囊还窄。 */
   width: var(--rail-w);
   background-color: transparent;
 }
@@ -1689,7 +1957,9 @@ onBeforeUnmount(() => {
    顶部不留白（红绿灯已归系统左上角，不再占这里的一截）。 */
 .mirror-rail__panel {
   /* 面板宽度**从格子推导**：格子左右各留 6px ⇒ 面板在格子里居中，
-     以后只改 `MIRROR_RAIL.width` 一个数，面板与落点会一起跟着走。 */
+     以后只改 `MIRROR_RAIL.fullscreenWidth` 一个数，面板与落点会一起跟着走。
+     ⚠️ 这是**满屏那两档**用的那套（纵向一列、贴窗口右边）；窗口态是浮在画面上的横向玻璃胶囊，
+     由下面 `.is-rail-float` 那一组整个覆盖掉。 */
   --rail-side-gap: 6px;
   /* 开关按键"开着"时的填充色（见下面 `.mirror-rail__key.is-active`）。
      ⚠️ **必须写死，不能用 `var(--color-accent)`**：镜像页是**另一份 CSS 产物**，Tailwind 的
@@ -1720,9 +1990,10 @@ onBeforeUnmount(() => {
   transition: opacity var(--rail-fade-out) ease-in;
 }
 
-/* 把手**只在满屏那一档画**（`.is-edge-to-edge` 下面那条）：窗口态的面板与手机同高、整格占满，
-   纵向没有任何可落区间（`clampRailTop` 只会回 0），画个把手就是骗人抓的假开关。
-   把手：面板顶上那一小格，画一条灰杠暗示"这里能拖"。它不是按钮，不接 :hover 高亮。 */
+/* 把手**只在满屏那一档画**（`.is-edge-to-edge` 下面那条）：满屏那档的长条贴窗口右缘、纵向可落，
+   画一条灰杠暗示"这里能拖"。窗口态不画 —— 那条胶囊**整条都能抓**（用户 2026-10-16
+   「右侧操作栏可拖动」），再画个把手只是骗人抓的假开关。
+   把手：面板顶上那一小格。它不是按钮，不接 :hover 高亮。 */
 .mirror-rail__handle {
   display: none;
   width: 34px;
@@ -1761,53 +2032,57 @@ onBeforeUnmount(() => {
   transition: opacity var(--rail-fade-in) ease-out;
 }
 
-/* 窗口态：**长条与右边那条边框是同一块**（用户 2026-10-12「右侧操作栏和边框写在一起，不要分成 2 个叠在一起」）
-   ⇒ 不再在灰臂上浮一颗白胶囊，面板铺满整格、底色交给涂装那一层（`.mirror-chrome`，显形时才有），
-   键直接坐在臂上。
-   两档全屏没有灰臂（`.is-fullscreen` 被排掉），白胶囊照旧 —— 那是浮在画面/亮底上的独立一件。
-   ⚠️ 特异度：三个类选择器 > `.mirror-rail__panel.is-shown`（两个）⇒ 这里只覆盖外观，别写 `opacity`，
-   显隐仍由那个类说话。 */
-.mirror-window:not(.is-fullscreen) .mirror-rail__panel {
-  width: var(--rail-w);
-  margin-right: 0;
-  background: transparent;
-  box-shadow: none;
-}
+/* ⚠️ 这里原本有一条「窗口态：长条与右边那条边框是同一块 ⇒ 面板铺满整格、底色交给 `.mirror-chrome`」
+   （用户 2026-10-12 定）—— **2026-10-16 随「右侧长条改成浮在画面顶部的小胶囊」一起删掉了**：
+   那一档的窗口里不再有"右臂"那块地方，面板也不跟涂装走（玻璃胶囊是独立一件，见下面窗口态那一组）。
+   满屏那两档从来不走这条（`:not(.is-fullscreen)`），它们照旧用上面 `.mirror-rail__panel` 的基础样式。 */
 
-/* ── 画面够宽时的窗口态：长条**浮在画面里**（用户 2026-10-14）────────────────────────────
-   「如果手机投屏宽度足够宽，那就把手机投屏右侧的操作栏更改为全屏时在投屏里浮动的样子」，
-   第二条把这一档的窗口形状也定死了：「上边头部就去掉，mac 的 3 个按键放进投屏中，标题去掉。
-   右侧悬浮操作栏上下居中，且只有鼠标移入内容区才显示出来，不要移动到右边就展示」。
+/* ── 窗口态（`.is-rail-float`，判据现在恒真 ⇒ **唯一的窗口形态**）────────────────────────────
+   2026-10-16 用户这一轮把窗口整个改了：「镜像投屏的时候将黑色手机边框去掉，右侧悬浮更改为上方很小
+   的悬浮，有一种透明玻璃质感」+「浮动到画面顶部右边，跟 mac 3 个彩虹按键对齐」
+   +「鼠标移入到上边悬浮按钮区域才显示」（前几版「右侧一条长条」「画面够宽才浮起来」都已作废）。
 
-   判据在 `options.js` 的 `mirrorRailFloats`（画面宽 ≥ 640，带迟滞），类由 `App.vue` 的
-   `railFloating` 实时绑 —— 窗口拖宽/拖窄跨过阈值就换形态，主进程会跟着重设拖拽比例锁。
+   这一档现在只有四件事：
+   ① **窗口里只剩画面**：黑框归零（`MIRROR_FRAME.bezel = 0`）、标题栏不画、右侧不再留那一格
+      ⇒ 画面铺满 `.mirror-main`，`mirrorScreenInsets()` 因此恒为 0（主进程算窗口尺寸、比例锁余量与
+      这里排的 DOM 必须是同一套数，否则圆角里露出 letterbox）。
+   ② 三颗彩虹键落进**画面左上角**（落点 `mirrorTrafficLightPosition(true)`，让开画面那圈圆角；
+      2026-10-16 晚些时候用户又点了「圆角稍微大点」（12 → 20）与「彩虹见靠左一点」（x 36 → 26）。
+   ③ 操作条 = 浮在**画面顶部右侧**的一条横向**玻璃胶囊**，纵向与三颗**中线对齐**（`mirrorRailTop()`）。
+   ④ 这条胶囊**可拖**（用户 2026-10-16：「右侧操作栏可拖动」）：默认贴右上，抓它的空白处能拖到
+      窗口内任意位置（`--rail-x/y` + 下面 `.is-rail-moved` 那组），双击空白处回默认位置。
+   ⑤ **头部那条**（`.mirror-float-drag`，整窗宽 × `floatDragHeight`）既收 hover（进它就弹 chrome，
+      用户 2026-10-17）又自己拖窗（`onFloatDragDown` 那组；**不是** `-webkit-app-region: drag`，
+      理由见那组函数上面那段）。
 
-   换形态意味着**两条 chrome 都不再占位**：右边那一格 86px 与上边那条标题栏 28px 一起归画面
-   （画面铺满 `.mirror-main`），窗口里只剩「手机」：黑框 + 画面 + 三颗彩虹键（落在画面左上角）。
-   长条改成像桌面模式全屏那样浮在画面**右侧、上下居中**（白胶囊 + 指针进画面才出 + 可上下拖）。
-   ⚠️ 那两截的去向由**主进程**定（`mirrorScreenInsets(true)` 一起进 `mirrorWindowBounds` 与比例锁）——
-   这里只负责把 DOM 排成同一个形状，绝不自己动画面尺寸；否则「画面 = 设备比例」这条等式两边各算一套。
-
-   ⚠️ 全部带 `:not(.is-fullscreen)`：满屏那两档有自己的排法（真全屏是两格、桌面模式是纯画面），
-   而 `railFloating` 在满屏时也可能为真（量的是满屏那一格）。 */
+   ⚠️ 玻璃这条只有"浮在画面上"才成立：它背后必须有东西可模糊（投屏内容）。摆在画面外（窗口透明处）
+   就只能退化成半透明白底 —— 这也是它不占布局的另一个理由（占位那条路第一版就试过）。
+   ⚠️ 全部带 `:not(.is-fullscreen)`：满屏那两档有自己的排法（真全屏是「画面一格 + 长条一格」、
+   桌面模式是纯画面 + 右上浮条），这一轮**没动它们**。 */
 .mirror-window.is-rail-float:not(.is-fullscreen) .mirror-main {
-  /* 单格：画面与长条同格叠放（画面铺满，长条浮在上面）。 */
+  /* 单格：画面铺满，胶囊浮在它上面。 */
   display: grid;
   grid-template: minmax(0, 1fr) / minmax(0, 1fr);
 }
 
 /* 整条标题栏不存在（用户 2026-10-14：「上边头部就去掉……标题去掉」）：名称没了、触发带也没了
-   （这一档的触发判据换成"指针在画面里"，见 `onScreenPointerMove`），拖窗改由左上角那一小块接。
-   ⚠️ 必须与主进程的 `mirrorScreenInsets(true)`（上边只剩黑框）**同时**改 —— 只藏 DOM 不改内缩，
-   画面会比主进程算的矮 28px，圆角里当场露出 letterbox 黑条。 */
+   （窗口态的触发改成"指针进头部那条 + 胶囊的命中区"，见 `onScreenPointerMove` 上面那段），
+   拖窗也改由头部那条接（自己实现，见 `onFloatDragDown`）。
+   ⚠️ 必须与主进程的 `mirrorScreenInsets()`（恒 0，上边没有任何一截）**同时**改 —— 只藏 DOM 不改内缩，
+   画面会比主进程算的矮一截，圆角里当场露出 letterbox 黑条。 */
 .mirror-window.is-rail-float:not(.is-fullscreen) .mirror-titlebar {
   display: none;
 }
 
-/* 浮动态窗口顶边那条**看不见的拖窗区**（见模板里的注释）。`position: absolute` + DOM 排在画面之后
-   ⇒ 压在画面（`.mirror-screen` 是定位元素）上面；`z-index: 2` 只是把这条说死，不靠 DOM 顺序。
-   **整窗宽**（不是左上角一小块）+ 只有 `floatDragHeight` 那么高：用户 2026-10-14 第四条定的形状
-   （「像标题栏一样抓顶边就能拖」）。代价是画面顶部这 24px 收不到触控。 */
+/* **头部那条**：整窗宽 × `floatDragHeight`，既收 hover（触发 chrome 显形）又自己拖窗。
+   `position: absolute` + DOM 排在画面之后 ⇒ 压在画面（`.mirror-screen` 是定位元素）上面；
+   `z-index: 2` 只是把这条说死，不靠 DOM 顺序。
+   ⚠️ **`no-drag` 是必须的**（2026-10-17）：写着 `drag` 时这一整片是 Chromium 的**事件黑洞**
+   —— 指针进去一个事件都不发，`pointerenter` 永远不来、chrome 弹不出来。改成自己拖之后
+   （`window.moveTo`，见 `onFloatDragDown` 那组）它才收得到指针。
+   ⚠️ `pointer-events` 保持默认（`auto`）：它现在就是那个"鼠标移到头部"的落点。
+   ⚠️ 它压在画面顶部这一条上 ⇒ 画面最上面 `floatDragHeight` 那一条点不到（通知栏还有下面一截可拉）。
+   胶囊那一格不受影响（`.mirror-rail` 的 `z-index: 3` 在它上面）。 */
 .mirror-float-drag {
   position: absolute;
   left: 0;
@@ -1815,7 +2090,7 @@ onBeforeUnmount(() => {
   width: 100%;
   height: var(--float-drag-height);
   z-index: 2;
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 
 .mirror-window.is-rail-float:not(.is-fullscreen) .mirror-main>* {
@@ -1823,53 +2098,142 @@ onBeforeUnmount(() => {
 }
 
 .mirror-window.is-rail-float:not(.is-fullscreen) .mirror-frame {
-  /* 画面铺满那一格：右沿就是窗口右沿（只剩黑框），右边不再留长条那一格。
-     黑框与圆角照旧（与满屏那两档不同 —— 这里仍是「就是个手机样子」那个窗口态）。 */
+  /* 画面铺满那一格：窗口就是画面，右沿与下沿都不再留任何一格。 */
   width: 100%;
   height: 100%;
   justify-self: stretch;
   align-self: stretch;
 }
 
-/* 浮在画面上那一格：① 不吃点按（否则画面右缘 86px 的触控全没了），只有显形的面板接；
-   ② **必须自己也是定位元素**才画得到画面上面 —— `.mirror-screen` 带 `position: relative`，
-   定位元素在同一个层叠上下文里排在静态兄弟**之后** ⇒ 长条作为静态兄弟会被画面整个盖住
-   （DOM 查出来 `opacity:1`、矩形也对，屏幕上却什么都没有，10-11 截图实锤过）。
-   给它 `position: relative` 后两个都是 `z-index: auto` 的定位元素 ⇒ 按 DOM 顺序，后面的长条压在画面上。 */
+/* 胶囊的**命中区**：贴在窗口右上角，尺寸 = 胶囊 + 一圈外扩（四边由 padding 给）。
+   ① 它**吃指针**（`pointer-events: auto`）—— 它必须**自己**收得到 `pointerenter` / `pointerleave`
+      （面板收起时是 `pointer-events: none`，接不了事件）。它管的不是"进没进头部"（那是
+      `.mirror-float-drag` 的活），而是**贴着胶囊上下挪时别被判成离开**：这一块比头部那条高
+      （下沿到胶囊下面 `hitPad` 那圈），指针压在胶囊上时仍算"还在 chrome 上"。
+   ② `-webkit-app-region: no-drag`：它压在头部那条上（`z-index: 3` > 2），写 `drag` 就一个指针
+      事件都收不到（drag 区里 Chromium 不发事件）—— 头部那条已经不写 `drag` 了，这条照旧钉着。
+   ③ **必须自己也是定位元素**才画得到画面上面 —— `.mirror-screen` 带 `position: relative`，
+      定位元素在同一个层叠上下文里排在静态兄弟**之后** ⇒ 长条作为静态兄弟会被画面整个盖住
+      （DOM 查出来 `opacity:1`、矩形也对，屏幕上却什么都没有，10-11 截图实锤过）。 */
 .mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail {
-  position: relative;
-  justify-self: end;
-  align-self: start;
-  pointer-events: none;
-}
-
-/* 浮起来就是**满屏那套白胶囊**（面板自己是一件，不跟涂装走）：把上面那条「窗口态面板铺满整格、
-   底色交给 `.mirror-chrome`」整条撤掉。⚠️ 特异度 4 个选择器 > 那条的 3 个，改外观不会被它压回去。 */
-.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__panel {
-  width: calc(var(--rail-w) - 2 * var(--rail-side-gap));
-  margin: 0 var(--rail-side-gap) 0 0;
-  background: #fbfbfb;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 12%);
-}
-
-/* 浮起来之后面板不再与手机同高 ⇒ 纵向有可落区间，把手才不是个假开关（与桌面模式全屏同一条）。 */
-.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__handle {
-  display: block;
-}
-
-/* 浮动态面板**自己不吃点按**（用户 2026-10-14：「只有鼠标移入内容区才显示出来」）：它的显隐判据就是
-   "指针在画面里" ⇒ 人在画面里的时候它几乎总是显形的，整块面板吃事件就等于把画面右缘那 74px 的触控
-   永久拿走 —— 那不是"浮动的操作栏"，是"挡住内容的板子"。所以只有真正能点的东西吃事件：
-   按键 / 把手 / dev 那一格；面板底色与按键之间的空隙一律穿透给画面。
-   ⚠️ 特异度 4 个选择器 > `.mirror-rail__panel.is-shown`（2 个）⇒ 不会把显隐那条压回去。 */
-.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__panel {
-  pointer-events: none;
-}
-
-.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__key,
-.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__handle,
-.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__dev {
+  position: absolute;
+  inset: 0 0 auto auto;
+  padding: var(--rail-capsule-top) var(--rail-capsule-right) var(--rail-hit-pad) var(--rail-hit-pad);
+  /* ⚠️ 宽度必须在这里改掉：基础样式那条 `width: var(--rail-w)`（= 满屏那档的 86）是**布局宽度**，
+     留着它命中区就只有 86 宽、比胶囊还窄（胶囊宽度是内容撑开的，按钮一多就超过 86），
+     "命中区 = 胶囊 + 一圈外扩"就不成立了。`max-content` = 胶囊宽 + 左右 padding。
+     （`inset: 0 0 auto auto` 是 top 0 / right 0 / bottom auto / left auto —— 贴窗口右上角。） */
+  width: max-content;
+  z-index: 3;
   pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+/* 被拖过之后（根节点 `is-rail-moved`）：定位从"贴右上"换成"左上角 + translate"。
+   `--rail-x/y` 存的是**胶囊左上角**（`getBoundingClientRect` 量出来的），而这里的 padding 是
+   命中区外扩 ⇒ 命中区的左上角要往回退一圈 `hitPad`，胶囊才落在同一个点上。
+   ⚠️ 两套写法算出来的默认落点必须逐像素一致（否则按下的那一瞬间胶囊会跳）：贴右上时
+   `胶囊左 = 窗口宽 − 胶囊宽 − rail-capsule-right`，而 `--rail-x` 正是按下时量到的这个值。 */
+.mirror-window.is-rail-moved.is-rail-float:not(.is-fullscreen) .mirror-rail {
+  inset: auto;
+  left: 0;
+  top: 0;
+  padding: var(--rail-hit-pad);
+  translate: calc(var(--rail-x) - var(--rail-hit-pad)) calc(var(--rail-y) - var(--rail-hit-pad));
+}
+
+/* 胶囊本体：**横向一条 + 玻璃质感**。
+   ⚠️ 宽度由内容撑开（`width: auto`）—— 按钮数随条件渲染（桌面模式那颗只在采主屏那档出、dev 那格
+   只在开发时出），写死宽度会在那些情况下留一段空壳。
+   ⚠️ 底色与边框都是**写死的色值**，不跟主题走：镜像页是另一份 CSS 产物，Tailwind 的 `@theme` 只发
+   被用到的令牌（见上面 `--rail-accent` 那段），`var(--color-*)` 在这里取不到值 = 透明。
+   ⚠️ `translate: none` 压掉基础样式里那条 `--rail-top`（纵向拖拽位移是满屏那档的东西）。 */
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__panel {
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  width: auto;
+  height: var(--rail-capsule-height);
+  margin: 0;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 46%);
+  /* ⚠️ **只写标准属性，别手写 `-webkit-backdrop-filter`**（真机验收踩到的坑，2026-10-16）：
+     手写前缀版会让 lightningcss（Vite 的 CSS 压缩）把它们当成**同一属性的重复声明** ⇒ 留下前缀版、
+     删掉标准版；而当前 Electron（Chromium 138）**不认那个前缀版**（实测 `el.style.webkitBackdropFilter
+     = 'blur(4px)'` 赋不进去、`getComputedStyle` 读回 `none`，只有标准 `backdrop-filter` 生效）
+     ⇒ 玻璃质感当场失效，肉眼就是一块半透明白底（CDP 实测 `backdropFilter: "none"`）。
+     只写标准属性时 lightningcss 自己会把前缀版加上、且两条都留（产物实测）—— 交给它。 */
+  backdrop-filter: blur(20px) saturate(180%);
+  border: 1px solid rgb(255 255 255 / 55%);
+  box-shadow:
+    0 6px 18px rgb(0 0 0 / 20%),
+    inset 0 1px 0 rgb(255 255 255 / 55%);
+  translate: none;
+  /* **可拖**（用户 2026-10-16：「右侧操作栏可拖动」）：空白处是抓手、按住是抓握。
+     按钮自己的 `cursor: pointer` 更具体 ⇒ 指针落在按钮上不会显示抓手。
+     `touch-action: none` = 触摸板上拖它别被当成滚动手势吞掉；
+     `user-select: none` = 拖的过程中不选中里面的文字。 */
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__panel:active {
+  cursor: grabbing;
+}
+
+/* 窗口态不画把手：胶囊钉在顶部右侧、纵向没有可落区间（`clampRailTop` 只会回 0），
+   画个把手就是骗人抓的假开关。 */
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__handle {
+  display: none;
+}
+
+/* 胶囊上的按键：小一号、不画灰底（玻璃面够浅，灰底会糊成一片），图标压深保证可读。 */
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__key {
+  width: 22px;
+  height: 22px;
+  background: transparent;
+}
+
+/* ⚠️ **「开着」那三颗（关屏 / 常驻 / Mac 键盘）必须把填色加回来** —— 用户 2026-10-16 第三条报的
+   「悬浮按钮点击后变为白色，和背景同色了」。
+   根因是**特异性**，不是值写错：上面那条 `.mirror-rail__key` 是 (0,4,0)，压过了基础样式里的
+   `.mirror-rail__key.is-active { background: var(--rail-accent) }`（(0,2,0)），却**没压过**同一组里的
+   `color: #fff` ⇒ 真机实测点击后 `bg: rgba(0,0,0,0)` + `color: rgb(255,255,255)`，
+   白图标画在 `rgba(255,255,255,0.46)` 的玻璃胶囊上 = 那颗按键当场消失。
+   ⇒ 这里按满屏那档同一条规矩把填色补回来（`--rail-accent` = 主窗口那颗主按钮同一个蓝）。
+   ⚠️ `:hover` 必须一并写：不写的话鼠标压上去反而又变回透明（基础样式那条 `.is-active:hover` 同样
+   被上面 (0,4,0) 压掉）。按下那一下的 `filter: brightness(0.9)` 走基础样式，不受影响。 */
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__key.is-active {
+  background: var(--rail-accent);
+}
+
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__key.is-active:hover {
+  background: var(--rail-accent-press);
+}
+
+/* 导航键那一组从"贴到长条底部"改成**横向接在后面**，并用一条细分隔线跟开关组分开
+   （满屏那两档仍是纵向一列 + `margin-top: auto` 压到底）。 */
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__keys {
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  margin-top: 0;
+}
+
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__keys::before {
+  content: "";
+  width: 1px;
+  height: 14px;
+  margin: 0 3px;
+  background: rgb(0 0 0 / 14%);
+}
+
+/* dev 那一格：基础样式给它的是纵向排布下的 `margin-top`，横向排里会把整条顶歪。 */
+.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__dev {
+  margin-top: 0;
+  padding: 2px 7px;
 }
 
 

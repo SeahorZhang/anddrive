@@ -227,30 +227,67 @@ const MIRROR_WINDOW_FALLBACK_SIZE = { width: 850, height: 600 };
 const MIRROR_WINDOW_MARGIN = 80;
 
 /**
- * 贴在屏幕外沿那圈**黑色边框**的厚度（CSS px，逻辑像素）。
- * 它**常驻**、不随鼠标显隐（用户 2026-10-10：「黑色那一圈边框要永远显示」=「就是个手机样子」），
- * 但占布局 ⇒ 算进窗口尺寸。
+ * **独立虚拟屏**（点应用 / 桌面模式）那档窗口的**固定尺寸**（用户 2026-10-16：「宽度调成920px。
+ * 高度按 mac 屏幕比例调整」→ 随即「高度调整到660」）。宽高都点名，所以这一档的窗口形状是**常量**。
  *
- * 2026-10-10 用户把外面那圈**浅色窗口底**（`top 44 / side 16 / bottom 16` + hover 才扩）整块删了，
- * 换成手机右边外面浮着的一条控制长条（`MIRROR_RAIL`，它占窗口宽度，见 `mirrorScreenInsets()`）。
+ * 为什么这一档的窗口形状不跟设备屏走：它建的是一块**我们自己的** flex 显示（`new_display` + `flexDisplay`），
+ * 窗口形状就是那块显示的形状 —— 跟手机那块屏没有对应关系。「窗口必须与手机那块屏一一对应」是**采主屏**
+ * 那档的事（整机镜像 / 13 及以下点应用，见 `mirrorAspectRatio` 那条锁）。
  *
- * **这份数主进程与渲染层共用**：画面那块矩形 = 窗口减掉黑框，而画面矩形是虚拟显示尺寸与触控映射的
- * 输入，两边各写一套数就会在圆角里露出 letterbox 黑条。
+ * 历史（别照着旧记录找）：这一档先后试过「照设备屏比例缩到 0.75」（`MIRROR_VIRTUAL_WINDOW_SCALE`）、
+ * 「设备屏比例转置」（`mirrorLandscapeSize`）、「宽 920 + 高按 Mac 屏比例」（`getPrimaryDisplay().size`），
+ * 都被用户换掉了 —— 现在就是这两个常量，**不读设备分辨率也不读 Mac 分辨率**来定窗口形状。
+ */
+export const MIRROR_VIRTUAL_WINDOW_WIDTH = 920;
+/** 见上面那段：高度也是点名值（`MIRROR_VIRTUAL_WINDOW_WIDTH` 的兄弟，一起改才有意义）。 */
+export const MIRROR_VIRTUAL_WINDOW_HEIGHT = 660;
+
+/**
+ * 贴在屏幕外沿那圈**黑色边框**的厚度（CSS px，逻辑像素）—— **2026-10-16 起为 0**。
+ *
+ * 用户这一轮点单：「镜像投屏的时候将黑色手机边框去掉」⇒ 画面直接铺满窗口，窗口里只剩投屏本身。
+ * 之前它是 4（用户 2026-10-10：「黑色那一圈边框要永远显示」=「就是个手机样子」），
+ * 那套「手机样子」随这一轮一起退场了。
+ *
+ * ⚠️ 这个数**主进程与渲染层共用**（渲染层从 `windowStyle` 取 `--bezel`，画在 `.mirror-frame` 的
+ * `border` 上）：它是「画面那块矩形 = 窗口减掉什么」的输入，而画面矩形又是虚拟显示尺寸与触控映射的
+ * 输入，两边各写一套数就会在圆角里露出 letterbox 黑条。现在两边都是 0 ⇒ 画面 = 窗口。
+ * 常量留着（而不是删掉）是因为调用链还引用它（`mirrorScreenInsets` / `windowStyle` / 满屏那档的
+ * `box-shadow`），将来若要恢复内缩，改这一个数即可。
  */
 export const MIRROR_FRAME = {
-  bezel: 4,
+  bezel: 0,
 };
 
 /**
  * 画面那块矩形（`.mirror-screen`）的圆角半径 —— `App.vue` 的 `--radius`，**这里是唯一出处**
  * （渲染层从 `windowStyle` 取，不再在 CSS 里写死）。
  *
+ * 2026-10-16 一天里动过两次：40 → 12（用户当场在「保留 40 / 改成 12 小圆角 / 直角」里点了小圆角，
+ * 黑框去掉之后画面就是窗口的全部，40 那圈显得像一张卡片）→ **20**（同日用户看过后又点
+ * 「圆角稍微大点」，12 太小、像刀切的直角）。**2026-10-17 又点「投屏圆角再圆一点」⇒ 20 → 28**
+ * （20 看了一天觉得还是偏方；28 仍远小于被否掉的 40）。
+ *
  * ⚠️ **它不只是样式**：圆角切掉的那块是个四分之一圆，圆心在 `(bezel + radius, bezel + radius)`，
- * 点 `(x, y)` 落进被切掉的那块 ⇔ `(x − cx)² + (y − cy)² > radius²`。浮动态下三颗彩虹键是
- * "放进投屏里"的，落点必须在这个圆**内**侧 —— 所以改这个数就得回头验 `floatLightX/Y` 还在圆内
- * （`tests/electron/mirrorOptions.test.js` 有一条钉着这条几何）。
+ * 点落进被切掉的那块 ⇔ 落在圆心那个方角里、且 `(x − cx)² + (y − cy)² > radius²`。三颗彩虹键是
+ * "放进投屏里"的（`floatLightX/Y`），落点必须避开这块 —— 半径越大、方角越大，判据越紧
+ * （`tests/electron/mirrorOptions.test.js` 有一条钉着这条几何，见 `mirrorTrafficLightPosition` 那组）。
+ * ⚠️ 半径 20 那会儿有一条**充分不必要**的捷径判据：「x 或 y 有一个 ≥ 半径 ⇒ 必在区外」。
+ * 2026-10-17 半径到 28、同时三颗又往左挪到 `x = 20 < 28` ⇒ **那条捷径不再成立**，别再拿它当判据 ——
+ * 现在按**定义**算：取整组离弧心最近的那个角（左上角 `(floatLightX, floatLightY)`，因为该角到弧心的
+ * 距离在整块矩形里最大），只要它到 `(r, r)` 的距离 ≤ r，整组就都在弧内侧（= 没被啃掉）。
+ * 现值 `(20, 16)` 到 `(28, 28)` 的距离 ≈ 14.4 < 28 ✓（离弧还有 ~13.6px 余量）。
  */
-export const MIRROR_SCREEN_RADIUS = 40;
+export const MIRROR_SCREEN_RADIUS = 28;
+
+/**
+ * 三颗彩虹键的直径（CSS px）—— **系统（AppKit）画的**，我们只能整组平移，尺寸与间距都动不了。
+ *
+ * 2026-10-16 从散在各处的字面量抽出来（以前窗口态写 `(height − 14) / 2`、测试里写 `lightRadius = 7`）：
+ * 现在有两处要它 —— 窗口态靠它算垂直居中，顶部那条胶囊靠它算「与三颗中线对齐」的落点
+ * （见 `mirrorRailTop`）。
+ */
+export const MIRROR_TRAFFIC_LIGHT_SIZE = 14;
 
 /**
  * 窗口**顶部**那一条：专门放系统那三颗彩虹键 + app 名称（用户 2026-10-12：「试试 a 的变体，
@@ -258,7 +295,13 @@ export const MIRROR_SCREEN_RADIUS = 40;
  *
  * 它**占布局** ⇒ 进 `mirrorScreenInsets()` 的上边：画面那块矩形 = 窗口 − 这一条 − 四边黑框 − 右边长条，
  * 两边（主进程算的 `initialCss` 与渲染层的 DOM）必须同源，否则画面里会露出一条 letterbox。
- * `height` 与三颗的关系：三颗约 14 高，垂直居中 ⇒ `lightTop = (height − 14) / 2`。
+ * `height` 与三颗的关系：三颗约 14 高（`MIRROR_TRAFFIC_LIGHT_SIZE`），垂直居中 ⇒
+ * `lightTop = (height − 尺寸) / 2`。
+ *
+ * ⚠️ **2026-10-16 起这一条在实际窗口里不再出现**（`mirrorRailFloats` 恒真 ⇒ 永远走"浮动态"那套：
+ * 标题栏整条不画、三颗落进画面左上角）。它现在只剩两个用途：① 窗口态那套落点 `(12, 7)` 的算式；
+ * ② `mirrorTrafficLightPosition` 的 `false` 分支。保留是因为 `mirror:windowButtons` 的载荷仍带
+ * `railFloating`，删掉这半套要一起动 IPC 链路 —— 这一轮只改外观，没动它。
  *
  * ⚠️ **长条浮在画面里那一档（`mirrorRailFloats`）这整条不存在**（用户 2026-10-14 第二条：
  * 「上边头部就去掉，mac 的 3 个按键放进投屏中，标题去掉」）：窗口没有标题栏 ⇒
@@ -285,40 +328,76 @@ export const MIRROR_TITLEBAR = {
   /** 名称与三颗之间留这一点。 */
   nameGap: 10,
   /**
-   * **浮动态**顶边那条**看不见的拖窗区**：整窗宽 × 这么高（CSS px）。
+   * **浮动态**顶边那条：整窗宽 × 这么高（CSS px）—— 它同时是**拖窗区**与**chrome 的显形触发区**。
    *
    * 为什么要有它：浮动态整条标题栏都不存在（见上面那段），拖窗区跟着一起没了 —— 窗口拖不动。
    * 用户 2026-10-14 第四条定的形状是**顶边整条**（「像标题栏一样抓顶边就能拖」），
-   * 代价 = 画面顶部这 18px 收不到触控（通知栏那条还有下面一截可拉）。
+   * 代价 = 画面顶部这一条收不到触控（通知栏那条还有下面一截可拉）。
    *
    * ⚠️ **第一版是左上角 80×28 的小方块**（宽 = `mirrorTitlebarNameLeft()`），被用户当场打回
    * （「app 投屏后不能拖拽了」）：那块地方**本来就盖着三颗彩虹键**，而三颗是 AppKit 画在网页内容
-   * **之上**的 ⇒ 方块中间那一大块根本抓不到，剩下的只是几条缝。现在改成整条之后三颗也不再压它
-   * （落点下移到 `floatLightY`）。
+   * **之上**的 ⇒ 方块中间那一大块根本抓不到，剩下的只是几条缝。改成整条之后三颗收进画面左上角
+   * （`floatLightX/Y`）—— 但**不是"让开"**：第十一条起它们压在这条里（见下面那段）。
    *
-   * ⚠️ 高度**跟着三颗的纵坐标走**（用户 10-14 第五、六条把三颗一路上移）：三颗一上移，这条的下沿
-   * 也跟着收，等式 `floatLightY === floatDragHeight` 继续成立 —— 否则三颗会重新压进拖窗区，
-   * 而 AppKit 按钮吃事件 ⇒ 三颗那一列又拖不动了。
+   * ⚠️ **2026-10-17 第十一条起，三颗压进这条里面**（用户「3个彩虹按钮和悬浮操作栏往上移一点，
+   * 拖拽高度再加5px」）：两个要求方向相反 —— 三颗上移是把顶边往上抬、加高是把下沿往下推
+   * ⇒ 上一轮那条 `floatLightY === floatDragHeight` 的硬等式**就此作废**，重叠量 = 高度 − 三颗顶边。
+   *
+   * 压进去的代价（**探针台实测，2026-10-17**，建窗参数照抄 `createMirrorWindow`）：三颗是 AppKit
+   * 画在网页**之上**的，但它**只吃掉"按下"**（NSButton 处理 mouseDown），**移动事件照常进 DOM** ——
+   * 指针从这条滑到三颗上时 `pointermove` 照发、`pointerleave` **不触发**（探针日志：只有
+   * `pointermove @(27,23)`，无 leave；停在灯上 1.5s 也一条都不发）。⇒ ① hover 显形**不会闪断**；
+   * ② 三颗盖住的那一小块（宽 `lightGroupWidth`、高 = 重叠量）**按下拖不动窗口**（点上去就是点灯）
+   * —— 那是灯本身的地盘，且灯一直可见，可接受。
+   * ⚠️ 早前那条"AppKit 按钮吃事件 ⇒ 三颗那一列收不到指针"的说法**只对了一半**（吃的是按下）；
+   * 前两次"三颗跟着带子一起挪"是照那条推的，这一轮改成"压进去"。
+   *
+   * 历史：**12 → 16**（2026-10-17 用户「可拖拽高度再加4px」）→ **16 → 21**
+   * （同日用户「可拖拽区域再加高5px」）→ **21 → 26**（同日用户「拖拽高度再加5px」）。
+   * 前两次是"整条全宽"的加高、三颗跟着让位（等式成立）；这一次三颗同时要上移 ⇒ 压进去。
+   * 连带：胶囊跟三颗中线对齐（`mirrorRailTop`）⇒ 一起上移。
+   *
+   * ⚠️ **2026-10-17 起这条不再是 `-webkit-app-region: drag`**：那一整片是 Chromium 的**事件黑洞**
+   * （指针进去一个事件都不发），而用户这一轮要「**鼠标移动到头部可拖拽的地方**就展示出来」——
+   * 同一条带既要收 hover 又要能拖，只能二选一。现在改成渲染层自己拖窗（`App.vue` 的
+   * `onFloatDragDown` 那一组，`window.moveTo` 实测生效），这一条因此**收得到指针事件**。
+   * 取舍与实测见 `docs/NATIVE_MIRROR.md` 第八轮。
    */
-  floatDragHeight: 12,
+  floatDragHeight: 26,
   /**
    * **浮动态**下三颗的落点（窗口内容区左上角，单位 CSS px）。
    *
-   * 浮动态窗口顶就是画面顶（`mirrorScreenInsets(true).top` 只剩 4px 黑框）⇒ 三颗是"放进投屏里"的，
-   * 必须落在**画面那块圆角矩形**内。画面在 `(bezel, bezel)`、圆角半径 40（`App.vue` 的 `--radius`），
-   * 那个四分之一圆的圆心在 `(44, 44)`：点 `(x, y)` 落进被圆角切掉的那块 ⇔ `(x−44)² + (y−44)² > 40²`。
+   * 落点的硬约束是**避开画面左上角那圈圆角切掉的那块**（`MIRROR_SCREEN_RADIUS`，现 28）：
+   * 那块是 `[0,r]×[0,r]` 方角里、以 `(r,r)` 为圆心半径 `r` 的弧**外侧**。判据按定义算（见
+   * `MIRROR_SCREEN_RADIUS` 那段）：整组离弧心最近的角 = 左上角 `(floatLightX, floatLightY)`，
+   * 它到 `(r, r)` 的距离 ≤ r 就没被啃掉（`mirrorOptions.test.js` 里钉着这条）。
+   * ⚠️ 别再退回「x 或 y ≥ r」那条捷径 —— 半径 28 之后 `floatLightX = 20 < 28`，捷径已经不成立。
    *
-   * 原值 `(12, 7)`（= 窗口态那套）距圆心 48.9 > 40 ⇒ **红灯一半压在黑色圆角外面**（用户 2026-10-14
-   * 第四条报障「超出屏幕了」）。第四条先挪到 `(24, 24)`（红灯圆心距圆心 18.4，圆最外沿 25.4 < 40
-   * ⇒ 余量 ~14.6px）；**第五条往右、往上各挪 6px 成 `(30, 18)`**（用户：「mac 彩虹按钮往右移点，
-   * 往上移点」，余量 ~12.7px）；**第六条再往右上各挪 6px 成 `(36, 12)`**（用户：「三个按键离设备画面
-   * 太近，往右上调整一点」）—— 红灯圆心 `(43, 19)` 距圆心 25.0、圆最外沿 32.0 < 40 ⇒ 余量 ~8px，
-   * 仍安全，但**再往右上挪就会撞那条 ≥5px 余量的判据**（`mirrorOptions.test.js` 里钉着）。
+   * 历史（一路是"往右上挪"与"半径变大"在互相挤）：
+   * - 原值 `(12, 7)`（= 窗口态那套）：半径 40 时红灯一半压在圆角外 ⇒ 用户 2026-10-14 第四条报
+   *   「超出屏幕了」；
+   * - 第四条 `(24, 24)` → 第五条 `(30, 18)`（「往右移点，往上移点」）→ 第六条 `(36, 12)`
+   *   （「三个按键离设备画面太近，往右上调整一点」）；
+   * - **2026-10-16 第七条：`36 → 26`**（用户「彩虹见靠左一点」）。半径同一轮从 12 调到 20；
+   * - **2026-10-17 第八条：`26 → 20`**（用户「左上角 mac 3 个彩虹按钮再往左移一点」）。半径同一轮
+   *   从 20 调到 28 ⇒ 这次是**半径变大 + 落点左移同时发生**，两条都在挤这个方角；
+   * - **2026-10-17 第九条：纵坐标 `12 → 16`**（用户「可拖拽高度再加4px」）。这一条**不是**在挪三颗，
+   *   而是拖窗区抬高 4px 之后三颗必须跟着让开它（见 `floatDragHeight` 那段）—— 当时等式是硬的；
+   * - **2026-10-17 第十条：纵坐标 `16 → 21`**（用户「可拖拽区域再加高5px」）。同上，还是让开顶边那条；
+   * - **2026-10-17 第十一条：纵坐标 `21 → 16`**（用户「3个彩虹按钮和悬浮操作栏往上移一点」）。
+   *   这一条**是**在挪三颗（往上），同时那条又加高 5px ⇒ 三颗压进它里面 10px（等式作废，
+   *   理由与实测见 `floatDragHeight` 那段）。往上挪对圆角判据是**变安全**的方向。
    *
-   * 纵坐标同时是**顶边那条拖窗区的下沿**（`floatDragHeight`）—— 三颗正好让开它，整条都能拖。
+   * 现值 `(20, 16)` 到弧心 `(28, 28)` ≈ 14.4 < 28 ✓ 仍在弧内侧（离弧还有 ~13.6px 余量）。
+   * 判据那条例外测试要求余量 > 5px，别把落点再往左下推。
+   *
+   * ⚠️ 它**不再**是顶边那条拖窗区的下沿了（`floatDragHeight` 现在 26 > 16）：三颗的上半截压在那条里，
+   * 那一小块按下会被 AppKit 吃掉（点上去是点灯）—— 取舍见 `floatDragHeight` 那段。
+   * ⚠️ 它是**系统的落点**，横向与我们那条胶囊无关：胶囊只跟 `floatLightY` 对齐中线
+   * （`mirrorRailTop`），改 `floatLightX` 不会让胶囊跟着跑。
    */
-  floatLightX: 36,
-  floatLightY: 12,
+  floatLightX: 20,
+  floatLightY: 16,
 };
 
 /** app 名称的左起位置：让开三颗（名称是我们画的，落点自己算）。 */
@@ -345,22 +424,43 @@ export function mirrorTrafficLightPosition(railFloating = false) {
   if (railFloating === true) {
     return { x: MIRROR_TITLEBAR.floatLightX, y: MIRROR_TITLEBAR.floatLightY };
   }
-  return { x: MIRROR_TITLEBAR.lightX, y: Math.round((MIRROR_TITLEBAR.height - 14) / 2) };
+  return {
+    x: MIRROR_TITLEBAR.lightX,
+    y: Math.round((MIRROR_TITLEBAR.height - MIRROR_TRAFFIC_LIGHT_SIZE) / 2),
+  };
 }
 
 /**
- * 手机**右边**那条悬浮控制长条（返回/Home/多任务 + 那几颗开关，用户 2026-10-10 定）。
- * 它**占窗口宽度**（用户 10-10 第二次定稿：「任何 UI 都不要在手机里出现，都移到外边」⇒ 只能挤到画面外），
- * 所以它进 `mirrorScreenInsets()` 的右边：窗口 = 画面 + 黑框 + 这条。
- * 唯一进主进程的另一件事是红绿灯的落点 —— 那三颗是系统画的，CSS 盖不住。
+ * 画面**顶部右侧**那条悬浮控制胶囊（返回/Home/多任务 + 那几颗开关）。
+ *
+ * 2026-10-16 从「手机**右边**外面那条占窗口宽度的长条」改成现在这样（用户：「右侧悬浮更改为上方很小的
+ * 悬浮，有一种透明玻璃质感」+「浮动到画面顶部右边，跟 mac 3 个彩虹按键对齐」）：
+ * - **不占布局**：窗口里只剩画面，胶囊浮在画面之上（`mirrorScreenInsets()` 因此恒为 0）。
+ *   玻璃质感也要求它浮在画面上 —— `backdrop-filter` 只有背后有东西可模糊时才成立，
+ *   摆在画面外（窗口透明处）就只能退化成半透明白底。
+ * - **纵向与三颗彩虹键中线对齐**（`mirrorRailTop`）：视觉上它与那三颗在同一行，不是各占一条。
+ * - 尺寸从"内容撑开"来（`height` 是唯一钉死的几何）：按钮数随条件渲染（桌面模式那颗只在采主屏那档出、
+ *   dev 那格只在开发时出），所以宽度不写死。
  */
 export const MIRROR_RAIL = {
+  /** 胶囊高（CSS px）：按钮 22 + 上下各 3 的 padding。 */
+  height: 28,
+  /** 胶囊右缘距窗口右缘。右边没有圆角让位的问题，12 就够（不再与三颗的 `floatLightY` 同数：
+   *  那一位 2026-10-17 跟着顶边那条挪过三次（12 → 16 → 21 → 16），而右边沿与它无关，没理由跟着动）。 */
+  right: 12,
   /**
-   * 长条格子宽（占布局那一格，面板在它里面左右各留 6px）。
-   * ⚠️ 红绿灯**不再进这套算术**（用户 2026-10-11：「3 个彩虹按键恢复默认，不要有任何修改」）：
-   * 之前 86 的下限是「三颗约 58 宽 + 居中留白」，现在三颗归 AppKit 放左上角，这个数只剩面板自己的手感值。
+   * 命中区外扩（CSS px）：胶囊很小，鼠标要"移入按钮区域"才淡入（用户这一轮点的显隐方式），
+   * 不外扩一圈就很难命中，所以命中区 = 胶囊 + 这一圈。
    */
-  width: 86,
+  hitPad: 8,
+  /**
+   * **满屏那一档**长条占的那一格宽（渲染层的 `--rail-w`）。
+   *
+   * ⚠️ 窗口态**不再用它**（胶囊浮在画面上、不占布局，宽度由内容撑开）。它活下来只因为真全屏那屏
+   * 是「画面一格 + 长条一格」的两格排法（用户 2026-10-11：「不要覆盖掉右侧操作按钮」⇒ 长条自己
+   * 占一格，画面永远不进那一截），那一格得有个宽度。满屏那两档这一轮没动。
+   */
+  fullscreenWidth: 86,
   /**
    * 淡入 / 淡出各多久（CSS 与「红绿灯延后藏起来」共用这两个数）。
    * 出去比进来慢一档：出现要跟手，消失要收得干净（用户 10-10「消失的时候感觉不太协调」）。
@@ -370,75 +470,65 @@ export const MIRROR_RAIL = {
 };
 
 /**
- * 长条**浮在画面里**的阈值（用户 2026-10-14：「如果手机投屏宽度足够宽，那就把手机投屏右侧的操作栏
- * 更改为全屏时在投屏里浮动的样子」）。
+ * 胶囊**顶边**距窗口顶的距离 —— 由「与三颗彩虹键中线对齐」反推（用户 2026-10-16：
+ * 「浮动到画面顶部右边，跟 mac 3 个彩虹按键对齐」）。
  *
- * 单位是**画面宽**（CSS px）。窄画面（普通竖屏手机窗口，画面约 360–420 宽）浮起来要盖掉画面五分之一
- * 以上，仍旧摆在窗口右边那一格；宽到 640 才换成满屏那套「白胶囊浮在画面右上」。
- */
-export const MIRROR_RAIL_FLOAT_MIN_SCREEN_WIDTH = 640;
-
-/**
- * 窗口边 → 画面边的总内缩：四边是那圈常驻黑框，**右边再多一条长条宽**、**上边再多一条标题栏**。
- * 右边不对称是故意的：长条在手机右边外面，画面矩形才等于设备比例那块。
+ * 三颗的中线 = `floatLightY + 灯径/2`；胶囊中线 = `top + height/2`。两者相等 ⇒
+ * `top = floatLightY + 灯径/2 − height/2`。本机现值 = `16 + 7 − 14 = 9`
+ * （三颗 2026-10-17 跟着顶边那条挪过三次 12 → 16 → 21，第十一条又自己上移回 16 ⇒ 胶囊一路跟着走，
+ * 这一条是自动的）。
  *
- * @param {boolean} [railFloating] 长条是不是浮在画面里（见 `mirrorRailFloats`）。这一档**两截一起让掉**
- *   （用户 2026-10-14 第二条：长条浮起来时「上边头部去掉、mac 三颗放进投屏、标题去掉」）：
- *   右边那 86px 归画面（窗口因此窄 86px，宽不够时是画面吃掉它，见 `mirrorWindowBounds`），
- *   上边那 28px 的标题栏整条不存在 ⇒ 只剩黑框。两者是同一件事的两面：**没有 chrome 占位的窗口**。
+ * ⚠️ 它**不占布局**（胶囊是浮在画面上的），所以不进 `mirrorScreenInsets()` —— 画面该多高还是多高，
+ * 代价只是画面顶部右侧那一小块被盖住（那正是"悬浮"的含义）。
+ * @returns {number} 胶囊顶边（CSS px，整数）
  */
-export function mirrorScreenInsets(railFloating = false) {
-  const { bezel } = MIRROR_FRAME;
-  const floating = railFloating === true;
-  return {
-    // 上边多一条标题栏（三颗彩虹键 + app 名的地盘，见 `MIRROR_TITLEBAR`）；浮动态那条整块没有。
-    top: bezel + (floating ? 0 : MIRROR_TITLEBAR.height),
-    bottom: bezel,
-    left: bezel,
-    right: bezel + (floating ? 0 : MIRROR_RAIL.width),
-  };
+export function mirrorRailTop() {
+  const center = MIRROR_TITLEBAR.floatLightY + MIRROR_TRAFFIC_LIGHT_SIZE / 2;
+  return Math.round(center - MIRROR_RAIL.height / 2);
 }
 
 /**
- * 「长条该不该浮在画面里」—— **全项目唯一一处判据**：主进程建窗口时算一次，渲染层实时跟着窗口大小算
- * （`mirror:railFloat` 再把结论报回来重设比例锁）。
+ * 窗口边 → 画面边的总内缩。
  *
- * 入参是**画面区那一格的宽**（= 窗口内容宽 − dev 边栏）：窗口态就是「画面 + 右边那条长条」合起来能用
- * 的宽。渲染层量的是 `.mirror-main` 的 `clientWidth` —— ⚠️ **别拿画面本身的宽来判**：长条一浮起来
- * 画面自己就宽 86px，判据会被自己的结果推着走。
+ * ⚠️ **2026-10-16 起恒为 0（画面 = 窗口）**：黑框去掉（`MIRROR_FRAME.bezel = 0`）、长条改成浮在画面上的
+ * 胶囊（不占位）、标题栏随"两档形态"退场（`mirrorRailFloats` 恒真 ⇒ 永远走那条把两条 chrome 都让掉的
+ * 分支）。函数保留而不是删掉，是因为调用点很多（`initialCss` / 比例锁 / `mirrorWindowBounds` /
+ * 渲染层的布局），删它要一起动那条链；将来若要恢复内缩，改这里一处即可。
  *
- * ⚠️ **两个形态各有一条线（迟滞）**，不是一条：`previous` = 上一次的结论，它决定按哪套内缩把「长条
- * 占的那一截」扣掉 —— 在外面扣 94（黑框 8 + 长条 86），浮着时只扣 8（这条判据只看**左右**两截，
- * 上边那一截虽然也随形态变，但不进这里）。若一律按同一个口径判，跨过临界点
- * 会来回跳：比例锁的余量也跟着形态差一条长条宽，拖上下边时窗口宽是由高推出来的，正好是那条会自己跳
- * 的路径。分两条线之后两个方向各有一个不动点，且**浮着的时候画面一定 ≥ 阈值**（用户 2026-10-14 选的那条）。
- *
- * @param {number} screenAreaWidth 画面区那一格的宽（CSS px）
- * @param {boolean} [previous] 上一次的结论；窗口刚开出来时传 false = 「长条在外面」那套几何
- * @returns {boolean}
+ * @returns {{ top: number, bottom: number, left: number, right: number }}
  */
-export function mirrorRailFloats(screenAreaWidth, previous = false) {
-  const width = Number(screenAreaWidth);
-  // 量不到宽（还没排版 / 非法值）时维持"在外面"：窄的那一档是安全侧，浮起来是盖住画面的那个动作。
-  if (!(width > 0)) return false;
-  const { left, right } = mirrorScreenInsets(previous === true);
-  return width - left - right >= MIRROR_RAIL_FLOAT_MIN_SCREEN_WIDTH;
+export function mirrorScreenInsets() {
+  return { top: 0, bottom: 0, left: 0, right: 0 };
+}
+
+/**
+ * 「长条该不该浮在画面里」—— **2026-10-16 起恒为 `true`**。
+ *
+ * 这个判据本来是「画面宽 ≥ 640 就把右侧长条改成浮在画面里」（用户 2026-10-14）。这一轮用户把长条整个
+ * 换成「浮在画面顶部右侧的小胶囊」⇒ 它**永远不占布局**，两档形态的分化随之退场，判据失去分辨力。
+ *
+ * ⚠️ 函数与调用链**保留**（主进程建窗那一拍、渲染层实时判、`mirror:railFloat` 报回、比例锁余量）：
+ * 那几处仍需一个布尔来选内缩与三颗落点，而现在两者恒为同一套值。删它要一起动 IPC 链路，
+ * 这一轮只改外观，没动。
+ * @returns {boolean} 恒 `true`
+ */
+export function mirrorRailFloats() {
+  return true;
 }
 
 /**
  * 拖拽锁比例时**不参与比例**的那一圈固定余量（`BrowserWindow.setAspectRatio` 的第二个参数）。
  *
- * 锁的是**画面那块矩形**（= 内容区减掉 `mirrorScreenInsets()`），因为手机比例说的是画面，不是窗口：
- * 窗口比画面多出四边的黑框与右边那条长条，这些宽度是写死的、不随窗口缩放。
+ * 锁的是**画面那块矩形**（= 内容区减掉 `mirrorScreenInsets()`），因为比例说的是画面，不是窗口。
  * dev 调试边栏撑宽的也是窗口而不是画面，所以调用方把那一截作为 `extraWidth` 加进来。
  *
+ * ⚠️ 2026-10-16 起内缩恒为 0（画面 = 窗口）⇒ 这个函数只剩"把 dev 边栏那一截加上去"这一个作用。
+ * 参数与函数保留是为了不动调用链（`createMirrorWindow` / `relockAspect` / `resize` 三处都用它）。
+ *
  * @param {number} [extraWidth] 画面之外额外占窗口宽的截（dev 边栏），0 = 没有
- * @param {boolean} [railFloating] 长条浮在画面里时**右边与上边那两截都不算余量**（那 86px 与 28px
- *   已经归画面了）—— 漏改这一项，「画面 = 设备比例」这条等式当场破掉（画面比设备比例宽一条长条、
- *   高一截标题栏，圆角里露出 letterbox 黑条）。
  */
-export function mirrorContentExtraSize(extraWidth = 0, railFloating = false) {
-  const { left, right, top, bottom } = mirrorScreenInsets(railFloating);
+export function mirrorContentExtraSize(extraWidth = 0) {
+  const { left, right, top, bottom } = mirrorScreenInsets();
   const extra = Number(extraWidth) || 0;
   return { width: left + right + Math.max(0, extra), height: top + bottom };
 }
@@ -458,28 +548,46 @@ export function mirrorAspectRatio(screenSize) {
 }
 
 /**
- * 镜像窗口的初始尺寸：把**画面**照设备画面比例等比 fit 进「可用区减系统余量减那圈常驻黑框」，
- * 再把黑框加回窗口上（2026-10-07 定比例、2026-10-10 删掉外扩那一圈后只剩黑框）。
+ * **独立虚拟屏**那档的开窗尺寸：就是 `MIRROR_VIRTUAL_WINDOW_WIDTH` × `MIRROR_VIRTUAL_WINDOW_HEIGHT`
+ * 两个点名值（用户 2026-10-16：「宽度调成920px」→「高度调整到660」）。**不读任何屏幕分辨率**来定形状。
+ *
+ * ⚠️ 唯一的动态部分：**与设备信息同生共死**（`deviceScreenSize` 读不到 ⇒ 退回 850x600）。读不到
+ * 分辨率/密度时渲染层压根不给虚拟显示尺寸（`new_display` 退空串、不开 flex），那块显示是**主屏尺寸的
+ * 竖屏**，这时候开一个 920x660 的横窗只会把竖屏画面框得更死。
+ *
+ * 为什么必须在**建窗口**这一步就把形状定死：默认模式的虚拟显示尺寸取自**窗口画面区的物理像素**
+ * （`src/mirror/direct-session.js` 的 `displayFor`）⇒ 窗口是什么形状，那块 flex 显示就是什么形状，
+ * 里面的 app 从第一帧起就按那个形状排版；等第一帧再改等于让人先看一次错的。
+ * @param {{ width?: number, height?: number } | null} deviceScreenSize 设备物理分辨率（只当「设备信息读到了吗」的闸）
+ * @returns {{ width: number, height: number }}
+ */
+export function mirrorVirtualWindowSize(deviceScreenSize) {
+  if (!(Number(deviceScreenSize?.width) > 0) || !(Number(deviceScreenSize?.height) > 0)) {
+    return { ...MIRROR_WINDOW_FALLBACK_SIZE };
+  }
+  return { width: MIRROR_VIRTUAL_WINDOW_WIDTH, height: MIRROR_VIRTUAL_WINDOW_HEIGHT };
+}
+
+/**
+ * 镜像窗口的初始尺寸：把**画面**照设备画面比例等比 fit 进「可用区减系统余量减内缩」。
+ *
+ * ⚠️ 2026-10-16 起内缩恒为 0（黑框去掉、长条改成浮在画面上的胶囊、标题栏退场）⇒
+ * **窗口 = 画面**，这个函数实际就是"照设备比例 fit 可用区"。
  *
  * 为什么窗口要先照比例开好，而不是先开一块再等第一帧收一次：默认模式的虚拟显示尺寸取自
  * **窗口画面区的物理像素**，窗口是横的就开出一块横显示 —— 竖屏 app 立刻换版式，等第一帧再收
  * 回来等于让人看一次错误形状（那一版当天就被替掉了）。
- * 为什么黑框要参与计算：窗口 = 画面 + 黑框，画面才正好是设备比例；反过来（窗口照比例开、
- * 里面再留一圈）画面会比设备比例更窄，圆角里就多出黑条。
  *
  * 读不到设备比例就退回 `850x600`（这一档是**窗口**尺寸），并且渲染层拿不到比例时**不给显示尺寸**
  * （`new_display` 退空串 = 上游默认的主屏尺寸与密度），两边都不自己编数字。
  * @param {{ width: number, height: number } | null} screenSize 设备物理分辨率（`wm size` 的 Physical）
  * @param {{ width: number, height: number } | null} workArea 该屏幕可用区
- * @param {boolean} [railFloating] 长条浮在画面里（见 `mirrorRailFloats`）：右边不留那一格、上边不留标题栏，
- *   空出来的 86px 归画面、28px 归画面高 —— 宽不够（横形显示/宽窗口）时画面自己吃掉，宽够（竖形显示）时
- *   窗口跟着窄 86px。⚠️ 调用方要拿**同一个** `railFloating` 去算 `initialCss` 与比例锁，否则三者各按一套几何算。
  * @returns {{ width: number, height: number }}
  */
-export function mirrorWindowBounds(screenSize, workArea, railFloating = false) {
+export function mirrorWindowBounds(screenSize, workArea) {
   const width = Number(screenSize?.width);
   const height = Number(screenSize?.height);
-  const insets = mirrorScreenInsets(railFloating);
+  const insets = mirrorScreenInsets();
   const available = {
     width: Number(workArea?.width) - MIRROR_WINDOW_MARGIN - insets.left - insets.right,
     height: Number(workArea?.height) - MIRROR_WINDOW_MARGIN - insets.top - insets.bottom,

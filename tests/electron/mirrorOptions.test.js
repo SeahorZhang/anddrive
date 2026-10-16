@@ -18,14 +18,18 @@ const {
   mirrorScreenInsets,
   mirrorContentExtraSize,
   mirrorRailFloats,
+  mirrorRailTop,
   mirrorTitlebarNameLeft,
   mirrorTrafficLightPosition,
   mirrorAspectRatio,
+  mirrorVirtualWindowSize,
   MIRROR_FRAME,
   MIRROR_RAIL,
-  MIRROR_RAIL_FLOAT_MIN_SCREEN_WIDTH,
   MIRROR_SCREEN_RADIUS,
   MIRROR_TITLEBAR,
+  MIRROR_TRAFFIC_LIGHT_SIZE,
+  MIRROR_VIRTUAL_WINDOW_WIDTH,
+  MIRROR_VIRTUAL_WINDOW_HEIGHT,
   mirrorsMainDisplay,
   supportsDesktopMode,
 } = await import('../../electron/mirror/options.js')
@@ -289,7 +293,9 @@ describe('resolveRuntimePrefs', () => {
   })
 })
 
-describe('mirrorWindowBounds（窗口 = 画面 + 那圈常驻黑框）', () => {
+// 窗口尺寸 = 照设备画面比例 fit 可用区。⚠️ 2026-10-16 起内缩恒为 0（黑框去掉、长条改成浮在画面上的
+// 胶囊、标题栏退场）⇒ **窗口 = 画面**，不再有"把黑框与长条加回来"这一步。
+describe('mirrorWindowBounds（窗口 = 画面，照设备画面比例 fit 可用区）', () => {
   const WORK = { width: 1440, height: 900 }
   const FALLBACK = { width: 850, height: 600 }
   const insets = mirrorScreenInsets()
@@ -299,21 +305,20 @@ describe('mirrorWindowBounds（窗口 = 画面 + 那圈常驻黑框）', () => {
     height: b.height - insets.top - insets.bottom,
   })
 
-  it('竖屏手机：画面照设备比例把高顶满，窗口再把黑框与右边那条加回来', () => {
-    // 可用区 1440x900 减 80 系统余量，再减内缩（横 4+(4+86)=94、纵 (4+28)+4=36 —— 上边那条标题栏）
-    // → 画面可用 1266x784；1080x2340 由高定：784 → 宽 362。窗口 = 362+94 x 784+36。
+  it('竖屏手机：画面照设备比例把高顶满，窗口就是它（内缩恒 0）', () => {
+    // 可用区 1440x900 减 80 系统余量 → 可用 1360x820；1080x2340 由高定：820 → 宽 378。
     const bounds = mirrorWindowBounds({ width: 1080, height: 2340 }, WORK)
-    expect(bounds).toEqual({ width: 456, height: 820 })
-    // 关键不变量：**画面**那块才是设备比例。让窗口本身等比（= 不把内缩算进去）
-    // 画面就会比设备比例窄，圆角里露出 letterbox 黑条。
-    expect(screenOf(bounds)).toEqual({ width: 362, height: 784 })
+    expect(bounds).toEqual({ width: 378, height: 820 })
+    // 关键不变量：**画面**那块才是设备比例 —— 现在窗口就是画面，所以窗口本身也必须等比。
+    expect(screenOf(bounds)).toEqual(bounds)
+    expect(bounds.width / bounds.height).toBeCloseTo(1080 / 2340, 2)
   })
 
   it('横屏设备改用宽为准', () => {
-    // 画面可用 1266x784，2340x1080 由宽定：1266 → 高 584。窗口 = 1266+94 x 584+36。
+    // 可用 1360x820，2340x1080 由宽定：1360 → 高 628。
     expect(mirrorWindowBounds({ width: 2340, height: 1080 }, WORK)).toEqual({
       width: 1360,
-      height: 620,
+      height: 628,
     })
   })
 
@@ -360,27 +365,22 @@ describe('mirrorWindowBounds（窗口 = 画面 + 那圈常驻黑框）', () => {
   })
 })
 
-describe('mirrorScreenInsets（黑框四边 + 上边标题栏 + 右边长条）', () => {
-  /** 长条挪到画面外边 ⇒ 它进内缩的**右边**，左边仍只有黑框。这条钉住不对称是有意为之。 */
-  it('内缩右边多一条长条、上边多一条标题栏（画面才等于设备比例，键与名称才在手机外面）', () => {
-    const insets = mirrorScreenInsets()
-    expect(insets.right - insets.left).toBe(MIRROR_RAIL.width)
-    expect(insets.top - insets.bottom).toBe(MIRROR_TITLEBAR.height)
-    // 左与下仍然只有那圈黑框 —— 两条 chrome 都在另外两侧。
-    expect(insets.left).toBe(insets.bottom)
+// 2026-10-16 起**恒为 0**：黑框去掉（`MIRROR_FRAME.bezel = 0`）、长条改成浮在画面上的胶囊（不占位）、
+// 标题栏随两档形态一起退场 ⇒ **画面 = 窗口**。
+describe('mirrorScreenInsets（恒 0：画面 = 窗口）', () => {
+  it('四边都是 0，且黑框确实归零了', () => {
+    expect(MIRROR_FRAME.bezel).toBe(0)
+    expect(mirrorScreenInsets()).toEqual({ top: 0, bottom: 0, left: 0, right: 0 })
   })
 
   /**
-   * 浮动态（用户 2026-10-14 第二条：「上边头部就去掉，mac 的 3 个按键放进投屏中，标题去掉」）：
-   * 两截**一起让掉** —— 右边那 86px 与上边那 28px 都归画面，四边只剩黑框。
+   * ⚠️ 老参数（`railFloating`）**已经不看了** —— 两档形态退场后只剩一个形态。
+   * 这条钉住"传什么都一样"，免得哪天有人以为它还能切形态。
    */
-  it('浮动态四边只剩黑框：上边那截标题栏与右边那截长条一起归画面', () => {
-    const floating = mirrorScreenInsets(true)
-    const outside = mirrorScreenInsets(false)
-    expect(floating.top).toBe(floating.bottom)
-    expect(floating.top).toBe(floating.left)
-    expect(outside.top - floating.top).toBe(MIRROR_TITLEBAR.height)
-    expect(outside.right - floating.right).toBe(MIRROR_RAIL.width)
+  it('传任何参数都是同一套（形态只剩一种）', () => {
+    for (const arg of [undefined, false, true, 0, 1, 'x']) {
+      expect(mirrorScreenInsets(arg)).toEqual({ top: 0, bottom: 0, left: 0, right: 0 })
+    }
   })
 })
 
@@ -394,52 +394,95 @@ describe('mirrorTitlebarNameLeft（名称让开三颗）', () => {
 })
 
 /**
- * 浮动态窗口没有标题栏 ⇒ 拖窗区整条没了，补的是**窗口顶边整条**看不见的条（`floatDragHeight`）。
+ * 浮动态窗口没有标题栏 ⇒ 拖窗区整条没了，补的是**窗口顶边整条**的条（`floatDragHeight`）——
+ * 它 2026-10-17 起还是 chrome 的**显形触发区**（用户：「鼠标移动到头部可拖拽的地方就展示出来」）。
  *
  * ⚠️ 第一版是左上角 80×28 的小方块（宽 = 三颗 + 名称让位那一截），被用户当场打回
  * （2026-10-14「app 投屏后不能拖拽了」）：那块地方**本来就盖着三颗彩虹键**，而三颗是 AppKit 画在
- * 网页内容**之上**的 ⇒ 方块中间一大块根本抓不到，剩下的只是几条缝。现在整条铺开，三颗的落点
- * 下移到这条的下沿让开它（见下面那条等式）。
+ * 网页内容**之上**的 ⇒ 方块中间一大块根本抓不到，剩下的只是几条缝。现在整条铺开、三颗收进画面左上角。
+ *
+ * ⚠️ **2026-10-17 三次加高**：`12 → 16`（「可拖拽高度再加4px」）→ `16 → 21`
+ * （「可拖拽区域再加高5px」）→ `21 → 26`（「拖拽高度再加5px」）。
+ * 前两次跟着三颗一起挪（守 `floatLightY === floatDragHeight`）；**第三次不守了** ——
+ * 用户同一条里既要"三颗往上移"又要"这条加高 5px"，两个方向相反 ⇒ 三颗压进这条里 10px。
+ *
+ * ⚠️ 为什么压进去是安全的（**探针台实测，2026-10-17**，真光标 + `trafficLightPosition=(20,16)`）：
+ * 三颗是 AppKit 画在网页**之上**的，但**只吃掉"按下"**（NSButton 处理 mouseDown），
+ * **移动事件照常进 DOM** —— 指针从这条滑到三颗上只发 `pointermove`、**不触发 `pointerleave`**
+ * （停在灯上 1.5s 也一条都不发）⇒ hover 显形不会闪断；代价只是灯本身那一小块按下是点灯。
+ * 早前"三颗吃指针 ⇒ 那一列收不到 DOM 指针"的说法只对了一半，别再照它推。
+ * ⚠️ 同一天它**不再写 `-webkit-app-region: drag`**（改成渲染层自己拖窗，理由见
+ * `App.vue` 的 `onFloatDragDown` 那组）。
  */
-describe('MIRROR_TITLEBAR.floatDragHeight（浮动态顶边那条拖窗区）', () => {
-  it('是个正数，且三颗的落点正好让开它（不压拖窗区）', () => {
+describe('MIRROR_TITLEBAR.floatDragHeight（浮动态顶边那条：拖窗 + 显形触发）', () => {
+  it('是个正数，三颗压在它里面，且三颗顶上仍留一截干净的带面', () => {
     expect(MIRROR_TITLEBAR.floatDragHeight).toBeGreaterThan(0)
-    expect(MIRROR_TITLEBAR.floatLightY).toBe(MIRROR_TITLEBAR.floatDragHeight)
+    // 2026-10-17 第十一条起**不再是等式**（三颗正好让开），改成"三颗压在里面"。
+    expect(MIRROR_TITLEBAR.floatLightY).toBeLessThan(MIRROR_TITLEBAR.floatDragHeight)
+    // 压进去之后唯一要守的是：三颗**上方**还留一截干净的带面 —— 那一截没被 AppKit 吃掉，
+    // 是"从窗口外滑进来"（以及在这一列按下拖窗）真正能用的落点。太薄就等于这一列没用了。
+    expect(MIRROR_TITLEBAR.floatDragHeight - MIRROR_TITLEBAR.floatLightY).toBeGreaterThanOrEqual(8)
   })
 })
 
 /**
- * 三颗彩虹键**两档形态两个落点**（用户 2026-10-14 第四条：「mac 3 个彩虹键往右往下点，超出屏幕了」）。
+ * 三颗彩虹键的落点。窗口态那套（钉在标题栏里）现在**只剩算式** —— 判据 `mirrorRailFloats` 恒真
+ * ⇒ 实际永远走"浮动态"那条：三颗落在**画面左上角**（用户 2026-10-14 第二条「mac 的 3 个按键放进投屏中」）。
  *
- * 浮动态窗口顶就是画面顶（`mirrorScreenInsets(true).top` 只剩黑框）⇒ 三颗是"放进投屏里"的，
- * 必须落在**画面那块圆角矩形**内侧。画面在 `(bezel, bezel)`、圆角半径 `MIRROR_SCREEN_RADIUS`，
- * 那个四分之一圆的圆心在 `(bezel + r, bezel + r)`。
+ * ⚠️ 判据跟着 `MIRROR_SCREEN_RADIUS` 一起换了两次口径（2026-10-16 半径 40 → 12；2026-10-17 20 → 28）：
+ * 旧判据是"整组落在圆弧**内侧**"（40 的圆装得下直径 14 的三颗）；12 的圆根本装不下 ——
+ * 改成"避开圆角切掉的那块"。那块只在 `x < r 且 y < r` 的方角里存在，于是当时顺手用了条捷径
+ * 「落点的 x 或 y 有一个 ≥ 半径 ⇒ 整组在区外」。⚠️ **2026-10-17 半径到 28、落点又左移到 `x = 20`
+ * 之后这条捷径失效**（它只是充分条件）⇒ 现在只认 `inCutCorner` 那条**按定义**算的判据
+ * （落点在方角里、且到弧心 `(r,r)` 的距离 > r 才算被啃掉），再补一条"离弧心的余量 > 5px"。
  */
-describe('mirrorTrafficLightPosition（两档形态两个落点）', () => {
+describe('mirrorTrafficLightPosition（三颗的落点）', () => {
   const { bezel } = MIRROR_FRAME
   const r = MIRROR_SCREEN_RADIUS
-  const cx = bezel + r
-  const cy = bezel + r
-  const fromArcCenter = ({ x, y }) => Math.hypot(x - cx, y - cy)
+  const lightRadius = MIRROR_TRAFFIC_LIGHT_SIZE / 2
+  const arcCenter = { x: bezel + r, y: bezel + r }
+  /** 这个点落不落在**圆角切掉的那块**里（只在左上那个方角里、且在弧外侧）。 */
+  const inCutCorner = ({ x, y }) =>
+    x < arcCenter.x && y < arcCenter.y && Math.hypot(x - arcCenter.x, y - arcCenter.y) > r
 
-  it('窗口态钉在标题栏里、垂直居中（与窗口宽无关）', () => {
+  it('窗口态钉在标题栏里、垂直居中（算式仍在，实际不走这条）', () => {
     const expected = { x: MIRROR_TITLEBAR.lightX, y: 7 }
     expect(mirrorTrafficLightPosition()).toEqual(expected)
     expect(mirrorTrafficLightPosition(false)).toEqual(expected)
   })
 
-  /** 这条同时是**当时那个报障的复现**：窗口态那套落点直接搬到浮动态就是压在圆角上。 */
-  it('旧的窗口态落点确实落在圆角切掉的那块里（报障的根因）', () => {
-    expect(fromArcCenter(mirrorTrafficLightPosition(false))).toBeGreaterThan(r)
+  it('实际用的浮动态落点在画面左上角', () => {
+    expect(mirrorTrafficLightPosition(true)).toEqual({
+      x: MIRROR_TITLEBAR.floatLightX,
+      y: MIRROR_TITLEBAR.floatLightY,
+    })
   })
 
-  it('浮动态让开画面圆角：整组落在圆弧内侧，且留有余量', () => {
+  /** 整组（含每颗的直径）覆盖的矩形四角都不在切掉区里 —— 有一角进去就是那颗被圆角啃掉一块。 */
+  it('整组避开圆角切掉的那块', () => {
     const floating = mirrorTrafficLightPosition(true)
-    // 最左那颗的**外沿**：圆心在落点右下方半个灯径处，最外沿再往外半个灯径。
-    const lightRadius = 7
-    const farthest = fromArcCenter({ x: floating.x + lightRadius, y: floating.y + lightRadius }) + lightRadius
-    expect(farthest).toBeLessThan(r)
-    expect(r - farthest).toBeGreaterThanOrEqual(5)
+    const size = MIRROR_TRAFFIC_LIGHT_SIZE
+    for (const corner of [
+      { x: floating.x, y: floating.y },
+      { x: floating.x + size, y: floating.y },
+      { x: floating.x, y: floating.y + size },
+      { x: floating.x + size, y: floating.y + size },
+      { x: floating.x + lightRadius, y: floating.y + lightRadius },
+    ]) {
+      expect(inCutCorner(corner)).toBe(false)
+    }
+  })
+
+  /** 余量那条：上面守的是"没被啃掉"，这条守的是"离被啃掉还有多远"。 */
+  it('落点离圆弧还有余量 —— 半径再涨就得回头重算这个落点', () => {
+    const floating = mirrorTrafficLightPosition(true)
+    // ⚠️ 2026-10-17：半径 28 + 落点 `(20, 16)` ⇒ `x = 20 < r`，**"横或纵 ≥ 半径"那条捷径已经失效**
+    // （它只是充分条件）。真正在守的是上面那条按定义算的 `inCutCorner`，这里再钉一条**余量**：
+    // 整组离弧心最近的那个角（左上角）到弧心还有多远 —— 余量被吃光就是"圆角开始啃那颗灯"。
+    // 现值：28 − hypot(20 − 28, 16 − 28) = 28 − hypot(8, 12) ≈ 28 − 14.42 ≈ 13.6
+    // （第十一条把三颗往上挪 5px ⇒ 离弧心更远，这条是变安全的方向）。
+    const clearance = r - Math.hypot(floating.x - arcCenter.x, floating.y - arcCenter.y)
+    expect(clearance).toBeGreaterThan(5)
   })
 
   it('两档的落点不一样（翻转形态必须重设一次位置）', () => {
@@ -451,16 +494,14 @@ describe('mirrorTrafficLightPosition（两档形态两个落点）', () => {
 describe('mirrorContentExtraSize / mirrorAspectRatio（只能按手机比例拖）', () => {
   const insets = mirrorScreenInsets()
 
-  /** 锁的是**画面那块矩形**：窗口多出来的黑框 + 长条必须整截算余量，漏一条就等于把窗口等比锁。 */
-  it('余量就是内缩的横竖总量，且只加在宽上（dev 边栏那一截同属窗口）', () => {
+  /** 锁的是**画面那块矩形**：内缩恒 0 ⇒ 余量只剩 dev 边栏那一截（窗口态没有别的占位了）。 */
+  it('余量就是内缩的横竖总量（恒 0），dev 边栏那一截只加在宽上', () => {
     expect(mirrorContentExtraSize()).toEqual({
       width: insets.left + insets.right,
       height: insets.top + insets.bottom,
     })
-    expect(mirrorContentExtraSize(240)).toEqual({
-      width: insets.left + insets.right + 240,
-      height: insets.top + insets.bottom,
-    })
+    expect(mirrorContentExtraSize()).toEqual({ width: 0, height: 0 })
+    expect(mirrorContentExtraSize(240)).toEqual({ width: 240, height: 0 })
     // 非法/负的宽度不该把余量算小（画面会被挤 = 发一条 resizeDisplay）。
     expect(mirrorContentExtraSize(-100)).toEqual(mirrorContentExtraSize())
     expect(mirrorContentExtraSize('x')).toEqual(mirrorContentExtraSize())
@@ -482,108 +523,83 @@ describe('mirrorContentExtraSize / mirrorAspectRatio（只能按手机比例拖�
   })
 })
 
-// 画面够宽就把长条改成「浮在画面里」（用户 2026-10-14）：判据全项目只有这一处，
-// 主进程建窗口时算一次、渲染层实时跟着窗口大小算，两边都调它。
-describe('mirrorRailFloats（画面宽 ≥ 640 就把长条改成浮在画面里）', () => {
-  const OUTSIDE = mirrorScreenInsets(false)
-  const FLOATING = mirrorScreenInsets(true)
-  /** 画面区那一格的宽（渲染层量 `.mirror-main`）= 画面 + 长条占的那一截。 */
-  const areaOf = (screenWidth, floating) =>
-    screenWidth + (floating ? FLOATING.left + FLOATING.right : OUTSIDE.left + OUTSIDE.right)
+// 独立虚拟屏那档的开窗尺寸：**920 x 660 两个点名值**（用户 2026-10-16：「宽度调成920px。
+// 高度按 mac 屏幕比例调整」→「高度调整到660」）。采主屏那档不走这个函数（`session.js` 里按
+// `deviceMirror` 分流），它照设备画面比例 fit 可用区（见上面 `mirrorWindowBounds` 那组）。
+describe('mirrorVirtualWindowSize（独立虚拟屏那档：点名 920 x 660）', () => {
+  const DEVICE = { width: 1200, height: 2608 }
 
-  it('窄画面（普通竖屏手机窗口，画面约 362）不浮；正好 640 才浮', () => {
-    expect(mirrorRailFloats(areaOf(362, false))).toBe(false)
-    expect(mirrorRailFloats(areaOf(MIRROR_RAIL_FLOAT_MIN_SCREEN_WIDTH, false))).toBe(true)
-    expect(mirrorRailFloats(areaOf(MIRROR_RAIL_FLOAT_MIN_SCREEN_WIDTH - 1, false))).toBe(false)
+  it('尺寸就是那两个常量，与设备分辨率无关', () => {
+    expect(mirrorVirtualWindowSize(DEVICE)).toEqual({ width: 920, height: 660 })
+    expect(MIRROR_VIRTUAL_WINDOW_WIDTH).toBe(920)
+    expect(MIRROR_VIRTUAL_WINDOW_HEIGHT).toBe(660)
   })
 
-  /** 两个形态各有一条线（差一条长条宽）：否则判据会被自己的结果推着走，拖窗口经过临界点来回跳。 */
-  it('迟滞：浮着的时候画面一定 ≥ 阈值，收回去之后也稳定', () => {
-    const at640 = areaOf(MIRROR_RAIL_FLOAT_MIN_SCREEN_WIDTH, false)
-    // 在外面那套几何下画面正好 640 ⇒ 该浮；浮起来之后同一格宽度算出来的画面还是 640 ⇒ 不回跳。
-    expect(mirrorRailFloats(at640, false)).toBe(true)
-    expect(mirrorRailFloats(at640, true)).toBe(true)
-    // 再窄 1px：浮着时画面 639 ⇒ 收回去；收回去之后按外面那套几何算是 553 ⇒ 也不会当场翻回来。
-    const below = areaOf(MIRROR_RAIL_FLOAT_MIN_SCREEN_WIDTH - 1, true)
-    expect(mirrorRailFloats(below, true)).toBe(false)
-    expect(mirrorRailFloats(below, false)).toBe(false)
-    // 迟滞带里两种结论都自洽：同一条格宽，浮着的那个不会跳回去。
-    const band = areaOf(MIRROR_RAIL_FLOAT_MIN_SCREEN_WIDTH + 10, false)
-    expect(mirrorRailFloats(band, false)).toBe(true)
-    expect(mirrorRailFloats(band - MIRROR_RAIL.width, true)).toBe(true)
-  })
-
-  it('量不到宽（还没排版 / 非法值）维持「在外面」：浮起来是盖住画面的那个动作', () => {
-    for (const bad of [0, -10, null, undefined, Number.NaN, 'x']) {
-      expect(mirrorRailFloats(bad)).toBe(false)
-      expect(mirrorRailFloats(bad, true)).toBe(false)
+  /** 换设备只影响「闸」开不开，不影响尺寸 —— 这一档的窗口形状不跟任何屏幕走。 */
+  it('换一台设备还是同一对数（手机、平板、横屏都一样）', () => {
+    for (const device of [
+      { width: 1080, height: 2340 },
+      { width: 2608, height: 1200 },
+      { width: 1600, height: 2560 },
+    ]) {
+      expect(mirrorVirtualWindowSize(device)).toEqual({ width: 920, height: 660 })
     }
+  })
+
+  /** 设备分辨率只当闸用：读不到就不给固定尺寸（渲染层这时也不给显示尺寸），退回既有兜底。 */
+  it('设备信息读不到 → 850x600（仍然与设备信息同生共死）', () => {
+    for (const bad of [null, undefined, {}, { width: 0, height: 2608 }, { width: 'x', height: 2608 }]) {
+      expect(mirrorVirtualWindowSize(bad)).toEqual({ width: 850, height: 600 })
+    }
+  })
+
+  it('每次返回新对象，调用方就地改尺寸不会污染下一次', () => {
+    const first = mirrorVirtualWindowSize(DEVICE)
+    first.width = 1
+    expect(mirrorVirtualWindowSize(DEVICE)).toEqual({ width: 920, height: 660 })
   })
 })
 
-describe('长条浮在画面里那一档的几何（右边 86px 与上边 28px 一起归画面）', () => {
-  const WORK = { width: 1440, height: 900 }
-  const FLOATING = mirrorScreenInsets(true)
-
-  it('内缩右边只剩黑框', () => {
-    expect(FLOATING.right).toBe(FLOATING.left)
-    expect(mirrorScreenInsets(false).right - FLOATING.right).toBe(MIRROR_RAIL.width)
-  })
-
-  /** 漏改这一项：「画面 = 设备比例」当场破掉（画面比设备比例宽一条长条、高一截标题栏）。 */
-  it('比例锁的余量两截都少掉：右边一条长条宽、上边一条标题栏高', () => {
-    expect(mirrorContentExtraSize(0, true).width).toBe(mirrorContentExtraSize(0).width - MIRROR_RAIL.width)
-    expect(mirrorContentExtraSize(240, true).width).toBe(mirrorContentExtraSize(240).width - MIRROR_RAIL.width)
-    expect(mirrorContentExtraSize(0, true).height).toBe(
-      mirrorContentExtraSize(0).height - MIRROR_TITLEBAR.height,
-    )
-  })
-
-  it('横形显示：宽被可用区顶住 ⇒ 窗口宽不变，那 86px 与 28px 归画面，画面仍是设备比例', () => {
-    const outside = mirrorWindowBounds({ width: 2340, height: 1080 }, WORK)
-    const floating = mirrorWindowBounds({ width: 2340, height: 1080 }, WORK, true)
-    expect(floating.width).toBe(outside.width)
-    const screen = {
-      width: floating.width - FLOATING.left - FLOATING.right,
-      height: floating.height - FLOATING.top - FLOATING.bottom,
+// ⚠️ 2026-10-16 起**恒真**：长条从"画面右边那一条（占窗口宽、画面够宽才浮起来）"换成"浮在画面顶部
+// 右侧的小胶囊"，它永远不占布局 ⇒ 两档形态的分化退场，判据失去分辨力。函数与调用链保留
+// （主进程建窗那一拍、渲染层实时判、`mirror:railFloat` 报回），所以这里钉住"怎么传都是 true"。
+describe('mirrorRailFloats（恒真：长条永远浮在画面上）', () => {
+  it('任何宽度都返回 true —— 含 0 与非法值（两档几何现在一样，没有"安全侧"可分）', () => {
+    for (const width of [0, -10, 1, 362, 640, 1000, null, undefined, Number.NaN, 'x']) {
+      expect(mirrorRailFloats(width)).toBe(true)
+      expect(mirrorRailFloats(width, true)).toBe(true)
+      expect(mirrorRailFloats(width, false)).toBe(true)
     }
-    const outsideInsets = mirrorScreenInsets(false)
-    expect(screen.width).toBeGreaterThan(
-      outside.width - outsideInsets.left - outsideInsets.right,
-    )
-    expect(screen.height).toBeGreaterThan(
-      outside.height - outsideInsets.top - outsideInsets.bottom,
-    )
-    expect(screen.width / screen.height).toBeCloseTo(2340 / 1080, 2)
-    expect(floating.width).toBeLessThanOrEqual(WORK.width - 80)
-    expect(floating.height).toBeLessThanOrEqual(WORK.height - 80)
   })
 
-  /**
-   * 竖形显示：高顶满 ⇒ 窗口高不变（两种形态都是"可用高 + 各自内缩" = 工作区减余量），
-   * 变的是**画面**：标题栏让出来的 28px 归画面 ⇒ 画面长高 28、按设备比例再宽一点，
-   * 窗口宽 = 那个新画面宽 + 只剩黑框的 8px。
-   */
-  it('竖形显示：窗口高不变，画面长高 28 并按比例宽一点', () => {
-    // 超高可用区（6K 那一类）才够得到「竖屏画面 640 宽」这条线。
-    const TALL = { width: 3008, height: 1692 }
-    const outside = mirrorWindowBounds({ width: 1080, height: 2340 }, TALL)
-    const outsideInsets = mirrorScreenInsets(false)
-    const pictureWidth = outside.width - outsideInsets.left - outsideInsets.right
-    expect(pictureWidth).toBeGreaterThanOrEqual(MIRROR_RAIL_FLOAT_MIN_SCREEN_WIDTH)
-    expect(mirrorRailFloats(outside.width, false)).toBe(true)
-    const floating = mirrorWindowBounds({ width: 1080, height: 2340 }, TALL, true)
-    // 高顶满 ⇒ 两种形态的窗口高都是「工作区高 − 余量」：让出来的 28px 落在画面上，不在窗口上。
-    expect(floating.height).toBe(outside.height)
-    expect(floating.width).toBeLessThan(outside.width)
-    const picture = {
-      width: floating.width - FLOATING.left - FLOATING.right,
-      height: floating.height - FLOATING.top - FLOATING.bottom,
-    }
-    expect(picture.height).toBe(
-      outside.height - outsideInsets.top - outsideInsets.bottom + MIRROR_TITLEBAR.height,
-    )
-    expect(picture.width).toBeCloseTo(pictureWidth + MIRROR_TITLEBAR.height * (1080 / 2340), 0)
-    expect(picture.width / picture.height).toBeCloseTo(1080 / 2340, 2)
+  it('不传参数也是 true', () => {
+    expect(mirrorRailFloats()).toBe(true)
+  })
+})
+
+// 顶部那条胶囊的几何（2026-10-16）：它**不占布局**（浮在画面上），所以几何只有"落在哪"这一件事，
+// 一像素都不进 `mirrorScreenInsets()` —— 这是它与前几版（右侧占一格）最根本的区别。
+describe('MIRROR_RAIL / mirrorRailTop（顶部胶囊的几何）', () => {
+  it('胶囊顶边由「与三颗彩虹键中线对齐」反推', () => {
+    const center = MIRROR_TITLEBAR.floatLightY + MIRROR_TRAFFIC_LIGHT_SIZE / 2
+    expect(mirrorRailTop()).toBe(Math.round(center - MIRROR_RAIL.height / 2))
+    // 本机现值：16 + 7 − 14 = 9（三颗 2026-10-17 挪过三次 12 → 16 → 21 → 16 ⇒ 胶囊跟着走）。
+    expect(mirrorRailTop()).toBe(9)
+    // 与三颗中线一致（取整误差在半像素内）。
+    expect(Math.abs(mirrorRailTop() + MIRROR_RAIL.height / 2 - center)).toBeLessThanOrEqual(0.5)
+  })
+
+  it('胶囊不占布局：内缩与比例锁余量里都没有它', () => {
+    expect(mirrorScreenInsets()).toEqual({ top: 0, bottom: 0, left: 0, right: 0 })
+    expect(mirrorContentExtraSize()).toEqual({ width: 0, height: 0 })
+  })
+
+  it('尺寸与位置都是正数（脏值会把胶囊丢到窗口外）', () => {
+    expect(MIRROR_RAIL.height).toBeGreaterThan(0)
+    expect(MIRROR_RAIL.right).toBeGreaterThanOrEqual(0)
+    // 命中区必须比胶囊大一圈（用户这一轮要的"移入按钮区域"得有个够得着的区域）。
+    expect(MIRROR_RAIL.hitPad).toBeGreaterThan(0)
+    // 满屏那一档占的那一格宽还在（真全屏是「画面一格 + 长条一格」的两格排法，这一轮没动）。
+    expect(MIRROR_RAIL.fullscreenWidth).toBeGreaterThan(0)
   })
 })

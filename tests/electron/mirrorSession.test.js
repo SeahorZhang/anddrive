@@ -143,7 +143,9 @@ const env = vi.hoisted(() => {
       on: (channel, fn) => handlers.set(channel, fn),
     },
     screen: {
-      // 主进程建窗口前读这块屏的可用区，把窗口按设备画面比例开。
+      // 主进程建窗口前读这块屏的可用区：**采主屏**那档把窗口按设备画面比例 fit 进去。
+      // ⚠️ 独立虚拟屏那档**不读这里的任何数**（尺寸是 920 x 660 两个点名值）—— 所以别指望
+      // 改这个 mock 会影响那一档的断言，那正是「形状与屏幕无关」这条设计的体现。
       getPrimaryDisplay: () => ({
         workAreaSize: { width: 1440, height: 900 },
         workArea: { width: 1440, height: 900 },
@@ -239,9 +241,13 @@ process.env.APP_ROOT = '/tmp/anddrive-test'
 const { startMirrorSession, stopMirrorSession } = await import('../../electron/mirror/session.js')
 // 黑框与长条那几档数只有一个出处；窗口尺寸、`initialCss`、红绿灯落点都由它推出来，
 // 测试按同一份数算期望（改了 `options.js` 而这里没跟着红，说明断言写死了数、没钉住关系）。
-const { mirrorScreenInsets, mirrorContentExtraSize, mirrorTrafficLightPosition, MIRROR_TITLEBAR } = await import(
-  '../../electron/mirror/options.js'
-)
+const {
+  mirrorScreenInsets,
+  mirrorContentExtraSize,
+  mirrorRailFloats,
+  mirrorTrafficLightPosition,
+  MIRROR_TITLEBAR,
+} = await import('../../electron/mirror/options.js')
 const { MAC_KEYBOARD_IME } = await import('../../electron/mirror/macKeyboard.js')
 
 /** `keepAwake` 是在会话返回后异步落地的（置位不能拖慢开窗口），测试里把微任务跑干净。 */
@@ -266,11 +272,18 @@ describe('mirror session 启动参数', () => {
     expect(init.iconUrl).toBe(iconUrl)
     expect(init.label).toBe('示例')
     expect(init.serverPath).toBe('/tmp/scrcpy-server')
-    // 虚拟显示的初始 CSS 来自**画面那块矩形**（内容区减掉外扩那一圈），不等页面布局。
+    // 虚拟显示的初始 CSS 来自**画面那块矩形**，不等页面布局。
+    // ⚠️ 2026-10-16 起内缩**恒为 0**（黑框去掉、长条改成浮在画面上的胶囊、标题栏退场 ⇒ 画面 = 窗口）
+    // ⇒ 初始 CSS 就是窗口内容区本身。以前还要按"长条浮没浮"挑一档内缩，那条分档已经退场。
     const insets = mirrorScreenInsets()
+    expect(insets).toEqual({ top: 0, bottom: 0, left: 0, right: 0 })
     expect(init.initialCss).toEqual({
       width: win.getContentBounds().width - insets.left - insets.right,
       height: win.getContentBounds().height - insets.top - insets.bottom,
+    })
+    expect(init.initialCss).toEqual({
+      width: win.getContentBounds().width,
+      height: win.getContentBounds().height,
     })
   })
 
@@ -654,17 +667,28 @@ describe('镜像窗口的透明本体与红绿灯', () => {
 
   /**
    * 用户 2026-10-12：「试试 a 的变体，上边加一条专门放三个按钮和 app 名称」⇒ 三颗**只挪进顶部那条**：
-   * 落点是个与窗口宽无关的常量（10-10 贴右侧长条那套要跟着窗口宽跑，那条坑从根上没了），
-   * **显隐照样一次都不调** —— 常驻，不跟长条 hover 走（10-11 那条"不要藏不要放"仍然算数）。
+   * 落点是个与窗口宽无关的常量（10-10 贴右侧长条那套要跟着窗口宽跑，那条坑从根上没了）。
+   *
+   * ⚠️ **2026-10-17 起显隐跟长条走**（用户：「3个彩虹按钮没有跟着右边悬浮栏显示隐藏」）——
+   * 原来那句「显隐一次都不调、常驻」是"两档形态"时代的推导（浮动态窗口里只剩画面），两档退场后
+   * 它被 `railFloating` 恒真钉成了"永远显形"。现在渲染层按 `railShown` 报，主进程照办；
+   * **建窗口那一刻仍然是"先藏"**（chrome 涂装的一部分），随后由渲染层第一拍按 `railShown=false` 报收。
+   *
+   * ⚠️ 2026-10-16 起**所有窗口都落在画面左上角**（`mirrorRailFloats` 恒真 ⇒ 不再有"标题栏里"那一档）：
+   * 落点是 `mirrorTrafficLightPosition(true)`。窗口态那套算式 `(12, 7)` 现在只由
+   * `mirrorOptions.test.js` 那条单测钉着（建会话已经走不到它）。
    */
-  it('红绿灯落点在顶部标题栏里、与窗口宽无关；显隐一次都不调', async () => {
-    await startMirrorSession({ serial: 'dev-lights-bar', packageName: 'com.example.app' })
+  it('红绿灯落点与窗口宽无关（恒为画面左上角那套）；建窗口那一刻只藏不摆', async () => {
+    await startMirrorSession({ serial: 'dev-lights-bar', packageName: '' })
     const win = env.windows.at(-1)
-    expect(win.options.trafficLightPosition).toEqual(mirrorTrafficLightPosition())
+    expect(win.options.trafficLightPosition).toEqual(mirrorTrafficLightPosition(true))
     // 建窗口那一次「先藏」是 chrome 涂装的一部分，不算"去管三颗"。
     expect(win.lightTrace.map((c) => c.kind)).toEqual(['visibility'])
     // 落点不依赖窗口宽：换个宽度再算还是同一个数（所以 resize 里没有任何重算代码）。
-    expect(mirrorTrafficLightPosition()).toEqual({ x: MIRROR_TITLEBAR.lightX, y: 7 })
+    expect(mirrorTrafficLightPosition(true)).toEqual({
+      x: MIRROR_TITLEBAR.floatLightX,
+      y: MIRROR_TITLEBAR.floatLightY,
+    })
     win.fire('resize')
     win.fire('enter-full-screen')
     win.fire('leave-full-screen')
@@ -703,19 +727,42 @@ describe('调试边栏撑宽窗口（mirror:windowHud）', () => {
   })
 })
 
-// 横窗会开出一块横显示，竖屏 app 立刻换版式（`mirrorWindowBounds` 照设备画面比例 fit 可用区）。
-describe('镜像窗口照设备画面比例开', () => {
-  it('竖屏手机 → 等比竖窗，并把设备分辨率透传给镜像页（它据此决定给不给显示尺寸）', async () => {
+// 窗口形状按那一档分流（`session.js` 里 `deviceMirror` 那一条）：
+// - **采主屏**那档：照设备画面比例 fit 可用区（窗口与手机那块屏一一对应，还要按它锁拖拽比例）。
+// - **独立虚拟屏**那档：**920 x 660 两个点名值**（用户 2026-10-16：「宽度调成920px」→「高度调整到660」）。
+//   形状与设备屏、与 Mac 屏都无关，所以「缩 0.75 档」「设备比例转置」「高按 Mac 屏比例」三种做法
+//   都已经不在了（`mirrorVirtualWindowSize` 现在就是两个常量）。
+describe('镜像窗口的形状：采主屏照设备比例、独立虚拟屏点名 920 x 660', () => {
+  it('独立虚拟屏：920 x 660 两个点名值（与 mock 的设备屏 1200x2608、Mac 屏 1440x900 都无关）', async () => {
     await startMirrorSession({ serial: 'dev-shape', packageName: 'com.example.app' })
     const win = env.windows.at(-1)
-    // adb mock 回 1200x2608；可用区 1440x900 减 80 系统余量再减内缩（横 94、纵 (4+28)+4=36）
-    // → 画面可用 1266x784，高顶满 784、宽按比 361；窗口 = 361+94 x 784+36。
     expect({ width: win.options.width, height: win.options.height }).toEqual({
-      width: 455,
-      height: 820,
+      width: 920,
+      height: 660,
     })
     expect(initFrom(win).screenSize).toEqual({ width: 1200, height: 2608 })
     expect(initFrom(win).screenDpi).toBe(440)
+  })
+
+  /** 采主屏那档（整机镜像 / 13 及以下点应用）照设备比例开竖窗：窗口与手机那块屏一一对应。 */
+  it('整机镜像：照设备画面比例 fit 可用区那一档（竖窗 377x820）', async () => {
+    await startMirrorSession({ serial: 'dev-shape-device', packageName: '' })
+    const win = env.windows.at(-1)
+    // mock 可用区 1440x900 减 80 系统余量 → 可用 1360x820；1200x2608 由高定：820 → 宽 377。
+    // ⚠️ 2026-10-16 起内缩恒 0（画面 = 窗口）⇒ 这里就是**画面**尺寸，不再有"把黑框与长条加回来"。
+    expect({ width: win.options.width, height: win.options.height }).toEqual({
+      width: 377,
+      height: 820,
+    })
+  })
+
+  it('13 及以下点应用（采主屏）同样照设备比例', async () => {
+    await startMirrorSession({ serial: 'dev-shape-sdk33', packageName: 'com.example.app' })
+    const win = env.windows.at(-1)
+    expect({ width: win.options.width, height: win.options.height }).toEqual({
+      width: 377,
+      height: 820,
+    })
   })
 
   it('读不到设备分辨率时退回 850x600，并把 screenSize=null 带给镜像页', async () => {
@@ -727,9 +774,8 @@ describe('镜像窗口照设备画面比例开', () => {
     })
     expect(initFrom(win).screenSize).toBeNull()
     expect(initFrom(win).screenDpi).toBeNull()
-    // 850x600 这一档也走同一条判据（不是特例）：画面 842 宽 ≥ 640 ⇒ 长条浮在画面里，
-    // `initialCss` 右边只剩黑框（那 86px 归画面）。
-    const insets = mirrorScreenInsets(true)
+    // 850x600 这一档也一样：内缩恒 0 ⇒ `initialCss` 就是窗口内容区（不再是"右边只剩黑框"那种算法）。
+    const insets = mirrorScreenInsets()
     expect(initFrom(win).initialCss).toEqual({
       width: win.getContentBounds().width - insets.left - insets.right,
       height: win.getContentBounds().height - insets.top - insets.bottom,
@@ -743,7 +789,7 @@ describe('镜像窗口照设备画面比例开', () => {
 //   `resizeDisplay`，设备重排出那个形状。
 describe('镜像窗口的拖拽比例：采主屏锁、桌面模式放开', () => {
   /** 采主屏那档：包名为空 = 整机镜像。 */
-  it('整机镜像：建窗口就按设备画面比例锁，不参与比例的余量 = 黑框 + 右侧长条', async () => {
+  it('整机镜像：建窗口就按设备画面比例锁，余量 = 内缩（恒 0）', async () => {
     await startMirrorSession({ serial: 'dev-ratio', packageName: '' })
     // adb mock 回 1200x2608。
     expect(env.windows.at(-1).aspectCalls).toEqual([[1200 / 2608, mirrorContentExtraSize()]])
@@ -781,32 +827,38 @@ describe('镜像窗口的拖拽比例：采主屏锁、桌面模式放开', () =
   })
 })
 
-// 长条浮在画面里那一档（用户 2026-10-14）：那 86px 归画面 ⇒ 不参与比例的余量少一条长条宽。
-// 渲染层量 `.mirror-main` 的宽实时判（判据 `mirrorRailFloats`），翻转时报一条 `mirror:railFloat`。
-describe('长条浮起来时按新余量重设拖拽比例锁（mirror:railFloat）', () => {
+// ⚠️ 2026-10-16 起长条恒浮（`mirrorRailFloats` 恒真）⇒ 渲染层不会再报"形态翻转"，
+// 余量也不再随形态变（内缩恒 0）。这条通道与状态**保留**：渲染层第一拍仍会报一次
+// （值相同 ⇒ 幂等 return），协议里也还有它。这里钉住"重复报同一个值不重设、报反值才动一次"。
+describe('长条形态上报（mirror:railFloat）', () => {
   const report = (win, flag) =>
     env.handlers.get(CHANNELS.mirrorRailFloat)({ sender: win.webContents }, flag)
 
-  it('翻转一次重设一次；重复报同一个值不再重设（判据每帧都会调）', async () => {
+  /** 这条通道的前提：判据恒真 ⇒ 建窗时那个值就是 `true`（渲染层第一拍报的也是它）。 */
+  it('判据恒真（建窗值即 true，两档形态退场）', () => {
+    expect(mirrorRailFloats()).toBe(true)
+  })
+
+  it('报同一个值（含建窗时那个 true）不重设；报反值才重设一次', async () => {
     await startMirrorSession({ serial: 'dev-rail-float', packageName: '' })
     const win = env.windows.at(-1)
     report(win, true)
     report(win, true)
+    // 只有这一条会真的重设（false ≠ 建窗时那个 true）。
     report(win, false)
     expect(win.aspectCalls).toEqual([
-      [1200 / 2608, mirrorContentExtraSize(0, false)],
-      [1200 / 2608, mirrorContentExtraSize(0, true)],
-      [1200 / 2608, mirrorContentExtraSize(0, false)],
+      [1200 / 2608, mirrorContentExtraSize(0)],
+      [1200 / 2608, mirrorContentExtraSize(0)],
     ])
   })
 
-  /** 两件事都在余量里：边栏那一截 + 长条浮起来少掉的那一截。 */
+  /** dev 边栏那一截照旧进余量（它是**窗口**多出来的，与长条形态无关）。 */
   it('与 dev 边栏那一截叠加', async () => {
     await startMirrorSession({ serial: 'dev-rail-float-hud', packageName: '' })
     const win = env.windows.at(-1)
-    report(win, true)
+    report(win, false)
     env.handlers.get(CHANNELS.mirrorWindowHud)({ sender: win.webContents }, 240)
-    expect(win.aspectCalls.at(-1)).toEqual([1200 / 2608, mirrorContentExtraSize(240, true)])
+    expect(win.aspectCalls.at(-1)).toEqual([1200 / 2608, mirrorContentExtraSize(240)])
   })
 })
 
