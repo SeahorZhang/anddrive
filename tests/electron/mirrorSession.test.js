@@ -31,8 +31,6 @@ const env = vi.hoisted(() => {
       this.buttonPositionCalls = []
       /** 红绿灯两类调用的**先后**轨迹：放出来之后必须紧跟一次设位（见 session.js 那条实测）。 */
       this.lightTrace = []
-      /** `setContentSize` 收到过的尺寸（dev 调试边栏撑宽/收宽窗口的轨迹）。 */
-      this.sizeCalls = []
       /** `setAspectRatio` 收到过的 `[比例, 不参与比例的余量]`（拖拽只能按手机比例）。 */
       this.aspectCalls = []
       windows.push(this)
@@ -69,12 +67,6 @@ const env = vi.hoisted(() => {
     setWindowButtonPosition(position) {
       this.buttonPositionCalls.push(position)
       this.lightTrace.push({ kind: 'position', value: position })
-    }
-    /** dev 调试边栏撑宽/收宽窗口（`mirror:windowHud`）的调用轨迹。 */
-    setContentSize(width, height) {
-      this.sizeCalls.push([width, height])
-      this.options.width = width
-      this.options.height = height
     }
     /** 拖拽锁比例（= AppKit 的 `contentAspectRatio`）：记 `[比例, 余量]` 两件事。 */
     setAspectRatio(ratio, extraSize) {
@@ -696,37 +688,6 @@ describe('镜像窗口的透明本体与红绿灯', () => {
   })
 })
 
-// dev 调试边栏（`tools` 那一格）展开时撑宽的是**窗口**，不是从画面里切一块 ——
-// 画面尺寸一旦变了就会发 `resizeDisplay`，手机上当场重排一次，那是 dev 面板不该有的副作用。
-describe('调试边栏撑宽窗口（mirror:windowHud）', () => {
-  const open = (win, px) => env.handlers.get(CHANNELS.mirrorWindowHud)({ sender: win.webContents }, px)
-
-  it('展开撑宽同样的量、收起再收回去；重复报同一个值不再动窗口', async () => {
-    await startMirrorSession({ serial: 'dev-hud', packageName: 'com.example.app' })
-    const win = env.windows.at(-1)
-    const base = win.getContentSize()[0]
-    open(win, 240)
-    expect(win.getContentSize()[0]).toBe(base + 240)
-    // 页面 HMR 重载后又报一次 240：状态自己纠正，不该再撑一遍。
-    open(win, 240)
-    expect(win.getContentSize()[0]).toBe(base + 240)
-    open(win, 0)
-    expect(win.getContentSize()[0]).toBe(base)
-    expect(win.sizeCalls.length).toBe(2)
-  })
-
-  it('全屏时不动窗口尺寸；报非法值当没发生', async () => {
-    await startMirrorSession({ serial: 'dev-hud-fs', packageName: 'com.example.app' })
-    const win = env.windows.at(-1)
-    win.fullscreen = true
-    open(win, 240)
-    expect(win.sizeCalls).toEqual([])
-    win.fullscreen = false
-    open(win, 'x')
-    expect(win.sizeCalls).toEqual([])
-  })
-})
-
 // 窗口形状按那一档分流（`session.js` 里 `deviceMirror` 那一条）：
 // - **采主屏**那档：照设备画面比例 fit 可用区（窗口与手机那块屏一一对应，还要按它锁拖拽比例）。
 // - **独立虚拟屏**那档：**920 x 660 两个点名值**（用户 2026-10-16：「宽度调成920px」→「高度调整到660」）。
@@ -809,22 +770,6 @@ describe('镜像窗口的拖拽比例：采主屏锁、桌面模式放开', () =
     await startMirrorSession({ serial: 'dev-ratio-unknown', packageName: '' })
     expect(env.windows.at(-1).aspectCalls).toEqual([])
   })
-
-  /** dev 边栏撑宽的是窗口：那一截不进画面，所以必须算成余量，否则拖一次边就把边栏挤没。 */
-  it('dev 边栏开合会把那一截算进余量（锁着的那档）', async () => {
-    await startMirrorSession({ serial: 'dev-ratio-hud', packageName: '' })
-    const win = env.windows.at(-1)
-    const hud = (px) => env.handlers.get(CHANNELS.mirrorWindowHud)({ sender: win.webContents }, px)
-    hud(240)
-    hud(0)
-    expect(win.aspectCalls.map((c) => c[1])).toEqual([
-      mirrorContentExtraSize(),
-      mirrorContentExtraSize(240),
-      mirrorContentExtraSize(0),
-    ])
-    // 比例始终是画面那一个，不随边栏变。
-    expect(win.aspectCalls.map((c) => c[0])).toEqual([1200 / 2608, 1200 / 2608, 1200 / 2608])
-  })
 })
 
 // ⚠️ 2026-10-16 起长条恒浮（`mirrorRailFloats` 恒真）⇒ 渲染层不会再报"形态翻转"，
@@ -847,18 +792,9 @@ describe('长条形态上报（mirror:railFloat）', () => {
     // 只有这一条会真的重设（false ≠ 建窗时那个 true）。
     report(win, false)
     expect(win.aspectCalls).toEqual([
-      [1200 / 2608, mirrorContentExtraSize(0)],
-      [1200 / 2608, mirrorContentExtraSize(0)],
+      [1200 / 2608, mirrorContentExtraSize()],
+      [1200 / 2608, mirrorContentExtraSize()],
     ])
-  })
-
-  /** dev 边栏那一截照旧进余量（它是**窗口**多出来的，与长条形态无关）。 */
-  it('与 dev 边栏那一截叠加', async () => {
-    await startMirrorSession({ serial: 'dev-rail-float-hud', packageName: '' })
-    const win = env.windows.at(-1)
-    report(win, false)
-    env.handlers.get(CHANNELS.mirrorWindowHud)({ sender: win.webContents }, 240)
-    expect(win.aspectCalls.at(-1)).toEqual([1200 / 2608, mirrorContentExtraSize(240)])
   })
 })
 

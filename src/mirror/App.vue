@@ -2,7 +2,7 @@
 import { AutoCanvasRenderer, WebCodecsVideoDecoder, WebGLVideoFrameRenderer } from '@yume-chan/scrcpy-decoder-webcodecs'
 import { Icon } from '@iconify/vue'
 import { useMirrorInput } from './useMirrorInput.js'
-import { bootstrap, dispose as disposeSession, reclaimApp, wakeScreen, setWindowButtons, setHudExtra, setRailFloating, getSessionInfo, setContentElement, sendControl, setScreenPower, kickSleepWatch, setMacKeyboard, watchMacKeyboardState, syncMacKeyboard, commitViaMacKeyboard, onMacKeyboardFeedback, onMacKeyboardCaret, openDesktopMode } from './direct-session.js'
+import { bootstrap, dispose as disposeSession, reclaimApp, wakeScreen, setWindowButtons, setRailFloating, getSessionInfo, setContentElement, sendControl, setScreenPower, kickSleepWatch, setMacKeyboard, watchMacKeyboardState, syncMacKeyboard, commitViaMacKeyboard, onMacKeyboardFeedback, onMacKeyboardCaret, openDesktopMode } from './direct-session.js'
 import { createMacTextSink } from './macTextSink.js'
 import { caretRectToAnchor, clientToDevice, deviceToScreen, emSizePx, estimateAdvancePx, LINE_HEIGHT_RATIO } from './macTextAnchor.js'
 import { capsuleBox, capsuleRect, macTextCapsule } from './macTextCapsule.js'
@@ -24,17 +24,6 @@ console.info(`[mirror] WebGL 渲染可用：${webglSupported}`)
 const canvasHost = ref(null)
 const status = ref('正在连接设备…')
 const meta = shallowRef(null)
-const fps = ref(0)
-/** 调试面板只在 dev 存在，默认收起，由右上角 `tools` 按钮开合。 */
-const devTools = import.meta.env.DEV
-const showHud = ref(false)
-/** dev HUD 边栏宽度：`aside` 的固定宽，画面区（`flex: 1`）自己让出剩下的。 */
-const HUD_WIDTH = 240
-/**
- * 边栏展开时把**窗口**撑宽同样的量（主进程 `mirror:windowHud`），画面那块矩形才不会被挤小 ——
- * 挤小 = 虚拟显示尺寸变了 = 发一条 `resizeDisplay`，手机上当场重排一次（dev 面板不该有这副作用）。
- */
-watch(showHud, (open) => setHudExtra(open ? HUD_WIDTH : 0))
 /**
  * 操作条（返回/Home/多任务 + 那几颗开关）：平时不画，鼠标进到它的区域才淡入，**离开 1 秒后收回**
  * （状态机在 `chromeReveal.js`）。红绿灯不跟着开关 —— 用户 2026-10-11 定「恢复默认，不要有任何修改」，
@@ -84,8 +73,8 @@ const edgeToEdge = computed(() => fullscreen.value && virtualDisplay.value)
  * ① 头部那条（`.mirror-float-drag`，整窗宽 × `floatDragHeight`）—— 用户 2026-10-17
  *    「鼠标移动到头部可拖拽的地方就展示出来」；
  * ② 胶囊自己的命中区（`.mirror-rail` = 胶囊 + 一圈外扩）—— 让它"贴着胶囊上下挪"时也保持显形。
- * 理由：胶囊浮在画面上、宽度随内容变（按钮数随条件渲染：桌面模式那颗只在采主屏那档出、
- * dev 那格只在开发时出），它的命中区正是 DOM 自己知道的那个矩形；按坐标另算一套只会两边漂。
+ * 理由：胶囊浮在画面上、宽度随内容变（按钮数随条件渲染：桌面模式那颗只在采主屏那档出），
+ * 它的命中区正是 DOM 自己知道的那个矩形；按坐标另算一套只会两边漂。
  * 这一路**不进** `onScreenPointerMove`（坐标判只服务满屏那两档）。
  *
  * **满屏那两档**仍按坐标判 —— chrome 是一个 **L 形**（右边长条 + 上边那条），两条臂都算触发区
@@ -634,43 +623,6 @@ const windowStyle = computed(() => ({
   /* 满屏那档长条的纵向拖拽位移（窗口态用不上：胶囊钉在顶部右侧）。 */
   '--rail-top': `${railTop.value}px`,
 }))
-/** 字节数 → 人类可读（HUD 显示用，保留一位小数）。 */
-function bytesText(bytes) {
-  if (!bytes) return '0'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let value = bytes
-  let index = 0
-  while (value >= 1024 && index < units.length - 1) {
-    value /= 1024
-    index += 1
-  }
-  return `${index === 0 ? value : Math.round(value * 10) / 10} ${units[index]}`
-}
-const hud = reactive({
-  packets: 0,
-  configs: 0,
-  frames: 0,
-  renderer: '-',
-  queue: 0,
-  bytes: 0,
-  type: '-',
-  skipped: 0,
-  resets: 0,
-  rendered: 0,
-  skipRender: 0,
-  gl: webglSupported ? '可用' : '不可用',
-  audioPackets: 0,
-  audioPlayed: 0,
-  audioQueue: 0,
-  audioDecoded: 0,
-  audioState: '-',
-  audioTime: 0,
-  audioIssue: '-',
-  win: '-',
-  vid: '-',
-  vidChanges: 0,
-})
-
 const renderer = shallowRef(null)
 const decoder = shallowRef(null)
 let writer = null
@@ -678,7 +630,6 @@ let disposeRendererType = null
 let disposeSizeChanged = null
 let disposeMacCaret = null
 let hostResize = null
-let statsTimer = null
 
 /** 视频像素尺寸（解码器上报的真实分辨率），用于把指针坐标换算到设备坐标。 */
 function getVideoSize() {
@@ -1126,7 +1077,6 @@ function cancelCover() {
 }
 
 function onFrameSizeChanged() {
-  hud.vidChanges += 1
   syncCanvasBox()
   if (!covering.value) return
   armCover(COVER_UNTIL_STABLE_MS)
@@ -1237,8 +1187,6 @@ function syncCanvasBox() {
     screenRatio.value = `${size.width} / ${size.height}`
     screenRatioN.value = frameRatio
   }
-  hud.win = `${host.clientWidth}x${host.clientHeight}`
-  hud.vid = size ? `${size.width}x${size.height}` : '-'
   if (!size?.width || !size?.height) {
     // 分辨率未知时先铺满容器，等 meta 到达后再套策略。
     canvas.style.width = `${host.clientWidth}px`
@@ -1271,26 +1219,11 @@ function startDecoder(info) {
     decoder.value = videoDecoder
     writer = videoDecoder.writable.getWriter()
     flushPending()
-    // 视频尺寸变化次数：虚拟显示被重排/应用重新取向都会让它增长，
-    // 用来判断「画面旋转几下」是客户端 resize 触发的还是设备侧应用自己的行为。
+    // 解码尺寸变了（虚拟显示被重排 / 应用重新取向都会走到这里）⇒ 重新量一次画面框
+    // 并在重排期间压一层遮罩（`onFrameSizeChanged`）。
     disposeSizeChanged = videoDecoder.sizeChanged(onFrameSizeChanged)
     attachCanvas()
     status.value = ''
-
-    let lastFrames = 0
-    statsTimer = setInterval(() => {
-      const current = videoDecoder.framesDisplayed || 0
-      fps.value = Math.max(0, current - lastFrames)
-      lastFrames = current
-      hud.frames = current
-      hud.queue = videoDecoder.decodeQueueSize || 0
-      hud.renderer = videoDecoder.rendererType || '-'
-      hud.type = videoDecoder.type || '-'
-      hud.skipped = videoDecoder.framesSkippedDecoding || 0
-      hud.resets = videoDecoder.decoderResetCount || 0
-      hud.rendered = videoDecoder.framesRendered || 0
-      hud.skipRender = videoDecoder.framesSkippedRendering || 0
-    }, 1000)
   } catch (error) {
     console.error('[mirror] decoder init failed', error)
     status.value = `初始化解码器失败：${error?.message || error}`
@@ -1299,11 +1232,8 @@ function startDecoder(info) {
 
 function onPacket(packet) {
   if (packet.type === 'configuration') {
-    hud.configs += 1
     reflowGate.configuration()
   } else if (packet.type === 'data') {
-    hud.packets += 1
-    hud.bytes += packet.data?.byteLength || 0
     // 重排后的第一帧关键帧到了：按「再多等一点让画上屏」收尾，不等就继续按时间兜底。
     if (packet.keyframe && reflowGate.keyFrame() && covering.value) {
       armCover(COVER_AFTER_KEYFRAME_MS)
@@ -1350,16 +1280,6 @@ function flushPending() {
 async function booted() {
   await bootstrap({
     video: onPacket,
-    audio: () => {
-      hud.audioPackets += 1
-    },
-    audioStats: ({ played, queue, decoded, time, state }) => {
-      hud.audioPlayed = played
-      hud.audioQueue = queue
-      hud.audioDecoded = decoded
-      hud.audioState = state
-      hud.audioTime = time ?? 0
-    },
     hooks: {
       onReflowStart: coverForReflow,
       onReflowAbort: cancelCover,
@@ -1387,7 +1307,6 @@ async function booted() {
         startDecoder(info)
       },
       onAudioError: (message) => {
-        hud.audioIssue = message
         console.warn('[mirror] audio:', message)
       },
     },
@@ -1405,8 +1324,8 @@ async function booted() {
 }
 
 onMounted(() => {
-  // 虚拟显示按**画面区**算（见 direct-session 的 contentCss）：dev 右侧那条 HUD 边栏
-  // 不算进画面区，否则显示比例与画面比例对不上。必须在 bootstrap 之前设好。
+  // 虚拟显示按**画面区**算（见 direct-session 的 contentCss）：现在画面区就是整个视口
+  // （dev 那条 HUD 边栏已删），必须在 bootstrap 之前设好。
   setContentElement(canvasHost.value)
   hostResize = new ResizeObserver(() => {
     syncCanvasBox()
@@ -1436,7 +1355,6 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  if (statsTimer) clearInterval(statsTimer)
   // 延后收三颗那一拍还没到就关窗了：撤掉，别让它对着一扇已经没了的窗口发 IPC。
   window.clearTimeout(hideButtonsTimer)
   hideButtonsTimer = 0
@@ -1467,8 +1385,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="h-full mirror-window text-white" :class="{ 'is-fullscreen': fullscreen, 'is-edge-to-edge': edgeToEdge, 'is-chrome': railShown, 'is-rail-float': railFloating, 'is-rail-moved': !!railPos }"
     :style="windowStyle">
-    <!-- 画面区：dev 时右侧让出一条 HUD 边栏（`aside` 与它左右排），画面上的覆盖层（遮罩/接回/提示/
-         长条）都只盖画面那一块，这样调试信息永远不被盖住，也不会压在镜像画面上。 -->
+    <!-- 画面区：画面上的覆盖层（遮罩/接回/提示/长条）都只盖画面那一块，不压到镜像画面上。 -->
     <div class="mirror-body">
       <!-- 那层 chrome 涂装：**就这一个 div**（用户 2026-10-13「左上角右上角右下角和上边右边改成一个 div」）。
            它铺满整扇 `.mirror-body`、整块填浅灰，手机（`.mirror-main` 那一层）画在它**上面** ⇒
@@ -1516,15 +1433,6 @@ onBeforeUnmount(() => {
             :style="macTextAnchorStyle" :disabled="!macTextCapturing()" @compositionstart="macSink.onCompositionStart()"
             @compositionupdate="macSink.onCompositionUpdate($event)" @compositionend="onMacCompositionEnd($event)"
             @input="onMacInput($event)" @focus="macTextFocused = true" @blur="macTextFocused = false" />
-
-          <!-- dev 探针（G1 续）：**交给 macOS 的那个 caret 矩形本身**（1px 宽、一个胶囊高）。
-               ⚠️ **默认不画** —— 用户 10-11：「我不要自定义光标，输入选择框位置对就行」。
-               它只是给我们自己看锚点对不对的诊断，不是产品的一部分，所以挂在 dev 调试面板
-               （`tools` 按钮，默认收起）底下；打包版里 `devTools` 为假，元素压根不存在。
-               判据：它跟**胶囊**重合 ⇒ 矩形对；候选条紧贴它下边 ⇒ 高度对；
-               打字后它落在手机光标后面 ⇒ 推进宽度估小了。 -->
-          <div v-if="devTools && showHud && macTextCapsuleRect && macTextCapturing()" class="mirror-mactext-probe"
-            :style="macTextAnchorStyle" aria-hidden="true"></div>
 
           <!-- 拼音胶囊（G1 续）：**正在输入的拼音**画在 Mac 上（竞品同款形状）。
                macOS 不代画 marked text，收字字段又是 1×1 全透明 ⇒ 不画这个，Mac 上就什么都看不到。
@@ -1695,16 +1603,6 @@ onBeforeUnmount(() => {
                 }}</TooltipContent>
               </TooltipPortal>
             </TooltipRoot>
-            <!-- dev 专用：开合调试面板。 -->
-            <TooltipRoot v-if="devTools">
-              <TooltipTrigger as-child>
-                <button type="button" class="mirror-rail__dev" :aria-expanded="showHud" aria-label="调试信息"
-                  @click="showHud = !showHud">tools</button>
-              </TooltipTrigger>
-              <TooltipPortal>
-                <TooltipContent :side="railTipSide" :side-offset="railTipOffset" :class="TIP_CLASS">调试信息（dev）</TooltipContent>
-              </TooltipPortal>
-            </TooltipRoot>
             <!-- 安卓的返回 / 桌面 / 多任务：贴到长条**最底部**（用户 2026-10-10）。 -->
             <div class="mirror-rail__keys">
               <TooltipRoot v-for="key in RAIL_KEYS" :key="key.name">
@@ -1724,40 +1622,6 @@ onBeforeUnmount(() => {
       </div>
       </div>
     </div>
-
-    <!-- dev 专用：调试信息在画面**右边**的独立边栏里，不遮挡镜像内容。 -->
-    <aside v-if="showHud" class="mirror-hud" :style="{ width: `${HUD_WIDTH}px` }">
-      <div class="mirror-hud__title">{{ title }}</div>
-      <div class="mirror-hud__sub">{{ meta?.codecName }} · {{ fps }} 帧/秒</div>
-
-      <div class="mirror-hud__group">画面</div>
-      <div class="mirror-hud__row"><span>画面区</span><b>{{ hud.win }}</b></div>
-      <div class="mirror-hud__row"><span>视频</span><b>{{ hud.vid }}</b></div>
-      <div class="mirror-hud__row"><span>尺寸变化</span><b>{{ hud.vidChanges }} 次</b></div>
-      <div class="mirror-hud__row"><span>已显示</span><b>{{ hud.frames }}</b></div>
-      <div class="mirror-hud__row"><span>已绘制</span><b>{{ hud.rendered }}</b></div>
-      <div class="mirror-hud__row"><span>跳过绘制</span><b>{{ hud.skipRender }}</b></div>
-
-      <div class="mirror-hud__group">解码</div>
-      <div class="mirror-hud__row"><span>WebGL</span><b>{{ hud.gl }}</b></div>
-      <div class="mirror-hud__row"><span>渲染方式</span><b>{{ hud.renderer }} / {{ hud.type }}</b></div>
-      <div class="mirror-hud__row"><span>解码队列</span><b>{{ hud.queue }}</b></div>
-      <div class="mirror-hud__row"><span>跳过解码</span><b>{{ hud.skipped }}</b></div>
-      <div class="mirror-hud__row"><span>解码器重置</span><b>{{ hud.resets }}</b></div>
-
-      <div class="mirror-hud__group">传输</div>
-      <div class="mirror-hud__row"><span>视频包</span><b>{{ hud.packets }}</b></div>
-      <div class="mirror-hud__row"><span>接收字节</span><b>{{ bytesText(hud.bytes) }}</b></div>
-
-      <div class="mirror-hud__group">音频</div>
-      <div class="mirror-hud__row"><span>收到包</span><b>{{ hud.audioPackets }}</b></div>
-      <div class="mirror-hud__row"><span>已播放</span><b>{{ hud.audioPlayed }}</b></div>
-      <div class="mirror-hud__row"><span>播放队列</span><b>{{ hud.audioQueue }}</b></div>
-      <div class="mirror-hud__row"><span>已解码</span><b>{{ hud.audioDecoded }}</b></div>
-      <div class="mirror-hud__row"><span>时钟</span><b>{{ Math.round(hud.audioTime * 10) / 10 }} 秒</b></div>
-      <div class="mirror-hud__row"><span>状态</span><b>{{ hud.audioState }}</b></div>
-      <div v-if="hud.audioIssue && hud.audioIssue !== '-'" class="mirror-hud__issue">{{ hud.audioIssue }}</div>
-    </aside>
   </div>
 </template>
 
@@ -1772,9 +1636,8 @@ onBeforeUnmount(() => {
   background-color: transparent;
 }
 
-/* 布局不靠 `position`：根是左右两栏（画面区 / dev 边栏）用 flex 排，
-   每一栏内部要叠的层放进 grid 的**同一格**里 —— 同格按模板里的先后绘制，后面的盖住前面的，
-   所以谁在上面看 DOM 顺序就够，连 z-index 都不写。 */
+/* 布局不靠 `position`：每一栏内部要叠的层放进 grid 的**同一格**里 ——
+   同格按模板里的先后绘制，后面的盖住前面的，所以谁在上面看 DOM 顺序就够，连 z-index 都不写。 */
 .mirror-window {
   display: flex;
   align-items: stretch;
@@ -1784,8 +1647,7 @@ onBeforeUnmount(() => {
   --frame-radius: calc(var(--radius) + var(--bezel));
 }
 
-/* 画面区：手机（黑框 + 画面）与右边那条长条左右排。生产中它占满整个视口；
-   dev 时再让出右侧的 HUD 边栏（也是 flex 排的），所以覆盖层只盖画面、不盖调试信息。
+/* 画面区：手机（黑框 + 画面）与右边那条长条左右排，生产中它占满整个视口。
    ⚠️ `position: relative; z-index: 1` 是**涂装那一层**（`.mirror-chrome`）需要的：涂装铺满整扇
    `.mirror-body`、压在手机**下面**，靠"手机盖住中间那块"来挖出形状（见 `.mirror-chrome`）。
    这里抬一层，手机与长条才会画在涂装之上；不给它 `position` 的话，绝对定位的涂装会盖住画面。 */
@@ -1859,19 +1721,6 @@ onBeforeUnmount(() => {
   color: transparent;
   caret-color: transparent;
   font-size: 1px;
-  pointer-events: none;
-}
-
-/* dev 探针（G1 续）：**交给 macOS 的那个 caret 矩形本身**（= 胶囊那一格），不接指针、不参与输入。
-   ⚠️ 只在 dev 且调试面板打开时才渲染（见模板里的 `v-if`）—— 它不是产品的"光标"，
-   别让它默认出现在画面上。判据：它跟**胶囊**重合 ⇒ 矩形对；候选条紧贴它下边出现 ⇒ 高度对；
-   打字/退格时它跟着走 ⇒ 账记上了；停在原地说明账没记上。 */
-.mirror-mactext-probe {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 1px;
-  background: #ff5a5a;
   pointer-events: none;
 }
 
@@ -2143,8 +1992,8 @@ onBeforeUnmount(() => {
 }
 
 /* 胶囊本体：**横向一条 + 玻璃质感**。
-   ⚠️ 宽度由内容撑开（`width: auto`）—— 按钮数随条件渲染（桌面模式那颗只在采主屏那档出、dev 那格
-   只在开发时出），写死宽度会在那些情况下留一段空壳。
+   ⚠️ 宽度由内容撑开（`width: auto`）—— 按钮数随条件渲染（桌面模式那颗只在采主屏那档出），
+   写死宽度会在那些情况下留一段空壳。
    ⚠️ 底色与边框都是**写死的色值**，不跟主题走：镜像页是另一份 CSS 产物，Tailwind 的 `@theme` 只发
    被用到的令牌（见上面 `--rail-accent` 那段），`var(--color-*)` 在这里取不到值 = 透明。
    ⚠️ `translate: none` 压掉基础样式里那条 `--rail-top`（纵向拖拽位移是满屏那档的东西）。 */
@@ -2229,13 +2078,6 @@ onBeforeUnmount(() => {
   margin: 0 3px;
   background: rgb(0 0 0 / 14%);
 }
-
-/* dev 那一格：基础样式给它的是纵向排布下的 `margin-top`，横向排里会把整条顶歪。 */
-.mirror-window.is-rail-float:not(.is-fullscreen) .mirror-rail__dev {
-  margin-top: 0;
-  padding: 2px 7px;
-}
-
 
 /* ── 全屏那一屏（`.is-fullscreen`，判据由主进程 `mirror:fullscreen` 推过来）────────────────
    照 AndroMeld 那个样子：一块明亮的底、手机在一格、右侧那条常驻在另一格。 */
@@ -2427,20 +2269,6 @@ onBeforeUnmount(() => {
   gap: 10px;
 }
 
-/* dev 专用那一格（`tools`）：小一号，别跟功能键抢视觉。 */
-.mirror-rail__dev {
-  margin-top: 4px;
-  padding: 2px 9px;
-  border: none;
-  border-radius: 999px;
-  background: rgb(0 0 0 / 6%);
-  color: rgb(0 0 0 / 52%);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-  cursor: pointer;
-}
-
 /* ── 那层 chrome 涂装：**一整块**（2026-10-13 第四稿）────────────────────────────────
    用户 10-13：「上边和右边的边框以及左上角右上角右下角的圆角不协调，不是一个图层」→
    「左上角右上角右下角和上边右边改成一个 div」。他说得对：上一版是**三个元素**在画同一层涂装
@@ -2498,7 +2326,7 @@ onBeforeUnmount(() => {
   transition: opacity var(--rail-fade-in) ease-out;
 }
 
-/* 「标题栏 + 画面」这一竖列，dev 边栏仍在它右边（`.mirror-window` 那一横排）。
+/* 「标题栏 + 画面」这一竖列。
    `position: relative` 是给涂装那一层（`.mirror-chrome`，绝对定位铺满这里）当定位祖先用的。 */
 .mirror-body {
   position: relative;
@@ -2567,67 +2395,6 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
   min-width: 0;
   user-select: none;
-}
-
-/* dev 调试信息边栏：**与长条同一套外观**（用户 10-10「风格跟操作栏一样」）—— 浅色圆角、四周留白浮着，
-   不再是贴在窗口边上的深色侧栏。它在 `mirror-main` **外面**，窗口由主进程按同样宽度撑开
-   （`mirror:windowHud`），所以展开它不会挤小画面、不会让手机重排。 */
-.mirror-hud {
-  flex: none;
-  margin: 6px 6px 6px 0;
-  padding: 12px 14px 16px;
-  overflow-y: auto;
-  border-radius: 26px;
-  background: #fbfbfb;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 12%);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
-  line-height: 1.45;
-  color: rgb(0 0 0 / 62%);
-}
-
-.mirror-hud__title {
-  overflow: hidden;
-  font-size: 11px;
-  color: rgb(0 0 0 / 82%);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mirror-hud__sub {
-  color: rgb(0 0 0 / 45%);
-}
-
-.mirror-hud__group {
-  margin-top: 9px;
-  margin-bottom: 3px;
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  color: rgb(0 0 0 / 32%);
-}
-
-.mirror-hud__row {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.mirror-hud__row span {
-  color: rgb(0 0 0 / 45%);
-}
-
-.mirror-hud__row b {
-  font-weight: 400;
-  color: rgb(0 0 0 / 78%);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.mirror-hud__issue {
-  margin-top: 8px;
-  color: #9a5b06;
-  word-break: break-all;
 }
 
 .mirror-cover {

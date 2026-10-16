@@ -58,9 +58,7 @@ export function setContentElement(el) {
 /**
  * **画面区**的 CSS 尺寸 —— 虚拟显示按它算，不按视口。
  *
- * 生产里画面区就是整个视口（两者相等）；dev 的 HUD 在右侧占一条边栏，画面区比窗口窄，
- * 若仍按视口算，画面比例与显示比例对不上，contain 适配会多出黑边、`1dp = 1 CSS px`
- * 的等式也会错位。元素没挂上或还没排版（尺寸为 0）时回落视口。
+ * 生产里画面区就是整个视口（两者相等）；元素没挂上或还没排版（尺寸为 0）时回落视口。
  */
 function contentCss() {
   const width = contentEl?.clientWidth ?? 0;
@@ -263,7 +261,7 @@ export async function startSession(
   // `VIRTUAL_DISPLAY_FLAG_ROTATES_WITH_CONTENT`，每次配置变更设备上的应用都会重新决定方向，
   // 表现出来就是镜像画面反复旋转。合并/去重逻辑见 `src/mirror/displayFollow.js`。
   //
-  // 尺寸来自**画面区**（dev 时比窗口窄，右侧那条 HUD 边栏不算）的 ResizeObserver，
+  // 尺寸来自**画面区**（= 整个视口）的 ResizeObserver，
   // 而不是 window 的 `resize` 事件 + innerWidth：macOS 上窗口被系统缩放/吸附时，resize 事件
   // 可能滞后甚至不触发，innerWidth 会读到旧值，导致宽度不跟随。
   if (createdDisplay) {
@@ -280,9 +278,8 @@ export async function startSession(
     follower.seed(createdDisplay);
     current.follower = follower;
 
-    // observe() 会立即回调一次当前尺寸：窗口在会话建立期间变过的话，这次就会补上。
-    // dev 的 HUD 边栏只在渲染层存在，`initialCss`（主进程算的整窗内容区）比画面区宽，
-    // 所以首帧往往是一次**真实的尺寸修正** —— 与上面说的「补发完全相同的请求」不是一回事。
+    // observe() 会立即回调一次当前尺寸：窗口在会话建立期间变过的话，这次就会补上
+    // （`initialCss` 是主进程建窗那一刻算的内容区，画面区现在与它同源）。
     const observer = new ResizeObserver(() => follower.request(displayFor(contentCss())));
     observer.observe(contentEl ?? document.documentElement);
     current.resizeObserver = observer;
@@ -333,14 +330,6 @@ export function setWindowButtons(shown, railFloating) {
     shown: shown === true,
     railFloating: railFloating === true,
   });
-}
-
-/**
- * dev 调试边栏要占多宽（0 = 收起）：主进程把**窗口**撑宽同样的量，画面那块才不被挤小。
- * @param {number} px
- */
-export function setHudExtra(px) {
-  ipc()?.send?.(CHANNELS.mirrorWindowHud, px);
 }
 
 /**
@@ -598,7 +587,7 @@ let audioCompanion = null;
 let audioCompanionPending = null;
 /** 收到过 `mirror:audioHost`（可能在会话还没起来时到达，`startSession` 结尾会补一次）。 */
 let audioHostWanted = false;
-/** `bootstrap()` 给进来的音频出口：HUD 计数 + Opus 播放器（`App.vue` 那条接线原样复用）。 */
+/** `bootstrap()` 给进来的音频出口：Opus 播放器（`App.vue` 那条接线原样复用）。 */
 let audioSink = null;
 /** 音频出问题时的出口（页面上那行 `audioIssue`）。 */
 let audioIssueSink = null;
@@ -754,7 +743,6 @@ function watchFullscreen(onFullscreen, initial) {
  * @param {{
  *   video: (packet) => Promise<void> | void,
  *   audio: (packet) => void,
- *   audioStats: (stats: Record<string, number>) => void,
  *   hooks: { onMeta?: (meta) => void, onAudioError?: (message: string) => void,
  *            onReflowStart?: (size) => void, onReflowAbort?: () => void,
  *            onReflowSent?: () => void,
@@ -769,11 +757,10 @@ export async function bootstrap(apply) {
   watchFullscreen(apply.hooks.onFullscreen, info.prefs?.fullscreen);
 
   player = createOpusPlayer({
-    onStats: (stats) => apply.audioStats?.(stats),
     onError: (message) => apply.hooks.onAudioError?.(String(message)),
   });
   // 音频出口在这里落地（会话那两条路都往它送包）：主会话那条已经不带音频，
-  // 只有设备级音频会话（本窗口是宿主时）会调它。HUD 的「收到包」计数与 Opus 播放器是同一份接线。
+  // 只有设备级音频会话（本窗口是宿主时）会调它。与 Opus 播放器是同一份接线。
   audioSink = (packet) => {
     apply.audio?.(packet);
     player?.push(packet);

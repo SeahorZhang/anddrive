@@ -84,7 +84,7 @@
 | --- | --- | --- | --- |
 | `electron/mdns.js` 的 `QUERY_INTERVAL_MS` | 1000ms | PTR 重查，且 `adb.js` 的 `ensureConnectBrowser` 起的 browser **没有 stop 路径** | **该修**：常驻 1s 组播 + UDP socket 只换一个 TXT 字段（= **D9**） |
 | `electron/adb.js` 的 `waitForMdnsService` | 1000ms | 轮询 `adb mdns services`；函数末尾那句 `return new Promise(() => null)` 就是**永不 settle 的取消语义** | **该修**：改事件驱动；取消要 reject 明确的"已取消" |
-| `electron/adb.js` 的 `STATS_CACHE_TTL_MS` + `getDeviceStats` | 30s TTL | 设备统计缓存，与渲染层 1s 轮询叠成两层节流 | 与 HUD 那条一起收口 |
+| `electron/adb.js` 的 `STATS_CACHE_TTL_MS` + `getDeviceStats` | 30s TTL | 设备统计缓存，与渲染层 1s 轮询叠成两层节流 | 与设备状态推送一起收口 |
 | `electron/main.js` 的 `TEARDOWN_TIMEOUT_MS` | 3s | `TEARDOWN_TIMEOUT_MS` 与 `runDeviceTeardown` 赛跑 | 保留（退出兜底） |
 | `electron/main.js` 的 dev 孤儿看门狗（查 `process.ppid === 1`） | 1000ms | dev-only `ppid===1` 孤儿看门狗 | 保留（dev 专用） |
 | `electron/permissions.js:113` | 2000ms | `dns-sd` 探测「假设已授权」兜底 | 保留，但文案要说明是推测 |
@@ -98,7 +98,6 @@
 | `src/composables/useScrcpySessions.js` 的 `POLL_INTERVAL_MS` | 2000ms | 会话列表轮询 | **三条状态类轮询合成一条主进程事件推送** |
 | `src/mirror/direct-session.js` 的 `watchAppStolen` | 2500ms | `watchAppStolen` → 每次设备侧 `dumpsys window \| grep -A4 \| grep -oE`（`adb.js` 的 `getAppTask`） | = **D8**：改成 focus / `visibilitychange` 时查一次；`decoder.sizeChanged` 是免费事件源 |
 | `src/mirror/direct-session.js` 的 `waitForDisplayId` / `ensureAppHere` | 100ms×1500ms / 4×400ms | `waitForDisplayId`、`ensureAppHere` 重试环 | 补的是 `startSession` 从 server stdout 正则捞 displayId 的脆弱解析；服务端把 displayId 传出来就能一起删 |
-| `src/mirror/App.vue` 的 `statsTimer` | 1000ms | HUD 统计轮询，**dev 专用却在正式包里照跑** | 加 `showHud` 守卫（dev 才需要 HUD） |
 | `src/mirror/App.vue` 的 `COVER_*` 常量与 `showNotice` | 420/3000/80/150/2400ms | 遮罩状态机 + 提示自消 | 见 §3，随遮罩收口一起简化 |
 | `src/mirror/displayFollow.js:23,117` | 250ms | **debounce，刻意设计 + 有单测** | **别当轮询删**（理由见 `ARCHITECTURE.md` §4） |
 | `src/mirror/audio.js:8-10,74-75,142` | 0.08/0.4/0.03s | 音频排程余量、队列阈值 120 | 保留 |

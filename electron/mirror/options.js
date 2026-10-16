@@ -439,8 +439,8 @@ export function mirrorTrafficLightPosition(railFloating = false) {
  *   玻璃质感也要求它浮在画面上 —— `backdrop-filter` 只有背后有东西可模糊时才成立，
  *   摆在画面外（窗口透明处）就只能退化成半透明白底。
  * - **纵向与三颗彩虹键中线对齐**（`mirrorRailTop`）：视觉上它与那三颗在同一行，不是各占一条。
- * - 尺寸从"内容撑开"来（`height` 是唯一钉死的几何）：按钮数随条件渲染（桌面模式那颗只在采主屏那档出、
- *   dev 那格只在开发时出），所以宽度不写死。
+ * - 尺寸从"内容撑开"来（`height` 是唯一钉死的几何）：按钮数随条件渲染（桌面模式那颗只在采主屏那档出），
+ *   所以宽度不写死。
  */
 export const MIRROR_RAIL = {
   /** 胶囊高（CSS px）：按钮 22 + 上下各 3 的 padding。 */
@@ -520,17 +520,17 @@ export function mirrorRailFloats() {
  * 拖拽锁比例时**不参与比例**的那一圈固定余量（`BrowserWindow.setAspectRatio` 的第二个参数）。
  *
  * 锁的是**画面那块矩形**（= 内容区减掉 `mirrorScreenInsets()`），因为比例说的是画面，不是窗口。
- * dev 调试边栏撑宽的也是窗口而不是画面，所以调用方把那一截作为 `extraWidth` 加进来。
  *
- * ⚠️ 2026-10-16 起内缩恒为 0（画面 = 窗口）⇒ 这个函数只剩"把 dev 边栏那一截加上去"这一个作用。
- * 参数与函数保留是为了不动调用链（`createMirrorWindow` / `relockAspect` / `resize` 三处都用它）。
+ * ⚠️ 2026-10-16 起内缩恒为 0（画面 = 窗口）⇒ 返回值恒 `{ 0, 0 }`；原来还有一个 `extraWidth`
+ * 参数专门把「dev 调试边栏占的那一截」加进来，**那一项随 `tools` 按钮一起删了（2026-10-17）**。
+ * 函数与调用链（`createMirrorWindow` / `relockAspect` / `resize` 三处）保留：它仍是"画面之外
+ * 还要占多少窗口"的唯一出处，将来要恢复内缩/边栏只改这一个函数。
  *
- * @param {number} [extraWidth] 画面之外额外占窗口宽的截（dev 边栏），0 = 没有
+ * @returns {{ width: number, height: number }} 恒 `{ 0, 0 }`
  */
-export function mirrorContentExtraSize(extraWidth = 0) {
+export function mirrorContentExtraSize() {
   const { left, right, top, bottom } = mirrorScreenInsets();
-  const extra = Number(extraWidth) || 0;
-  return { width: left + right + Math.max(0, extra), height: top + bottom };
+  return { width: left + right, height: top + bottom };
 }
 
 /**

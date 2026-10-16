@@ -85,7 +85,7 @@ function preloadPath() {
 
 /**
  * 每扇镜像窗口锁定的**画面比例**（0 = 读不到设备比例，不锁）。
- * dev 调试边栏会把窗口撑宽一截不参与比例的余量，所以那一格开合时要按新余量重设一次。
+ * 余量现在恒 `{0, 0}`（画面 = 窗口），这条记录留给 `relockAspect` 取回比例。
  */
 const aspectRatios = new WeakMap();
 
@@ -150,10 +150,10 @@ function createMirrorWindow(session, prefs, bounds, ratio, railFloating) {
   // 见上面 `ratio` 那条：采主屏那档按手机比例锁，桌面模式那档给 0 = 不锁（可自定义拖宽高）。
   // 锁用的是上游 `setAspectRatio`（= AppKit 的 `contentAspectRatio`，拖哪条边都系统自己锁），
   // 锁的是**画面那块矩形**：窗口比它多出的黑框与右边长条走 `extraSize` 那参数。
-  // 长条浮在画面里时右边那一截不算余量（那 86px 已经归画面了），余量随形态走，见 `railFloatingStates`。
+  // ⚠️ 2026-10-17 起余量恒 `{0, 0}`（黑框退场、长条改成浮在画面上的胶囊、dev 边栏随 `tools` 删除）。
   aspectRatios.set(win, ratio);
   railFloatingStates.set(win, railFloating === true);
-  if (ratio) win.setAspectRatio?.(ratio, mirrorContentExtraSize(0));
+  if (ratio) win.setAspectRatio?.(ratio, mirrorContentExtraSize());
   win.once("ready-to-show", () => {
     win.show();
     // 「全屏启动」在 show 之后落地（构造参数那条路在 macOS 上不可靠，见上面 `fullscreenable` 的注释）。
@@ -755,39 +755,17 @@ ipcMain.handle(CHANNELS.mirrorDesktopMode, async (event) => {
 });
 
 /**
- * dev 调试边栏（`tools` 那一格）展开/收起：边栏是**浮在窗口右边的另一栏**，所以撑宽的是**窗口**，
- * 不是从画面那块矩形里切 —— 画面尺寸不变 ⇒ 不会发 `resizeDisplay`、手机上不会重排一次。
- * 渲染层每次只报"现在要占多宽"（0 = 收起），主进程按上一次的量算增量，所以页面重载后
- * 状态自己会纠正（不会重复撑宽）。全屏时不动窗口尺寸。
- */
-const hudExtras = new WeakMap();
-
-/**
- * 按当前「dev 边栏占多宽」重设一次拖拽比例锁。
+ * 按当前余量重设一次拖拽比例锁。
  * 余量（`mirrorContentExtraSize`）随它变，漏设一次「画面 = 设备比例」这条等式就破了
  * —— 采主屏那档画面会比设备比例宽/窄一截，圆角里当场露出 letterbox 黑条。
- * ⚠️ 2026-10-16 起内缩恒为 0（画面 = 窗口）⇒ 余量只剩 dev 边栏那一截；
- * 以前还有「长条浮没浮」这一项，随两档形态的分化一起退场了。
+ * ⚠️ 2026-10-16 起内缩恒为 0（画面 = 窗口）⇒ 余量现在是恒 `{0, 0}`；
+ * 以前还有「长条浮没浮」与「dev 边栏占多宽」两项，后者随 `tools` 按钮一起删了（2026-10-17）。
  */
 function relockAspect(win) {
   const ratio = aspectRatios.get(win) ?? 0;
   if (!ratio) return;
-  win.setAspectRatio?.(ratio, mirrorContentExtraSize(hudExtras.get(win) ?? 0));
+  win.setAspectRatio?.(ratio, mirrorContentExtraSize());
 }
-
-ipcMain.on(CHANNELS.mirrorWindowHud, (event, extra) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  if (!win || win.isDestroyed() || win.isFullScreen()) return;
-  const next = Math.max(0, Number(extra) || 0);
-  const delta = next - (hudExtras.get(win) ?? 0);
-  if (!delta) return;
-  hudExtras.set(win, next);
-  const [width, height] = win.getContentSize();
-  win.setContentSize(Math.max(1, width + delta), height);
-  // 边栏这一截是**窗口**多出来的、不参与比例的余量（跟黑框与长条同一类）：不重设的话，
-  // 撑宽之后再拖一次边，系统会按老余量把窗口收回去 —— 边栏那一格当场被挤没。
-  relockAspect(win);
-});
 
 /**
  * 渲染层报「长条现在浮在画面里没有」（它量 `.mirror-main` 的宽实时判，判据 `mirrorRailFloats`）。

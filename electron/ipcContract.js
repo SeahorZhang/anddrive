@@ -71,9 +71,6 @@ export const CHANNELS = {
   /** 主进程 → 镜像窗口：进/出 macOS 全屏（那一屏里长条不再占窗口宽度、红绿灯归系统藏，页面要换排法）。 */
   mirrorWindowButtons: 'mirror:windowButtons',
   mirrorFullscreen: 'mirror:fullscreen',
-  /** 镜像窗口 → 主进程：淡入/收起边框时一起开关红绿灯（透明窗口里浮着的圆点会破坏「就是个手机」的样子）。 */
-  /** 镜像窗口 → 主进程：dev 调试边栏要占多少宽（0 = 收起）。主进程把窗口撑宽同样的量，画面那块才不被挤小。 */
-  mirrorWindowHud: 'mirror:windowHud',
   /**
    * 镜像窗口 → 主进程：右侧那条操作栏现在**浮在画面里没有**（画面够宽时它不再占窗口右边那一格）。
    * 形态一变，不参与比例的余量就差一条长条宽 ⇒ 主进程要按新余量重设一次拖拽比例锁。

@@ -494,17 +494,13 @@ describe('mirrorTrafficLightPosition（三颗的落点）', () => {
 describe('mirrorContentExtraSize / mirrorAspectRatio（只能按手机比例拖）', () => {
   const insets = mirrorScreenInsets()
 
-  /** 锁的是**画面那块矩形**：内缩恒 0 ⇒ 余量只剩 dev 边栏那一截（窗口态没有别的占位了）。 */
-  it('余量就是内缩的横竖总量（恒 0），dev 边栏那一截只加在宽上', () => {
+  /** 锁的是**画面那块矩形**：内缩恒 0 ⇒ 余量恒 `{0, 0}`（窗口态没有别的占位了）。 */
+  it('余量就是内缩的横竖总量（恒 0）', () => {
     expect(mirrorContentExtraSize()).toEqual({
       width: insets.left + insets.right,
       height: insets.top + insets.bottom,
     })
     expect(mirrorContentExtraSize()).toEqual({ width: 0, height: 0 })
-    expect(mirrorContentExtraSize(240)).toEqual({ width: 240, height: 0 })
-    // 非法/负的宽度不该把余量算小（画面会被挤 = 发一条 resizeDisplay）。
-    expect(mirrorContentExtraSize(-100)).toEqual(mirrorContentExtraSize())
-    expect(mirrorContentExtraSize('x')).toEqual(mirrorContentExtraSize())
   })
 
   it('比例取设备画面比例（与 `mirrorWindowBounds` 同一个来源）', () => {
